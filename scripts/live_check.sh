@@ -75,5 +75,5 @@ status=0
 "$live_python" "$here/scripts/live_check.py" run --page "ws://127.0.0.1:$port" --token "$page_token" \
   --wav "$scratch/question.wav" --runs "${LIVE_RUNS:-5}" || status=$?
 echo "--- gateway log, voice lines"
-grep -E "voice page|voicemanager_live|reply audio" "$scratch/gateway.log" | tail -30 || true
+grep -hE "voice page|voicemanager_live|reply audio|Voice turn|reasoning" "$home"/logs/*.log "$scratch/gateway.log" 2>/dev/null | tail -30 || true
 exit "$status"
