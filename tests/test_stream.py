@@ -181,14 +181,25 @@ async def test_a_new_utterance_during_the_quiet_window_gets_its_own_reply(rig):
     assert sum(1 for f in frames if f["done"]) == 1  # the first reply was cancelled, never ended twice
 
 
+def deliver(hooks, name, **payload):
+    """Deliver one Hermes hook event to whatever the plugin registered for it, as Hermes does."""
+    callback = hooks.HOOKS.get(name)
+    if callback is not None:
+        fire(callback, **payload)
+
+
 async def test_a_retried_stream_in_the_same_iteration_is_spoken(rig):
     """A stream that fails is retried in the same iteration; the retry's text must not be lost."""
     hooks, conn, page = rig
-    fire(hooks.on_stream_delta, delta="Paris is", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
-    # the stream failed here; Hermes retries the call in the same iteration
-    fire(hooks.on_stream_delta, delta="The capital is Paris.", kind="text", turn_id="t1", iteration=1,
-         surface=PLATFORM)
-    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    deliver(hooks, "on_stream_delta", delta="Paris is", kind="text", turn_id="t1", iteration=1,
+            surface=PLATFORM)
+    # The first attempt failed: Hermes ends that stream unfinished, then retries the call.
+    deliver(hooks, "on_stream_end", final_text="", finished=False, error="connection reset", turn_id="t1",
+            iteration=1, surface=PLATFORM)
+    await asyncio.sleep(0.1)
+    deliver(hooks, "on_stream_delta", delta="The capital is Paris.", kind="text", turn_id="t1", iteration=1,
+            surface=PLATFORM)
+    deliver(hooks, "on_session_end", turn_id="t1", interrupted=False, platform=PLATFORM)
     frames = await wait_for(lambda: ended(conn))
     assert [f["text"] for f in frames] == ["Paris is", "The capital is Paris.", ""]
     assert frames[-1]["done"] is True
