@@ -57,7 +57,10 @@ def _post(surface: Optional[str], method: str, *args: Any) -> None:
     loop = adapter.loop
     if loop is None or loop.is_closed():
         return
-    asyncio.run_coroutine_threadsafe(getattr(session, method)(*args), loop)
+    # The message id of the utterance this turn answers: the session drops text of an
+    # older reply it cancelled.
+    reply_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "")
+    asyncio.run_coroutine_threadsafe(getattr(session, method)(reply_id, *args), loop)
 
 
 def on_stream_delta(delta: str = "", kind: str = "text", turn_id: str = "", iteration: int = 0,

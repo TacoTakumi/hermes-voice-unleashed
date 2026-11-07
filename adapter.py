@@ -104,25 +104,27 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 del self._clients[client_id]
 
     def _new_session(self, connection, client_id: str) -> VoiceSession:
-        async def on_utterance(text: str) -> None:
-            await self.dispatch_utterance(client_id, text)
+        async def on_utterance(text: str, message_id: str) -> None:
+            await self.dispatch_utterance(client_id, text, message_id)
 
         return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
                             on_utterance=on_utterance)
 
-    async def dispatch_utterance(self, chat_id: str, text: str) -> None:
+    async def dispatch_utterance(self, chat_id: str, text: str, message_id: Optional[str] = None) -> None:
         """Hand one finished utterance to Hermes as a voice message.
 
         The text is already transcribed, so the event carries no audio file and
         the gateway does not transcribe it again. Being a voice message makes the
         turn a voice turn, which applies auxiliary.voice_chat (reasoning off by
-        default).
+        default). The message id comes back in the turn's session context, which
+        is how the stream hooks tell this reply's text from an older one.
         """
+        message_id = message_id or uuid.uuid4().hex
         source = self.build_source(chat_id=chat_id, chat_name="Voice", chat_type="dm",
-                                   user_id=OWNER, user_name="Owner")
+                                   user_id=OWNER, user_name="Owner", message_id=message_id)
         await self.handle_message(MessageEvent(
             text=text, message_type=MessageType.VOICE, source=source,
-            message_id=uuid.uuid4().hex, timestamp=datetime.datetime.now()))
+            message_id=message_id, timestamp=datetime.datetime.now()))
 
     def session_for(self, chat_id: str) -> Optional[VoiceSession]:
         return self._sessions.get(chat_id)
