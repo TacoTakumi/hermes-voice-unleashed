@@ -43,6 +43,14 @@ class VoiceSession:
         self.client_id = client_id
         self._on_utterance = on_utterance
         self.tracker: Optional[TurnTracker] = None
+        # The running reply: its TTS request, the Hermes turn it streams from, the text
+        # each (turn, iteration) streamed so far, and what is closed for good.
+        self.reply_request: Optional[vm_client.TTSRequest] = None
+        self._reply_turn: Optional[str] = None
+        self._awaiting_turn = False  # a dispatch is waiting for its Hermes turn's first text
+        self._streamed: dict[tuple[str, int], str] = {}
+        self._closed_iterations: set[tuple[str, int]] = set()
+        self._closed_turns: set[str] = set()
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -84,6 +92,7 @@ class VoiceSession:
         self._spawn(self._read_transcripts())
         self._spawn(self._read_turn_ends())
         self._spawn(self._read_errors())
+        self._spawn(self._read_audio())
 
     async def _read_transcripts(self) -> None:
         async for frame in self.duplex.transcripts():
@@ -104,7 +113,90 @@ class VoiceSession:
             else:
                 logger.info("voice page %s: VoiceManager error frame: %s", self.client_id, frame)
 
+    async def _next_turn(self) -> None:
+        """The reply is over: in classic mode open the next listening turn."""
+        self.tracker.reply_ended()
+        if not self.turn_engine:
+            self.tracker.open_turn(await self.duplex.turn_start())
+
+    # --- the reply's text, from the stream hooks -----------------------------------
+
+    async def _speak(self, turn_id: str, iteration: int, text: str) -> None:
+        if self.reply_request is None:
+            self.reply_request = self.duplex.tts_request(chunking="clause")
+            self._reply_turn = turn_id
+        key = (turn_id, iteration)
+        self._streamed[key] = self._streamed.get(key, "") + text
+        self.tracker.reply_text()
+        await self.reply_request.send(text)
+        await self.send_page({"type": "reply_delta", "text": text})
+
+    def _owns(self, turn_id: str) -> bool:
+        """Whether text of this Hermes turn belongs to the running reply."""
+        if turn_id in self._closed_turns or not self.tracker.reply_active:
+            return False
+        if self._reply_turn is None and self._awaiting_turn:
+            self._reply_turn, self._awaiting_turn = turn_id, False
+        return turn_id == self._reply_turn
+
+    async def on_reply_delta(self, turn_id: str, iteration: int, delta: str) -> None:
+        if (turn_id, iteration) in self._closed_iterations or not self._owns(turn_id):
+            return
+        await self._speak(turn_id, iteration, delta)
+
+    async def on_reply_stream_end(self, turn_id: str, iteration: int, final_text: str) -> None:
+        """One model call's stream ended: speak any text its deltas have not brought yet."""
+        key = (turn_id, iteration)
+        if key in self._closed_iterations or not self._owns(turn_id):
+            self._closed_iterations.add(key)
+            return
+        streamed = self._streamed.get(key, "")
+        if final_text.startswith(streamed) and len(final_text) > len(streamed):
+            await self._speak(turn_id, iteration, final_text[len(streamed):])
+        self._closed_iterations.add(key)
+
+    async def on_turn_done(self, turn_id: str, interrupted: bool) -> None:
+        """The Hermes turn finished: end the reply's text so VoiceManager speaks the rest."""
+        if turn_id in self._closed_turns:
+            return
+        owned = self._owns(turn_id)
+        self._closed_turns.add(turn_id)
+        if not owned:
+            return
+        request = self.reply_request
+        if request is None:  # the turn said nothing
+            self._reply_turn = None
+            await self._next_turn()
+            return
+        if not request.done_sent:
+            await request.done()
+
+    # --- VoiceManager's audio, to the page -------------------------------------------
+
+    async def _read_audio(self) -> None:
+        async for event in self.duplex.audio():
+            kind = event[0]
+            if kind == "pcm":
+                with contextlib.suppress(Exception):
+                    await self.page.send(event[1])
+            elif kind == "audio_start":
+                frame = event[1]
+                await self.send_page({"type": "audio_start", "request_id": frame.get("request_id"),
+                                      "sample_rate": frame.get("sample_rate")})
+            elif kind == "audio_end":
+                await self._on_audio_end(event[1])
+
+    async def _on_audio_end(self, frame: dict) -> None:
+        await self.send_page({"type": "audio_end", "request_id": frame.get("request_id"),
+                              "reason": frame.get("reason")})
+        request = self.reply_request
+        if request is None or frame.get("request_id") != request.request_id or not request.done_sent:
+            return
+        self.reply_request, self._reply_turn = None, None
+        await self._next_turn()
+
     async def _dispatch(self, text: str) -> None:
+        self.reply_request, self._reply_turn, self._awaiting_turn = None, None, True
         await self.send_page({"type": "utterance", "text": text})
         if self._on_utterance is not None:
             await self._on_utterance(text)
@@ -130,7 +222,18 @@ class VoiceSession:
                 await self.on_page_frame(frame)
 
     async def on_page_frame(self, frame: dict[str, Any]) -> None:
-        """A JSON control frame from the page."""
+        """A JSON control frame from the page: playback edges of a reply."""
+        if frame.get("type") != "playback" or not self.turn_engine:
+            return
+        request_id = frame.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            return
+        if frame.get("event") == "start":
+            await self.duplex.playback_start(request_id)
+        elif frame.get("event") == "stop":
+            reply_sample = frame.get("reply_sample")
+            if isinstance(reply_sample, int) and not isinstance(reply_sample, bool) and reply_sample >= 0:
+                await self.duplex.playback_stop(request_id, reply_sample=reply_sample)
 
     async def _stop(self) -> None:
         for task in self._tasks:

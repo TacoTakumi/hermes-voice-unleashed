@@ -8,6 +8,7 @@ VMLIVE_VOICEMANAGER_TOKEN, VMLIVE_HOST, VMLIVE_PORT.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import datetime
 import json
@@ -20,6 +21,7 @@ from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 
+from . import stream_hooks
 from .server import VoiceServer
 from .session import VoiceSession, client_from_url
 
@@ -51,6 +53,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         self.port = coerce_port(_setting(extra, "VMLIVE_PORT", "port", DEFAULT_PORT), DEFAULT_PORT)
         self._server: Optional[VoiceServer] = None
         self._clients: dict[str, Any] = {}  # chat_id -> the page's WebSocket connection
+        self._sessions: dict[str, VoiceSession] = {}  # chat_id -> its voice session
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
     def name(self) -> str:
@@ -73,11 +77,14 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             self._server = None
             self._set_fatal_error("listen_failed", str(exc), retryable=True)
             return False
+        self.loop = asyncio.get_running_loop()
+        stream_hooks.attach(self)
         self._mark_connected()
         self._wire_plugin_handlers(None)
         return True
 
     async def disconnect(self) -> None:
+        stream_hooks.detach(self)
         self._mark_disconnected()
         if self._server is not None:
             await self._server.stop()
@@ -117,8 +124,17 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             text=text, message_type=MessageType.VOICE, source=source,
             message_id=uuid.uuid4().hex, timestamp=datetime.datetime.now()))
 
+    def session_for(self, chat_id: str) -> Optional[VoiceSession]:
+        return self._sessions.get(chat_id)
+
     async def _run_client(self, connection, client_id: str) -> None:
-        await self._new_session(connection, client_id).run()
+        session = self._new_session(connection, client_id)
+        self._sessions[client_id] = session
+        try:
+            await session.run()
+        finally:
+            if self._sessions.get(client_id) is session:
+                del self._sessions[client_id]
 
     async def _send_json(self, chat_id: str, payload: dict) -> bool:
         connection = self._clients.get(chat_id)
@@ -173,6 +189,7 @@ def _env_enablement() -> Optional[dict]:
 
 def register(ctx):
     """Plugin entry point."""
+    stream_hooks.register(ctx)
     ctx.register_platform(
         name=PLATFORM,
         label="VoiceManager Live",

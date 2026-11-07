@@ -99,10 +99,13 @@ async def test_connect_refuses_without_a_token(plugin):
 def test_register_adds_one_platform(plugin):
     class Ctx:
         def __init__(self):
-            self.platforms = []
+            self.platforms, self.hooks = [], []
 
         def register_platform(self, **kwargs):
             self.platforms.append(kwargs)
+
+        def register_hook(self, name, callback):
+            self.hooks.append(name)
 
     ctx = Ctx()
     plugin.register(ctx)
@@ -110,3 +113,4 @@ def test_register_adds_one_platform(plugin):
     entry = ctx.platforms[0]
     assert entry["adapter_factory"] is plugin.adapter.VoiceLiveAdapter
     assert entry["allowed_users_env"] == "VMLIVE_ALLOWED_USERS"
+    assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta", "on_stream_end"]

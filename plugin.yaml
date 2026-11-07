@@ -8,6 +8,10 @@ description: >
   recognition, speech synthesis and turn-taking run on your own
   VoiceManager server, and you can talk over a reply to stop it.
 author: TacoTakumi
+provides_hooks:
+  - on_stream_delta
+  - on_stream_end
+  - on_session_end
 requires_env:
   - name: VMLIVE_TOKEN
     description: "Access token for the voice page and its WebSocket (put it in the page URL as ?token=...)"
