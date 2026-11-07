@@ -216,13 +216,16 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         if (!hermesTurn) hermesTurn = addTurn("hermes", "");
         hermesTurn.textContent += f.text;
         break;
-      case "reply":
-        // The final text Hermes delivered: it is the whole answer, and also carries notes
-        // that are not spoken (tool output, approval prompts).
-        if (!hermesTurn) hermesTurn = addTurn("hermes", f.text);
-        else hermesTurn.textContent = f.text;
+      case "reply": {
+        // A message the gateway sent: tool progress, a note, an approval prompt, or the
+        // final answer. The final answer was usually streamed already; anything else
+        // gets its own line and the next streamed text starts a new one.
+        const text = (f.text || "").trim();
+        const streamed = hermesTurn ? hermesTurn.textContent.trim() : "";
+        if (text && !(streamed && streamed.endsWith(text))) addTurn("hermes", f.text);
         hermesTurn = null;
         break;
+      }
       case "audio_start":
         replyBegin(f.request_id, f.sample_rate || 24000);
         break;

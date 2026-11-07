@@ -155,3 +155,23 @@ async def test_reply_finishes_when_audio_end_comes_after_the_audio(stack):
     assert playback[1]["reply_sample"] == 4800
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
                                  timeout=5000)
+
+
+async def test_gateway_messages_never_replace_the_streamed_reply(stack):
+    """Tool progress and other sent messages show as their own lines; the final send
+    of text already streamed adds nothing."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    await conn.send({"type": "turn_end", "text": "weather please", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.on_reply_delta(reply_id, "t1", 1, "Let me check.")
+    await session.send_page({"type": "reply", "text": "web_search: weather today"})
+    await session.on_reply_delta(reply_id, "t1", 2, "It is sunny.")
+    await session.send_page({"type": "reply", "text": "It is sunny."})
+    await page.wait_for_function("document.querySelectorAll('#log .turn.hermes').length >= 3", timeout=5000)
+    await asyncio.sleep(0.2)
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert texts == ["Let me check.", "web_search: weather today", "It is sunny."]
