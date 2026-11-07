@@ -138,7 +138,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   function replyBegin(id, rate) {
     replyClear(null);
     reply = { id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [],
-              ended: false, started: false, stopped: false };
+              ended: false, started: false, stopped: false, playing: 0 };
   }
   function replyPcm(buf) {
     if (!reply || reply.stopped) return;
@@ -165,14 +165,17 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     reply.next = at + audio.duration;
     reply.samples += pcm.length;
     reply.sources.push(src);
+    reply.playing += 1;
     const r = reply;
-    src.onended = () => { if (r.ended && src === r.sources[r.sources.length - 1]) replyFinish(r, r.samples); };
+    // The reply finishes when its audio_end has come and no chunk is still playing,
+    // in whichever order those two happen.
+    src.onended = () => { r.playing -= 1; if (r.ended && r.playing === 0) replyFinish(r, r.samples); };
     speakingLevel = 1;
   }
   function replyEnd(id) {
     if (!reply || reply.id !== id) return;
     reply.ended = true;
-    if (!reply.sources.length) replyFinish(reply, 0);
+    if (reply.playing === 0) replyFinish(reply, reply.samples);
   }
   function replyFinish(r, played) {
     if (r.stopped) return;

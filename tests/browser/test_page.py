@@ -129,3 +129,29 @@ async def test_a_turn_plays_its_reply_and_shows_its_text(stack):
     if os.environ.get("PAGE_SHOT"):  # a picture of the page, for a look by eye
         await asyncio.sleep(0.3)
         await page.screenshot(path=os.environ["PAGE_SHOT"])
+
+
+async def test_reply_finishes_when_audio_end_comes_after_the_audio(stack):
+    """VoiceManager paces audio and the text ends only at turn end, so audio_end can
+    arrive after every chunk has already played."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.on_reply_delta(reply_id, "t1", 1, "Hi.")
+    rid = (await wait_for(lambda: conn.json_frames("tts_stream")))[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x10\x00" * 4800)  # 0.2 s
+    await wait_for(lambda: conn.json_frames("playback"), timeout=10)  # it started playing
+    await asyncio.sleep(1.0)  # ... and finished long before the reply's text ends
+    await session.on_turn_done(reply_id, "t1", False)
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=5)
+    assert [f["event"] for f in playback] == ["start", "stop"]
+    assert playback[1]["reply_sample"] == 4800
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=5000)
