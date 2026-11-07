@@ -53,6 +53,7 @@ class VoiceSession:
         self._closed_iterations: set[tuple[str, int]] = set()
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
+        self._turn_ended_at: Optional[float] = None  # loop time of the last dispatch, for the log
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -177,6 +178,11 @@ class VoiceSession:
         async for event in self.duplex.audio():
             kind = event[0]
             if kind == "pcm":
+                if self._turn_ended_at is not None and self.reply_request is not None \
+                        and event[2] == self.reply_request.request_id:
+                    logger.info("voice page %s: reply audio %.0f ms after the end of turn",
+                                self.client_id, (asyncio.get_running_loop().time() - self._turn_ended_at) * 1000)
+                    self._turn_ended_at = None
                 if event[2] not in self._dropped:
                     with contextlib.suppress(Exception):
                         await self.page.send(event[1])
@@ -209,6 +215,7 @@ class VoiceSession:
             await self.send_page({"type": "clear", "request_id": frame.get("request_id")})
 
     async def _dispatch(self, text: str) -> None:
+        self._turn_ended_at = asyncio.get_running_loop().time()
         self.reply_id = uuid.uuid4().hex
         self.reply_open, self.reply_request = True, None
         await self.send_page({"type": "utterance", "text": text})

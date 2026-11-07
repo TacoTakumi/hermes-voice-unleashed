@@ -2,6 +2,7 @@ name: voicemanager-live
 label: VoiceManager Live
 kind: platform
 version: 0.1.0
+requires_hermes: ">=0.23.0"
 description: >
   Local, always-on, full-duplex voice for any Hermes model. A phone opens
   the page this plugin serves and talks to Hermes hands-free; speech
