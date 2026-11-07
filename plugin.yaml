@@ -1,0 +1,36 @@
+name: voicemanager-live
+label: VoiceManager Live
+kind: platform
+version: 0.1.0
+description: >
+  Local, always-on, full-duplex voice for any Hermes model. A phone opens
+  the page this plugin serves and talks to Hermes hands-free; speech
+  recognition, speech synthesis and turn-taking run on your own
+  VoiceManager server, and you can talk over a reply to stop it.
+author: TacoTakumi
+requires_env:
+  - name: VMLIVE_TOKEN
+    description: "Access token for the voice page and its WebSocket (put it in the page URL as ?token=...)"
+    prompt: "Voice page access token"
+    password: true
+  - name: VMLIVE_VOICEMANAGER_URL
+    description: "VoiceManager server URL (e.g. http://127.0.0.1:8250)"
+    prompt: "VoiceManager URL"
+    password: false
+optional_env:
+  - name: VMLIVE_VOICEMANAGER_TOKEN
+    description: "Bearer token for VoiceManager, when the server requires one"
+    prompt: "VoiceManager token (optional)"
+    password: true
+  - name: VMLIVE_HOST
+    description: "Address the voice page listens on (default 127.0.0.1)"
+    prompt: "Listen address"
+    password: false
+  - name: VMLIVE_PORT
+    description: "Port the voice page listens on (default 8765)"
+    prompt: "Listen port"
+    password: false
+  - name: VMLIVE_ALLOWED_USERS
+    description: "Gateway allowlist for this platform; set it to owner"
+    prompt: "Allowed users (owner)"
+    password: false
