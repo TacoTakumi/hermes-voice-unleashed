@@ -9,13 +9,16 @@ VMLIVE_VOICEMANAGER_TOKEN, VMLIVE_HOST, VMLIVE_PORT.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import json
 import logging
+import uuid
 from typing import Any, Optional
 
 from gateway.config import Platform
 from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra_from_env
 from gateway.platforms.base import BasePlatformAdapter, SendResult
+from gateway.platforms.event import MessageEvent, MessageType
 
 from .server import VoiceServer
 from .session import VoiceSession, client_from_url
@@ -94,7 +97,25 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 del self._clients[client_id]
 
     def _new_session(self, connection, client_id: str) -> VoiceSession:
-        return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id)
+        async def on_utterance(text: str) -> None:
+            await self.dispatch_utterance(client_id, text)
+
+        return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
+                            on_utterance=on_utterance)
+
+    async def dispatch_utterance(self, chat_id: str, text: str) -> None:
+        """Hand one finished utterance to Hermes as a voice message.
+
+        The text is already transcribed, so the event carries no audio file and
+        the gateway does not transcribe it again. Being a voice message makes the
+        turn a voice turn, which applies auxiliary.voice_chat (reasoning off by
+        default).
+        """
+        source = self.build_source(chat_id=chat_id, chat_name="Voice", chat_type="dm",
+                                   user_id=OWNER, user_name="Owner")
+        await self.handle_message(MessageEvent(
+            text=text, message_type=MessageType.VOICE, source=source,
+            message_id=uuid.uuid4().hex, timestamp=datetime.datetime.now()))
 
     async def _run_client(self, connection, client_id: str) -> None:
         await self._new_session(connection, client_id).run()
@@ -114,6 +135,10 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if await self._send_json(chat_id, {"type": "reply", "text": content}):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")
+
+    async def play_tts(self, chat_id: str, audio_path: str, **kwargs) -> SendResult:
+        """VoiceManager already speaks every reply; a Hermes TTS file would say it twice."""
+        return SendResult(success=True, message_id=None)
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """The page shows its own state; no typing indicator."""

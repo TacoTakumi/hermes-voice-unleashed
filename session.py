@@ -12,10 +12,11 @@ import asyncio
 import contextlib
 import json
 import logging
-from typing import Any, Awaitable, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlsplit
 
 from . import vm_client
+from .turns import TurnTracker
 from .vm_client import TurnEngineError, VoiceManagerClient
 
 logger = logging.getLogger(__name__)
@@ -35,10 +36,13 @@ def client_from_url(url: str, token: str = "") -> VoiceManagerClient:
 class VoiceSession:
     """Relays one page to one VoiceManager connection until either side closes."""
 
-    def __init__(self, page, client: VoiceManagerClient, client_id: str = "phone") -> None:
+    def __init__(self, page, client: VoiceManagerClient, client_id: str = "phone",
+                 on_utterance: Optional[Callable[[str], Awaitable[None]]] = None) -> None:
         self.page = page
         self.client = client
         self.client_id = client_id
+        self._on_utterance = on_utterance
+        self.tracker: Optional[TurnTracker] = None
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -58,6 +62,9 @@ class VoiceSession:
         try:
             self.duplex = self.client.duplex()
             await self._opt_in()
+            self.tracker = TurnTracker(self._dispatch, self.cancel_reply, self.turn_engine)
+            if not self.turn_engine:
+                self.tracker.open_turn(await self.duplex.turn_start())
             await self.send_page({"type": "ready", "turn_engine": self.turn_engine})
             self._start_tasks()
             await self._read_page()
@@ -74,6 +81,37 @@ class VoiceSession:
 
     def _start_tasks(self) -> None:
         """Start the readers of VoiceManager's streams."""
+        self._spawn(self._read_transcripts())
+        self._spawn(self._read_turn_ends())
+        self._spawn(self._read_errors())
+
+    async def _read_transcripts(self) -> None:
+        async for frame in self.duplex.transcripts():
+            await self.tracker.on_transcript(frame)
+            await self.send_page({"type": "transcript", "text": self.tracker.text,
+                                  "final": bool(frame.get("is_final"))})
+
+    async def _read_turn_ends(self) -> None:
+        async for frame in self.duplex.turn_ends():
+            await self.tracker.on_turn_end(frame)
+
+    async def _read_errors(self) -> None:
+        async for frame in self.duplex.errors():
+            if frame.get("error_type") == "turn_engine_lost":
+                self.turn_engine = None
+                self.tracker.turn_engine_lost()
+                self.tracker.open_turn(await self.duplex.turn_start())
+            else:
+                logger.info("voice page %s: VoiceManager error frame: %s", self.client_id, frame)
+
+    async def _dispatch(self, text: str) -> None:
+        await self.send_page({"type": "utterance", "text": text})
+        if self._on_utterance is not None:
+            await self._on_utterance(text)
+
+    async def cancel_reply(self, reason: str) -> None:
+        """Stop the running reply."""
+        logger.info("voice page %s: reply cancelled (%s)", self.client_id, reason)
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         self._tasks.append(asyncio.create_task(coro))
