@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import uuid
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlsplit
@@ -28,6 +29,7 @@ TURN_ENGINE = "tyger"
 # last text deltas by a few milliseconds.
 REPLY_QUIET_S = 0.3
 TURN_START_TIMEOUT_S = 5.0
+_LAST_SPACE = re.compile(r".*\s", re.S)  # everything up to and including the last whitespace
 
 
 def client_from_url(url: str, token: str = "") -> VoiceManagerClient:
@@ -55,6 +57,7 @@ class VoiceSession:
         self.reply_open = False  # the reply still takes text
         self.reply_request: Optional[vm_client.TTSRequest] = None
         self._last_text_at = 0.0  # loop time of the reply's last text or of its turn's end
+        self._unsent = ""  # reply text after the last whitespace, not yet sent to TTS
         self._finishing: Optional[asyncio.Task] = None
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
@@ -152,12 +155,29 @@ class VoiceSession:
         return self.reply_open and (not reply_id or reply_id == self.reply_id)
 
     async def _speak(self, text: str) -> None:
-        if self.reply_request is None:
-            self.reply_request = self.duplex.tts_request(chunking="clause")
+        """Show ``text`` on the page now; send it to TTS in whole words.
+
+        Deltas are model tokens, so a word or a sentence's final period can arrive
+        in a later delta than the rest. VoiceManager's clause mode treats each chunk
+        as whole words (it strips each chunk and joins them with spaces), so a chunk
+        that ended inside a word would be spoken split, and a period sent alone is
+        synthesised on its own. Text up to the last whitespace goes now; the rest
+        waits for more text or for the end of the reply."""
         self._last_text_at = asyncio.get_running_loop().time()
         self.tracker.reply_text()
-        await self.reply_request.send(text)
         await self.send_page({"type": "reply_delta", "text": text})
+        self._unsent += text
+        match = _LAST_SPACE.search(self._unsent)
+        if match:
+            chunk, self._unsent = self._unsent[:match.end()], self._unsent[match.end():]
+            await self._send_tts(chunk)
+
+    async def _send_tts(self, chunk: str) -> None:
+        if not chunk.strip():
+            return
+        if self.reply_request is None:
+            self.reply_request = self.duplex.tts_request(chunking="clause")
+        await self.reply_request.send(chunk)
 
     async def on_reply_delta(self, reply_id: str, turn_id: str, iteration: int, delta: str) -> None:
         if self._takes(reply_id):
@@ -180,6 +200,8 @@ class VoiceSession:
         if not self._takes(reply_id):  # cancelled, or a newer utterance took over
             return
         self.reply_open = False
+        rest, self._unsent = self._unsent, ""
+        await self._send_tts(rest)
         request = self.reply_request
         if request is None:  # the turn said nothing
             await self._next_turn()
@@ -232,7 +254,7 @@ class VoiceSession:
         self._turn_ended_at = asyncio.get_running_loop().time()
         self._cancel_finishing()
         self.reply_id = uuid.uuid4().hex
-        self.reply_open, self.reply_request = True, None
+        self.reply_open, self.reply_request, self._unsent = True, None, ""
         await self.send_page({"type": "utterance", "text": text})
         if self._on_utterance is not None:
             await self._on_utterance(text, self.reply_id)

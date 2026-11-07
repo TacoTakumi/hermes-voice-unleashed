@@ -141,7 +141,7 @@ async def test_reply_finishes_when_audio_end_comes_after_the_audio(stack):
     await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
     await wait_for(lambda: utterances, timeout=5)
     session, reply_id = sessions[0], utterances[0][1]
-    await session.on_reply_delta(reply_id, "t1", 1, "Hi.")
+    await session.on_reply_delta(reply_id, "t1", 1, "Hi. ")  # a word boundary: whole words go to TTS at once
     rid = (await wait_for(lambda: conn.json_frames("tts_stream")))[0]["request_id"]
     await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
     await conn.send(b"\x10\x00" * 4800)  # 0.2 s

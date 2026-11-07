@@ -144,4 +144,4 @@ async def test_text_of_a_cancelled_reply_never_reaches_the_next_one(plugin):
         await wait_for(lambda: len({f["request_id"] for f in tts(conn)}) == 2)
         await asyncio.sleep(0.1)
         texts = [f["text"] for f in tts(conn)]
-        assert texts == ["First answer", "Second answer"]
+        assert texts == ["First ", "Second "]  # whole words only; nothing of the cancelled reply after it

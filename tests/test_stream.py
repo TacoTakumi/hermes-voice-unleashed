@@ -84,13 +84,13 @@ def ended(conn):
 
 async def test_deltas_reach_tts_before_the_turn_ends(rig):
     hooks, conn, page = rig
-    fire(hooks.on_stream_delta, delta="Hello there.", kind="text", turn_id="t1", iteration=1,
+    fire(hooks.on_stream_delta, delta="Hello there. ", kind="text", turn_id="t1", iteration=1,
          surface=PLATFORM)
     first = await wait_for(lambda: tts_frames(conn))
-    assert first[0]["text"] == "Hello there."
+    assert first[0]["text"] == "Hello there. "
     assert first[0]["chunking"] == "clause"
     assert first[0]["done"] is False
-    fire(hooks.on_stream_delta, delta=" How are you?", kind="text", turn_id="t1", iteration=1,
+    fire(hooks.on_stream_delta, delta="How are you?", kind="text", turn_id="t1", iteration=1,
          surface=PLATFORM)
     fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
     frames = await wait_for(lambda: ended(conn))
@@ -111,7 +111,7 @@ async def test_deltas_that_arrive_after_the_turn_end_are_still_spoken(rig):
     fire(hooks.on_stream_delta, delta="-two.", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
     frames = await wait_for(lambda: ended(conn))
     assert "".join(f["text"] for f in frames) == "The answer is forty-two."
-    assert [f["done"] for f in frames] == [False, False, False, True]
+    assert frames[-1]["done"] is True and not any(f["done"] for f in frames[:-1])
 
 
 async def test_reply_audio_reaches_the_page(rig):
@@ -158,7 +158,8 @@ async def test_a_turn_with_no_text_ends_the_reply(rig):
     await conn.send({"type": "turn_end", "text": "and now", "turn_id": 0})
     await wait_for(lambda: len(page.of("utterance")) == 2)
     fire(hooks.on_stream_delta, delta="Second.", kind="text", turn_id="t2", iteration=1, surface=PLATFORM)
-    frames = await wait_for(lambda: tts_frames(conn))
+    fire(hooks.on_session_end, turn_id="t2", interrupted=False, platform=PLATFORM)
+    frames = await wait_for(lambda: ended(conn))
     assert frames[0]["text"] == "Second."
     assert conn.json_frames("tts_cancel") == []
 
@@ -201,5 +202,28 @@ async def test_a_retried_stream_in_the_same_iteration_is_spoken(rig):
             surface=PLATFORM)
     deliver(hooks, "on_session_end", turn_id="t1", interrupted=False, platform=PLATFORM)
     frames = await wait_for(lambda: ended(conn))
-    assert [f["text"] for f in frames] == ["Paris is", "The capital is Paris.", ""]
+    assert "".join(f["text"] for f in frames) == "Paris isThe capital is Paris."  # the retry is spoken
     assert frames[-1]["done"] is True
+
+
+def voicemanager_join(frames):
+    """How VoiceManager's clause mode rebuilds a request's text from its chunks."""
+    return " ".join(f["text"].strip() for f in frames if f["text"].strip())
+
+
+async def test_tts_gets_whole_words_so_voicemanager_joins_them_right(rig):
+    """Model tokens split words and leave a sentence's period alone; VoiceManager joins
+    stripped chunks with spaces, so the plugin must send whole words only."""
+    hooks, conn, page = rig
+    tokens = ["The sub", "systems", " are", " CAS", "-", "1", " and", " tri", "age", ".\n\n", "One",
+              ":", " Standing", " by", "."]
+    for token in tokens:
+        fire(hooks.on_stream_delta, delta=token, kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    frames = await wait_for(lambda: ended(conn))
+    texts = [f["text"] for f in frames]
+    assert "".join(texts) == "".join(tokens)  # nothing lost or added
+    assert voicemanager_join(frames) == "The subsystems are CAS-1 and triage. One: Standing by."
+    assert all(t[-1].isspace() for t in texts[:-2])  # every chunk before the end stops at a word boundary
+    assert not any(t.strip() and all(not c.isalnum() for c in t.strip()) for t in texts)  # no punctuation alone
+    await wait_for(lambda: "".join(f["text"] for f in page.of("reply_delta")) == "".join(tokens))
