@@ -9,7 +9,9 @@ VoiceManager session.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
+import json
 import logging
 from http import HTTPStatus
 from pathlib import Path
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 ClientHandler = Callable[[ServerConnection, str], Awaitable[None]]
+REPLACED_CLOSE_CODE = 4001  # another page took this conversation over
 
 
 def _query(path: str) -> tuple[str, dict[str, list[str]]]:
@@ -54,6 +57,7 @@ class VoiceServer:
         self._on_client = on_client
         self._web_dir = web_dir
         self._server: Optional[Server] = None
+        self._pages: dict[str, ServerConnection] = {}  # client id -> the page that owns it
 
     @property
     def bound_port(self) -> int:
@@ -93,4 +97,18 @@ class VoiceServer:
     async def _handle(self, connection: ServerConnection) -> None:
         _, query = _query(connection.request.path)
         client_id = (query.get("client") or ["phone"])[0][:64] or "phone"
-        await self._on_client(connection, client_id)
+        previous = self._pages.get(client_id)
+        if previous is not None:
+            # One page owns a conversation's mic and speaker. The new page takes it over;
+            # the old one is told so, and REPLACED_CLOSE_CODE keeps it from reconnecting
+            # (two pages that both reconnected would push each other off for ever).
+            with contextlib.suppress(Exception):
+                await previous.send(json.dumps({"type": "replaced"}))
+            with contextlib.suppress(Exception):
+                await previous.close(code=REPLACED_CLOSE_CODE, reason="replaced")
+        self._pages[client_id] = connection
+        try:
+            await self._on_client(connection, client_id)
+        finally:
+            if self._pages.get(client_id) is connection:
+                del self._pages[client_id]

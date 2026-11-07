@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 import pytest
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 
 from gateway.config import PlatformConfig
 
@@ -187,3 +189,25 @@ async def test_reader_failure_in_the_reply_finish_reaches_the_page(plugin, monke
         finally:
             await adapter.disconnect()
     assert errors and "turn_start" in errors[0]["message"]
+
+
+async def test_a_second_page_takes_over_and_the_first_is_told_not_to_return(adapter, fake_vm):
+    """One page owns a conversation's mic and speaker. A new page with the same client id takes it
+    over; the old page gets a replaced frame and close code 4001, so it does not reconnect."""
+    async with connect(_page_url(adapter, "phone")) as old:
+        await _ready(old)
+        (old_vm,) = await fake_vm.wait_connections(1)
+        async with connect(_page_url(adapter, "phone")) as new:
+            frames = []
+            with contextlib.suppress(ConnectionClosed):
+                async with asyncio.timeout(5):
+                    async for message in old:
+                        frames.append(json.loads(message))
+            assert {"type": "replaced"} in frames
+            assert old.close_code == 4001
+            await asyncio.wait_for(old_vm.closed.wait(), 2)
+            assert (await _ready(new))["type"] == "ready"
+            await new.send(b"\x07\x00" * 160)
+            conns = await fake_vm.wait_connections(2)
+            await wait_for(lambda: conns[1].audio)
+            assert not conns[1].closed.is_set()

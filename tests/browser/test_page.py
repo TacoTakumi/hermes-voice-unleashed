@@ -175,3 +175,32 @@ async def test_gateway_messages_never_replace_the_streamed_reply(stack):
     await asyncio.sleep(0.2)
     texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
     assert texts == ["Let me check.", "web_search: weather today", "It is sunny."]
+
+
+async def test_a_replaced_page_stops_reconnecting_until_used_here(stack):
+    fake, page, sessions, utterances = stack
+    await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    import websockets
+    port = page.url.split(":")[2].split("/")[0]
+    async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={TOKEN}&client=phone") as other:
+        await page.wait_for_function(
+            "document.getElementById('state').textContent === 'In use on another device'", timeout=5000)
+        await fake.wait_connections(2, timeout=5)  # the page's own session, then the new client's
+        await asyncio.sleep(2.0)
+        assert len(fake.connections) == 2  # the replaced page did not come back by itself
+        assert await page.text_content("#toggle") == "Use here"
+        await page.click("#toggle")
+        await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                     timeout=10000)
+        frames = []
+        try:
+            async with asyncio.timeout(5):
+                async for message in other:
+                    if isinstance(message, str):
+                        frames.append(message)
+        except websockets.exceptions.ConnectionClosed as closed:
+            assert closed.rcvd.code == 4001
+        assert any('"replaced"' in f for f in frames)
+    assert await page.text_content("#toggle") == "Mute microphone"

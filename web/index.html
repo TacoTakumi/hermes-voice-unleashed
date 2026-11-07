@@ -107,6 +107,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 
   let ws = null, micCtx = null, micStream = null, micNode = null, playCtx = null;
   let running = false, muted = false, retry = 0, wakeLock = null;
+  let replaced = false; // another page took this conversation over: do not reconnect
   let level = 0, speakingLevel = 0;
   let hermesTurn = null; // the <li> the current reply's text goes into
 
@@ -235,6 +236,9 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       case "clear":
         replyClear(f.request_id || null);
         break;
+      case "replaced":
+        handOver();
+        break;
     }
   }
 
@@ -252,10 +256,11 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         replyPcm(ev.data);
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       ws = null;
       replyClear(null);
-      if (!running) return;
+      if (ev.code === 4001) handOver();
+      if (!running || replaced) return;
       const wait = Math.min(10000, 500 * 2 ** retry++);
       show("Reconnecting", "alert", `Trying again in ${Math.round(wait / 1000) || 1} s.`);
       setTimeout(() => { if (running) connect(); }, wait);
@@ -354,8 +359,25 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     draw();
   }
 
+  // Another page (this conversation on another device or tab) took over. Stay off until
+  // the user takes it back here; that page is then the one that steps aside.
+  function handOver() {
+    replaced = true;
+    show("In use on another device", "alert", "This conversation moved to another page. Tap Use here to take it back.");
+    toggle.textContent = "Use here";
+    toggle.setAttribute("aria-pressed", "false");
+  }
+
   toggle.addEventListener("click", () => {
     if (!running) { start(); return; }
+    if (replaced) {
+      replaced = false;
+      retry = 0;
+      muted = false;
+      toggle.textContent = "Mute microphone";
+      connect();
+      return;
+    }
     muted = !muted;
     toggle.setAttribute("aria-pressed", String(muted));
     toggle.textContent = muted ? "Unmute microphone" : "Mute microphone";

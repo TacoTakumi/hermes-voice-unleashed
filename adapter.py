@@ -92,10 +92,6 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         self._clients.clear()
 
     async def _on_client(self, connection, client_id: str) -> None:
-        previous = self._clients.get(client_id)
-        if previous is not None:  # a reload replaces the old page
-            with contextlib.suppress(Exception):
-                await previous.close()
         self._clients[client_id] = connection
         try:
             await self._run_client(connection, client_id)

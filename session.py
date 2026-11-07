@@ -109,10 +109,10 @@ class VoiceSession:
 
     def _start_tasks(self) -> None:
         """Start the readers of VoiceManager's streams."""
-        self._spawn(self._read_transcripts())
-        self._spawn(self._read_turn_ends())
-        self._spawn(self._read_errors())
-        self._spawn(self._read_audio())
+        self._spawn(self._read_transcripts)
+        self._spawn(self._read_turn_ends)
+        self._spawn(self._read_errors)
+        self._spawn(self._read_audio)
 
     async def _read_transcripts(self) -> None:
         async for frame in self.duplex.transcripts():
@@ -281,8 +281,10 @@ class VoiceSession:
                     await request.cancel()
         await self.send_page({"type": "clear", "request_id": request.request_id if request else None})
 
-    def _spawn(self, coro: Awaitable[None]) -> None:
-        self._tasks.append(asyncio.create_task(self._supervised(coro)))
+    def _spawn(self, reader: Callable[[], Awaitable[None]]) -> None:
+        # The reader's coroutine is made inside the task, so a task cancelled before it
+        # starts leaves no coroutine behind that was never awaited.
+        self._tasks.append(asyncio.create_task(self._supervised(reader)))
 
     async def _guarded(self, coro: Awaitable[None]) -> None:
         """Run a one-shot task; if it fails, the session cannot go on."""
@@ -293,11 +295,11 @@ class VoiceSession:
         except Exception as exc:
             await self._fail(exc)
 
-    async def _supervised(self, coro: Awaitable[None]) -> None:
+    async def _supervised(self, reader: Callable[[], Awaitable[None]]) -> None:
         """Run one reader. A reader that fails, or ends because VoiceManager closed the
         connection, leaves the session deaf or mute, so it ends the session."""
         try:
-            await coro
+            await reader()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
