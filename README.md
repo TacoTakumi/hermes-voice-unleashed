@@ -46,6 +46,12 @@ From the Hermes plugin catalog:
 hermes plugins install voicemanager-live
 ```
 
+Before the catalog lists it, install it straight from GitHub:
+
+```sh
+hermes plugins install TacoTakumi/hermes-voicemanager-live
+```
+
 Or from a checkout, for development:
 
 ```sh
