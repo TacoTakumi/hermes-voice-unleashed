@@ -74,9 +74,31 @@ def on_session_end(turn_id: str = "", interrupted: bool = False, platform: str =
     _post(platform, "on_turn_done", turn_id, bool(interrupted))
 
 
+# Joined into the user message of each turn of a session a UI client has voice attached to.
+SAY_INSTRUCTION = (
+    "This chat also has a voice channel. Start your reply with a short spoken summary inside "
+    "<say>...</say>: one to three short sentences on what you did or found, as you would say it "
+    "aloud. Put no code, lists, tables, paths or URLs inside it. Then write your full reply as "
+    "usual after the closing tag."
+)
+
+
+def pre_llm_call(session_id: str = "", **_: Any) -> Optional[str]:
+    """The say instruction when ``session_id`` has voice attached in a running adapter, else None."""
+    if not session_id:
+        return None
+    try:
+        if any(adapter.is_attached(session_id) for adapter in list(_adapters)):
+            return SAY_INSTRUCTION
+    except Exception:
+        logger.debug("say instruction check failed for session %s", session_id, exc_info=True)
+    return None
+
+
 HOOKS = {
     "on_stream_delta": on_stream_delta,
     "on_session_end": on_session_end,
+    "pre_llm_call": pre_llm_call,
 }
 
 
