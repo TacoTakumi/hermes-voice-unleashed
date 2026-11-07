@@ -18,6 +18,7 @@ from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 
 from .server import VoiceServer
+from .session import VoiceSession, client_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +93,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             if self._clients.get(client_id) is connection:
                 del self._clients[client_id]
 
+    def _new_session(self, connection, client_id: str) -> VoiceSession:
+        return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id)
+
     async def _run_client(self, connection, client_id: str) -> None:
-        async for _ in connection:
-            pass
+        await self._new_session(connection, client_id).run()
 
     async def _send_json(self, chat_id: str, payload: dict) -> bool:
         connection = self._clients.get(chat_id)
