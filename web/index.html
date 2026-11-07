@@ -200,7 +200,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         listening();
         break;
       case "error":
-        show("No voice server", "alert", f.message || "VoiceManager did not answer.");
+        show("Voice stopped", "alert", f.message || "VoiceManager did not answer.");
         break;
       case "transcript":
         transcriptEl.textContent = f.text || "";

@@ -36,8 +36,10 @@ class FakeConnection:
 class FakeVoiceManager:
     """``turn_engine``: None accepts the opt-in, an error_type string refuses it."""
 
-    def __init__(self, turn_engine_refusal: Optional[str] = None, stt_engine: str = "audiocpp") -> None:
+    def __init__(self, turn_engine_refusal: Optional[str] = None, stt_engine: str = "audiocpp",
+                 answer_turn_start: bool = True) -> None:
         self.turn_engine_refusal = turn_engine_refusal
+        self.answer_turn_start = answer_turn_start
         self.stt_engine = stt_engine
         self.connections: list[FakeConnection] = []
         self.new_connection = asyncio.Event()
@@ -84,7 +86,7 @@ class FakeVoiceManager:
                     else:
                         await conn.send({"type": "error", "error_type": self.turn_engine_refusal,
                                          "message": "refused"})
-                elif frame.get("type") == "turn_start":
+                elif frame.get("type") == "turn_start" and self.answer_turn_start:
                     await conn.send({"type": "turn_started", "turn_id": len(conn.json_frames("turn_start"))})
         except Exception:
             pass

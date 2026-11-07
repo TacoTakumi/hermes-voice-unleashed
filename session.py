@@ -27,6 +27,7 @@ TURN_ENGINE = "tyger"
 # closed. Each stream hook runs on its own thread, so the turn's end can overtake the
 # last text deltas by a few milliseconds.
 REPLY_QUIET_S = 0.3
+TURN_START_TIMEOUT_S = 5.0
 
 
 def client_from_url(url: str, token: str = "") -> VoiceManagerClient:
@@ -79,12 +80,21 @@ class VoiceSession:
             await self._opt_in()
             self.tracker = TurnTracker(self._dispatch, self.cancel_reply, self.turn_engine)
             if not self.turn_engine:
-                self.tracker.open_turn(await self.duplex.turn_start())
+                self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
             await self.send_page({"type": "ready", "turn_engine": self.turn_engine})
             self._start_tasks()
             await self._read_page()
+        except Exception as exc:
+            await self._fail(exc)
         finally:
             await self._stop()
+
+    async def _fail(self, exc: BaseException) -> None:
+        """The session cannot go on: say why on the page and close it (the page reconnects)."""
+        logger.warning("voice page %s: session stopped: %r", self.client_id, exc, exc_info=exc)
+        await self.send_page({"type": "error", "message": f"voice session stopped: {exc}"})
+        with contextlib.suppress(Exception):
+            await self.page.close()
 
     async def _opt_in(self) -> None:
         try:
@@ -121,7 +131,7 @@ class VoiceSession:
             if frame.get("error_type") == "turn_engine_lost":
                 self.turn_engine = None
                 self.tracker.turn_engine_lost()
-                self.tracker.open_turn(await self.duplex.turn_start())
+                self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
             else:
                 logger.info("voice page %s: VoiceManager error frame: %s", self.client_id, frame)
 
@@ -130,7 +140,7 @@ class VoiceSession:
         self.tracker.reply_ended()
         if not self.turn_engine:
             self._cleared_turn = False
-            self.tracker.open_turn(await self.duplex.turn_start())
+            self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
 
     # --- the reply's text, from the stream hooks -----------------------------------
 
@@ -250,7 +260,19 @@ class VoiceSession:
         await self.send_page({"type": "clear", "request_id": request.request_id if request else None})
 
     def _spawn(self, coro: Awaitable[None]) -> None:
-        self._tasks.append(asyncio.create_task(coro))
+        self._tasks.append(asyncio.create_task(self._supervised(coro)))
+
+    async def _supervised(self, coro: Awaitable[None]) -> None:
+        """Run one reader. A reader that fails, or ends because VoiceManager closed the
+        connection, leaves the session deaf or mute, so it ends the session."""
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._fail(exc)
+        else:
+            await self._fail(ConnectionError("VoiceManager closed the connection"))
 
     async def _read_page(self) -> None:
         async for message in self.page:

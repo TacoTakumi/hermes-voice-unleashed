@@ -107,3 +107,51 @@ def test_client_from_url_parses_scheme_host_and_port(plugin):
     assert (client.host, client.port, client.use_ssl, client.token) == ("vm.example", 9443, True, "t")
     client = plugin.session.client_from_url("http://127.0.0.1:8250")
     assert (client.host, client.port, client.use_ssl) == ("127.0.0.1", 8250, False)
+
+
+async def _expect_error_then_close(page):
+    frames = []
+    async with asyncio.timeout(5):
+        async for message in page:
+            if isinstance(message, str):
+                frames.append(json.loads(message))
+    return [f for f in frames if f.get("type") == "error"]
+
+
+async def test_reader_failure_on_turn_start_reaches_the_page(plugin, monkeypatch):
+    monkeypatch.setattr(plugin.session, "TURN_START_TIMEOUT_S", 0.3)
+    async with FakeVoiceManager(turn_engine_refusal="turn_engine_unsupported", answer_turn_start=False) as fake:
+        adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={
+            "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
+        assert await adapter.connect()
+        try:
+            async with connect(_page_url(adapter, "phone")) as page:
+                errors = await _expect_error_then_close(page)
+            (conn,) = fake.connections
+            await asyncio.wait_for(conn.closed.wait(), 2)
+        finally:
+            await adapter.disconnect()
+    assert errors and "turn_start" in errors[0]["message"]
+
+
+async def test_reader_failure_on_dispatch_reaches_the_page(plugin):
+    async with FakeVoiceManager() as fake:
+        adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={
+            "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
+
+        async def broken(event):
+            raise RuntimeError("gateway refused the message")
+
+        adapter.handle_message = broken
+        assert await adapter.connect()
+        try:
+            async with connect(_page_url(adapter, "phone")) as page:
+                await _ready(page)
+                await page.send(b"\x00\x00" * 160)
+                (conn,) = await fake.wait_connections(1)
+                await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
+                errors = await _expect_error_then_close(page)
+            await asyncio.wait_for(conn.closed.wait(), 2)
+        finally:
+            await adapter.disconnect()
+    assert errors and "gateway refused the message" in errors[0]["message"]
