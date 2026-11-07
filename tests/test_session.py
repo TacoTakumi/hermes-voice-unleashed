@@ -155,3 +155,35 @@ async def test_reader_failure_on_dispatch_reaches_the_page(plugin):
         finally:
             await adapter.disconnect()
     assert errors and "gateway refused the message" in errors[0]["message"]
+
+
+async def test_reader_failure_in_the_reply_finish_reaches_the_page(plugin, monkeypatch):
+    """Classic mode: a turn that said nothing opens the next listening turn from the task that
+    closes the reply; a turn_start that is never answered there must end the session visibly."""
+    monkeypatch.setattr(plugin.session, "TURN_START_TIMEOUT_S", 0.3)
+    async with FakeVoiceManager(turn_engine_refusal="turn_engine_unsupported") as fake:
+        adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={
+            "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
+        events = []
+
+        async def handle_message(event):
+            events.append(event)
+
+        adapter.handle_message = handle_message
+        assert await adapter.connect()
+        try:
+            async with connect(_page_url(adapter, "phone")) as page:
+                await _ready(page)
+                await page.send(b"\x00\x00" * 160)
+                (conn,) = await fake.wait_connections(1)
+                await wait_for(lambda: conn.json_frames("turn_start"))
+                fake.answer_turn_start = False  # VoiceManager stops answering from here on
+                await conn.send({"type": "transcription", "segment_index": 0, "text": "hello there",
+                                 "endpoint": True, "is_final": False, "turn_id": 1})
+                await wait_for(lambda: events)
+                await adapter.session_for("phone").on_turn_done(events[0].message_id, "t1", False)
+                errors = await _expect_error_then_close(page)
+            await asyncio.wait_for(conn.closed.wait(), 2)
+        finally:
+            await adapter.disconnect()
+    assert errors and "turn_start" in errors[0]["message"]

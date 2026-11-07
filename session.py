@@ -169,7 +169,7 @@ class VoiceSession:
         if not self._takes(reply_id) or self._finishing is not None:
             return
         self._last_text_at = asyncio.get_running_loop().time()
-        self._finishing = asyncio.create_task(self._finish_when_quiet(reply_id))
+        self._finishing = asyncio.create_task(self._guarded(self._finish_when_quiet(reply_id)))
 
     async def _finish_when_quiet(self, reply_id: str) -> None:
         loop = asyncio.get_running_loop()
@@ -261,6 +261,15 @@ class VoiceSession:
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         self._tasks.append(asyncio.create_task(self._supervised(coro)))
+
+    async def _guarded(self, coro: Awaitable[None]) -> None:
+        """Run a one-shot task; if it fails, the session cannot go on."""
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     async def _supervised(self, coro: Awaitable[None]) -> None:
         """Run one reader. A reader that fails, or ends because VoiceManager closed the
