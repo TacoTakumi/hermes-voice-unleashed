@@ -29,7 +29,7 @@ page and a WebSocket. For each open page:
 
 ## What you need
 
-- Hermes Agent 0.23.0 or later.
+- Hermes Agent 0.22.7 or later.
 - A VoiceManager server (0.7.0 or later) that your Hermes gateway can reach. See
   its README for the engines and the GPU it needs. For barge-in on a phone
   speaker, run it with `VM_STT_ENGINE=audiocpp` and `VM_TURN_ENGINE=tyger`.
