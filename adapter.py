@@ -54,6 +54,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         self._server: Optional[VoiceServer] = None
         self._clients: dict[str, Any] = {}  # chat_id -> the page's WebSocket connection
         self._sessions: dict[str, VoiceSession] = {}  # chat_id -> its voice session
+        # Hermes session id -> the voice session of the UI client attached to it. Kept
+        # apart from the pages, so the stream hooks and send() never reach one.
+        self._attached: dict[str, VoiceSession] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
@@ -70,7 +73,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                                   retryable=False)
             return False
         try:
-            self._server = VoiceServer(self.host, self.port, self.token, self._on_client)
+            self._server = VoiceServer(self.host, self.port, self.token, self._on_client,
+                                       on_attach=self._on_attach)
             await self._server.start()
         except OSError as exc:
             logger.error("voice page: cannot listen on %s:%s: %s", self.host, self.port, exc)
@@ -98,6 +102,26 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         finally:
             if self._clients.get(client_id) is connection:
                 del self._clients[client_id]
+
+    def is_attached(self, session_id: str) -> bool:
+        """Whether a UI client has voice attached to the Hermes session ``session_id``."""
+        return session_id in self._attached
+
+    async def _on_attach(self, connection, session_id: str) -> None:
+        """Voice for a UI client that shows the Hermes session itself.
+
+        Each finished utterance goes to the client only (it submits it to the chat),
+        and the reply's text comes back from the client, not from the stream hooks."""
+        session = VoiceSession(connection, client_from_url(self.vm_url, self.vm_token),
+                               f"attach:{session_id}", attached=True)
+        self._attached[session_id] = session
+        logger.info("voice attached to session %s", session_id)
+        try:
+            await session.run()
+        finally:
+            if self._attached.get(session_id) is session:
+                del self._attached[session_id]
+            logger.info("voice detached from session %s", session_id)
 
     def _new_session(self, connection, client_id: str) -> VoiceSession:
         async def on_utterance(text: str, message_id: str) -> None:

@@ -4,6 +4,13 @@ The page sends 16 kHz mono 16-bit PCM as binary frames and JSON control
 frames as text. The session forwards the mic audio to VoiceManager,
 asks for the Tyger turn engine before the first audio frame, and falls
 back to the classic end-of-turn rule when the server refuses it.
+
+An attached session serves a UI client that shows a Hermes session itself:
+the client submits each utterance to the chat and sends the reply's text
+back as ``say`` frames, ending it with ``say_end``. Each frame names its
+reply with a ``reply`` key (the client's id for that reply), so text of a reply
+that was ended or cut off never reaches a later one, and a reply the client
+starts on its own (an answer to a typed message) is spoken too.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ TURN_ENGINE = "tyger"
 # last text deltas by a few milliseconds.
 REPLY_QUIET_S = 0.3
 TURN_START_TIMEOUT_S = 5.0
+CLOSED_KEYS_KEPT = 64  # reply keys of ended or cut-off replies an attached session remembers
 _LAST_SPACE = re.compile(r".*\s", re.S)  # everything up to and including the last whitespace
 
 
@@ -45,11 +53,15 @@ class VoiceSession:
     """Relays one page to one VoiceManager connection until either side closes."""
 
     def __init__(self, page, client: VoiceManagerClient, client_id: str = "phone",
-                 on_utterance: Optional[Callable[[str, str], Awaitable[None]]] = None) -> None:
+                 on_utterance: Optional[Callable[[str, str], Awaitable[None]]] = None,
+                 attached: bool = False) -> None:
         self.page = page
         self.client = client
         self.client_id = client_id
         self._on_utterance = on_utterance
+        self.attached = attached  # the reply's text comes from the client's say frames
+        self.reply_key: Optional[str] = None  # attached: the client's key for the running reply
+        self._closed_keys: dict[str, None] = {}  # attached: keys that take no more text, oldest first
         self.tracker: Optional[TurnTracker] = None
         # The running reply. reply_id is the message id of the utterance it answers;
         # the stream hooks name it, so text of an older, cancelled turn never lands here.
@@ -197,6 +209,10 @@ class VoiceSession:
             await asyncio.sleep(wait)
         if self._finishing is asyncio.current_task():
             self._finishing = None
+        await self._end_reply(reply_id)
+
+    async def _end_reply(self, reply_id: str) -> None:
+        """Send the rest of the reply's text and end its TTS request."""
         if not self._takes(reply_id):  # cancelled, or a newer utterance took over
             return
         self.reply_open = False
@@ -252,12 +268,28 @@ class VoiceSession:
 
     async def _dispatch(self, text: str) -> None:
         self._turn_ended_at = asyncio.get_running_loop().time()
-        self._cancel_finishing()
-        self.reply_id = uuid.uuid4().hex
-        self.reply_open, self.reply_request, self._unsent = True, None, ""
+        self._open_reply()
         await self.send_page({"type": "utterance", "text": text})
         if self._on_utterance is not None:
             await self._on_utterance(text, self.reply_id)
+
+    def _open_reply(self) -> None:
+        """Start a new reply that takes text; the one before it takes no more."""
+        self._cancel_finishing()
+        self._retire(self.reply_key)
+        self.reply_id = uuid.uuid4().hex
+        self.reply_open, self.reply_request, self._unsent = True, None, ""
+
+    def _retire(self, key: Optional[str]) -> None:
+        """Remember that the reply ``key`` takes no more text."""
+        if key is None:
+            return
+        if key == self.reply_key:
+            self.reply_key = None
+        self._closed_keys.pop(key, None)
+        self._closed_keys[key] = None
+        while len(self._closed_keys) > CLOSED_KEYS_KEPT:
+            del self._closed_keys[next(iter(self._closed_keys))]
 
     def _cancel_finishing(self) -> None:
         if self._finishing is not None:
@@ -273,6 +305,7 @@ class VoiceSession:
         logger.info("voice page %s: reply cancelled (%s)", self.client_id, reason)
         self._cancel_finishing()
         self.reply_open = False
+        self._retire(self.reply_key)
         request, self.reply_request = self.reply_request, None
         if request is not None:
             self._dropped.add(request.request_id)
@@ -321,7 +354,11 @@ class VoiceSession:
                 await self.on_page_frame(frame)
 
     async def on_page_frame(self, frame: dict[str, Any]) -> None:
-        """A JSON control frame from the page: playback edges of a reply."""
+        """A JSON control frame from the page: playback edges of a reply, and for an
+        attached client the reply's text."""
+        if self.attached and frame.get("type") in ("say", "say_end"):
+            await self._on_say(frame)
+            return
         if frame.get("type") != "playback" or not self.turn_engine:
             return
         request_id = frame.get("request_id")
@@ -333,6 +370,48 @@ class VoiceSession:
             reply_sample = frame.get("reply_sample")
             if isinstance(reply_sample, int) and not isinstance(reply_sample, bool) and reply_sample >= 0:
                 await self.duplex.playback_stop(request_id, reply_sample=reply_sample)
+
+    async def _on_say(self, frame: dict[str, Any]) -> None:
+        """Reply text from an attached client.
+
+        The frames of one WebSocket arrive in order, so ``say_end`` ends the reply at
+        once, with no quiet window."""
+        key = frame.get("reply")
+        key = key if isinstance(key, str) and key else None
+        if frame["type"] == "say_end":
+            await self._on_say_end(key)
+            return
+        text = frame.get("text")
+        if isinstance(text, str) and text and await self._say_takes(key):
+            await self._speak(text)
+
+    async def _say_takes(self, key: Optional[str]) -> bool:
+        """Whether say text with ``key`` goes to the running reply, starting one for a
+        new key. Text without a key belongs to the reply the last utterance opened."""
+        if key is None:
+            return self.reply_open and self.reply_key is None
+        if key in self._closed_keys:
+            return False  # ended or cut off
+        if self.reply_open and self.reply_key in (None, key):
+            self.reply_key = key  # the reply the utterance opened gets its key
+            return True
+        if self.reply_open:  # the client moved on to another reply: end this one
+            await self._on_say_end(self.reply_key)
+        self._open_reply()  # a reply the client started itself, as for a typed message
+        self.reply_key = key
+        self.tracker.reply_started()
+        return True
+
+    async def _on_say_end(self, key: Optional[str]) -> None:
+        """End the reply ``key`` names, if it is the running one; it takes no more text."""
+        if key is None:
+            if self.reply_key is None:
+                await self._end_reply(self.reply_id or "")
+            return
+        running = key == self.reply_key
+        self._retire(key)
+        if running:
+            await self._end_reply(self.reply_id or "")
 
     async def _stop(self) -> None:
         self._cancel_finishing()

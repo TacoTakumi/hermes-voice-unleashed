@@ -5,6 +5,9 @@ One websockets server serves both: ``GET /`` returns the page and
 access token as the ``token`` query parameter; a request without the
 right token gets 401 before any handshake, so it never reaches a
 VoiceManager session.
+
+``/ws?attach=<Hermes session id>`` attaches a UI client to a Hermes session
+instead of a page conversation; it is handed to ``on_attach``.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 ClientHandler = Callable[[ServerConnection, str], Awaitable[None]]
 REPLACED_CLOSE_CODE = 4001  # another page took this conversation over
+MAX_ATTACH_ID = 256  # a longer Hermes session id is refused, never cut
 
 
 def _query(path: str) -> tuple[str, dict[str, list[str]]]:
@@ -49,15 +53,18 @@ class VoiceServer:
     """Serves the page and accepts audio WebSockets for a token holder."""
 
     def __init__(self, host: str, port: int, token: str, on_client: ClientHandler,
-                 web_dir: Path = WEB_DIR) -> None:
+                 web_dir: Path = WEB_DIR, on_attach: Optional[ClientHandler] = None) -> None:
         if not token:
             raise ValueError("an access token is required")
         self.host, self.port = host, port
         self._token = token.encode()
         self._on_client = on_client
+        self._on_attach = on_attach
         self._web_dir = web_dir
         self._server: Optional[Server] = None
-        self._pages: dict[str, ServerConnection] = {}  # client id -> the page that owns it
+        # (kind, id) -> the connection that owns it: ("client", page client id) or
+        # ("attach", Hermes session id), so a page and an attached client never collide.
+        self._pages: dict[tuple[str, str], ServerConnection] = {}
 
     @property
     def bound_port(self) -> int:
@@ -96,8 +103,23 @@ class VoiceServer:
 
     async def _handle(self, connection: ServerConnection) -> None:
         _, query = _query(connection.request.path)
+        session_id = (query.get("attach") or [""])[0]
+        if session_id and self._on_attach is not None:
+            if len(session_id) > MAX_ATTACH_ID:
+                reason = f"attach id longer than {MAX_ATTACH_ID} characters"
+                with contextlib.suppress(Exception):
+                    await connection.send(json.dumps({"type": "error", "message": reason}))
+                await connection.close(code=1008, reason=reason)  # policy violation
+                return
+            await self._own(connection, ("attach", session_id), self._on_attach)
+            return
         client_id = (query.get("client") or ["phone"])[0][:64] or "phone"
-        previous = self._pages.get(client_id)
+        await self._own(connection, ("client", client_id), self._on_client)
+
+    async def _own(self, connection: ServerConnection, key: tuple[str, str],
+                   handler: ClientHandler) -> None:
+        """Run ``handler`` for the connection that now owns ``key``."""
+        previous = self._pages.get(key)
         if previous is not None:
             # One page owns a conversation's mic and speaker. The new page takes it over;
             # the old one is told so, and REPLACED_CLOSE_CODE keeps it from reconnecting
@@ -106,9 +128,9 @@ class VoiceServer:
                 await previous.send(json.dumps({"type": "replaced"}))
             with contextlib.suppress(Exception):
                 await previous.close(code=REPLACED_CLOSE_CODE, reason="replaced")
-        self._pages[client_id] = connection
+        self._pages[key] = connection
         try:
-            await self._on_client(connection, client_id)
+            await handler(connection, key[1])
         finally:
-            if self._pages.get(client_id) is connection:
-                del self._pages[client_id]
+            if self._pages.get(key) is connection:
+                del self._pages[key]
