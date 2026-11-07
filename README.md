@@ -19,8 +19,8 @@ page and a WebSocket. For each open page:
   it also hears the reply as it plays and tells when you cut in. Without the turn
   engine, the plugin ends a turn on VoiceManager's endpoint frames.
 - Each finished utterance goes to Hermes as a voice message in that page's
-  conversation. Tools and memory work as on any other platform. Approvals do not:
-  see "Things to know".
+  conversation. Tools and memory work as on any other platform. Approvals work
+  only in part: see "Things to know".
 - The reply's text goes to VoiceManager while the model writes it, so speech
   starts before the reply is complete. The page plays the audio and shows the
   conversation as text.
@@ -134,11 +134,13 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   voice ones. Replies on other platforms do not change.
 - The page and its WebSocket check the access token on every request. The token
   is in the page URL, so treat the URL like a password.
-- Approvals cannot be given by voice. When a command needs your approval, the
-  prompt shows as text on the page and is not spoken. Saying "yes" does not
-  approve it: your words reach Hermes as a new message, which stops the waiting
-  turn, and the command does not run. Use the voice page for conversation, and
-  run commands that need approval from another platform or the CLI.
+- Approvals by voice are limited. When a command needs your approval, the prompt
+  shows as text on the page and is not spoken. VoiceManager sends plain words,
+  so an approval word said on its own ("yes", "approve", "ok", "no", "deny")
+  answers the waiting approval exactly as typing it would on another platform.
+  The reply that follows is not spoken yet; read it on the page. Anything longer
+  ("yes, go ahead") reaches Hermes as a new message, which stops the waiting
+  turn, and the command does not run.
 - The first question after a gateway start is slow: 14 to 16 s on our test rig,
   against about 1.5 s for the questions after it. The agent and the model's prompt
   cache start cold. Ask one question after a restart before you rely on it.
