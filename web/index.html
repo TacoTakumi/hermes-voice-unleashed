@@ -2,10 +2,385 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#13233a">
 <title>Hermes Voice</title>
+<style>
+:root {
+  --ink: #13233a;
+  --ink-raised: #1b2f4b;
+  --paper: #ece8df;
+  --muted: #8d9bb0;
+  --you: #7fd1c7;
+  --hermes: #f2b544;
+  --alert: #f08a7e;
+  --gutter: 16px;
+  --type: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font: 17px/1.5 var(--type);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+header { padding: 28px var(--gutter) 8px; }
+#state {
+  margin: 0;
+  font-weight: 800;
+  font-size: clamp(44px, 13vw, 88px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--paper);
+  transition: color 160ms ease;
+}
+body[data-who="you"] #state { color: var(--you); }
+body[data-who="hermes"] #state { color: var(--hermes); }
+body[data-who="alert"] #state { color: var(--alert); }
+#detail { margin: 10px 0 0; color: var(--muted); font-size: 16px; min-height: 1.5em; }
+#meter { display: block; width: 100%; height: 72px; margin-top: 18px; }
+#transcript {
+  margin: 14px 0 0;
+  font-size: 22px;
+  line-height: 1.35;
+  color: var(--you);
+  min-height: 1.35em;
+}
+main { overflow-y: auto; padding: 8px var(--gutter) 16px; }
+#log { list-style: none; margin: 0 auto; padding: 0; max-width: 40rem; display: flex; flex-direction: column; gap: 14px; }
+.turn { max-width: 34rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.turn.user { align-self: flex-end; text-align: right; color: var(--you); }
+.turn.hermes { align-self: flex-start; padding-left: 14px; border-left: 3px solid var(--hermes); }
+.turn.note { align-self: center; color: var(--muted); font-size: 15px; }
+footer { padding: 12px var(--gutter) 20px; display: flex; justify-content: center; }
+button {
+  font: 700 18px/1 var(--type);
+  color: var(--ink);
+  background: var(--paper);
+  border: 0;
+  border-radius: 999px;
+  padding: 18px 32px;
+  min-width: 14rem;
+  cursor: pointer;
+}
+button[aria-pressed="true"] { background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 2px var(--muted); }
+button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
+@media (min-width: 900px) {
+  body { grid-template-columns: minmax(20rem, 28rem) 1fr; grid-template-rows: 1fr auto; }
+  header { grid-row: 1 / span 2; padding: 48px 32px; }
+  main { grid-column: 2; padding-top: 48px; }
+  footer { grid-column: 2; }
+}
+@media (prefers-reduced-motion: reduce) { #state { transition: none; } }
+</style>
 </head>
-<body>
-<main id="app">Hermes Voice</main>
+<body data-who="none">
+<header>
+  <h1 id="state">Tap to start</h1>
+  <p id="detail">Hermes listens while this page is open.</p>
+  <canvas id="meter" aria-hidden="true"></canvas>
+  <p id="transcript" aria-live="polite"></p>
+</header>
+<main>
+  <ol id="log" aria-live="polite"></ol>
+</main>
+<footer>
+  <button id="toggle" type="button" aria-pressed="false">Start talking</button>
+</footer>
+<script>
+"use strict";
+(() => {
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token") || "";
+  const clientId = params.get("client") || "phone";
+  const browserAec = params.get("aec") !== "0";
+  const MIC_RATE = 16000;
+
+  const $ = (id) => document.getElementById(id);
+  const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
+  const logEl = $("log"), toggle = $("toggle"), meter = $("meter");
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  let ws = null, micCtx = null, micStream = null, micNode = null, playCtx = null;
+  let running = false, muted = false, retry = 0, wakeLock = null;
+  let level = 0, speakingLevel = 0;
+  let hermesTurn = null; // the <li> the current reply's text goes into
+
+  // --- what the page shows --------------------------------------------------------
+  function show(state, who, detail) {
+    stateEl.textContent = state;
+    document.body.dataset.who = who;
+    if (detail !== undefined) detailEl.textContent = detail;
+  }
+  function addTurn(kind, text) {
+    const li = document.createElement("li");
+    li.className = "turn " + kind;
+    li.textContent = text;
+    logEl.appendChild(li);
+    li.scrollIntoView({ block: "end", behavior: reduceMotion ? "auto" : "smooth" });
+    return li;
+  }
+  function listening() {
+    if (!running) return;
+    show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : "Say something.");
+  }
+
+  // --- reply audio ------------------------------------------------------------------
+  // One reply plays at a time. Its edges go back to the server as playback frames: the
+  // turn engine needs to know where on the mic stream the reply was heard.
+  let reply = null;
+  function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+  function replyBegin(id, rate) {
+    replyClear(null);
+    reply = { id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [],
+              ended: false, started: false, stopped: false };
+  }
+  function replyPcm(buf) {
+    if (!reply || reply.stopped) return;
+    const pcm = new Int16Array(buf);
+    if (!pcm.length) return;
+    const audio = playCtx.createBuffer(1, pcm.length, reply.rate);
+    const ch = audio.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+    const src = playCtx.createBufferSource();
+    src.buffer = audio;
+    src.connect(playCtx.destination);
+    const at = Math.max(reply.next, playCtx.currentTime + 0.02);
+    src.start(at);
+    if (reply.first === null) {
+      reply.first = at;
+      const r = reply;
+      setTimeout(() => {
+        if (reply !== r || r.stopped) return;
+        r.started = true;
+        send({ type: "playback", event: "start", request_id: r.id });
+        show("Speaking", "hermes", "Talk over it to stop it.");
+      }, Math.max(0, (at - playCtx.currentTime) * 1000));
+    }
+    reply.next = at + audio.duration;
+    reply.samples += pcm.length;
+    reply.sources.push(src);
+    const r = reply;
+    src.onended = () => { if (r.ended && src === r.sources[r.sources.length - 1]) replyFinish(r, r.samples); };
+    speakingLevel = 1;
+  }
+  function replyEnd(id) {
+    if (!reply || reply.id !== id) return;
+    reply.ended = true;
+    if (!reply.sources.length) replyFinish(reply, 0);
+  }
+  function replyFinish(r, played) {
+    if (r.stopped) return;
+    r.stopped = true;
+    if (r.started) send({ type: "playback", event: "stop", request_id: r.id, reply_sample: played });
+    if (reply === r) { reply = null; listening(); }
+  }
+  function replyClear(id) {
+    if (!reply || (id && reply.id !== id)) return;
+    const r = reply;
+    const played = r.first === null ? 0
+      : Math.max(0, Math.min(r.samples, Math.round((playCtx.currentTime - r.first) * r.rate)));
+    for (const s of r.sources) { try { s.onended = null; s.stop(); } catch (e) { /* already stopped */ } }
+    replyFinish(r, played);
+  }
+
+  // --- server frames ------------------------------------------------------------------
+  function onFrame(f) {
+    switch (f.type) {
+      case "ready":
+        retry = 0;
+        listening();
+        break;
+      case "error":
+        show("No voice server", "alert", f.message || "VoiceManager did not answer.");
+        break;
+      case "transcript":
+        transcriptEl.textContent = f.text || "";
+        if (f.text && !reply) show("Hearing you", "you");
+        break;
+      case "utterance":
+        transcriptEl.textContent = "";
+        addTurn("user", f.text);
+        hermesTurn = null;
+        show("Thinking", "hermes", "Hermes is working on it.");
+        break;
+      case "reply_delta":
+        if (!hermesTurn) hermesTurn = addTurn("hermes", "");
+        hermesTurn.textContent += f.text;
+        break;
+      case "reply":
+        // The final text Hermes delivered: it is the whole answer, and also carries notes
+        // that are not spoken (tool output, approval prompts).
+        if (!hermesTurn) hermesTurn = addTurn("hermes", f.text);
+        else hermesTurn.textContent = f.text;
+        hermesTurn = null;
+        break;
+      case "audio_start":
+        replyBegin(f.request_id, f.sample_rate || 24000);
+        break;
+      case "audio_end":
+        replyEnd(f.request_id);
+        break;
+      case "clear":
+        replyClear(f.request_id || null);
+        break;
+    }
+  }
+
+  // --- connection ------------------------------------------------------------------
+  function connect() {
+    const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`;
+    show("Connecting", "none", "");
+    ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        try { onFrame(JSON.parse(ev.data)); } catch (e) { /* not ours */ }
+      } else {
+        replyPcm(ev.data);
+      }
+    };
+    ws.onclose = () => {
+      ws = null;
+      replyClear(null);
+      if (!running) return;
+      const wait = Math.min(10000, 500 * 2 ** retry++);
+      show("Reconnecting", "alert", `Trying again in ${Math.round(wait / 1000) || 1} s.`);
+      setTimeout(() => { if (running) connect(); }, wait);
+    };
+  }
+
+  // --- microphone ------------------------------------------------------------------
+  // The worklet turns the mic into 16 kHz mono 16-bit PCM in 20 ms frames. The capture
+  // context runs at 16 kHz where the browser can resample the mic itself; otherwise the
+  // worklet decimates from the context rate.
+  const WORKLET = `
+  class Mic16k extends AudioWorkletProcessor {
+    constructor() {
+      super();
+      this.step = sampleRate / ${MIC_RATE};
+      this.pos = 0; this.acc = 0; this.cnt = 0;
+      this.out = new Int16Array(320); this.n = 0; this.sq = 0;
+    }
+    process(inputs) {
+      const ch = inputs[0] && inputs[0][0];
+      if (!ch) return true;
+      for (let i = 0; i < ch.length; i++) {
+        this.acc += ch[i]; this.cnt++; this.pos += 1;
+        if (this.pos >= this.step) {
+          this.pos -= this.step;
+          const v = Math.max(-1, Math.min(1, this.acc / this.cnt));
+          this.acc = 0; this.cnt = 0;
+          this.sq += v * v;
+          this.out[this.n++] = v < 0 ? v * 32768 : v * 32767;
+          if (this.n === this.out.length) {
+            this.port.postMessage({ pcm: this.out.buffer, rms: Math.sqrt(this.sq / this.n) }, [this.out.buffer]);
+            this.out = new Int16Array(320); this.n = 0; this.sq = 0;
+          }
+        }
+      }
+      return true;
+    }
+  }
+  registerProcessor("mic-16k", Mic16k);`;
+
+  async function startMic() {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: browserAec, noiseSuppression: browserAec, autoGainControl: true },
+    });
+    let source;
+    try {
+      micCtx = new AudioContext({ sampleRate: MIC_RATE });
+      source = micCtx.createMediaStreamSource(micStream);
+    } catch (e) {
+      if (micCtx) micCtx.close();
+      micCtx = new AudioContext();
+      source = micCtx.createMediaStreamSource(micStream);
+    }
+    const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
+    await micCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    micNode = new AudioWorkletNode(micCtx, "mic-16k");
+    micNode.port.onmessage = (ev) => {
+      level = Math.max(level * 0.6, Math.min(1, ev.data.rms * 6));
+      if (!muted && ws && ws.readyState === 1) ws.send(ev.data.pcm);
+    };
+    source.connect(micNode);
+    const sink = micCtx.createGain();
+    sink.gain.value = 0;
+    micNode.connect(sink).connect(micCtx.destination);
+  }
+
+  async function keepAwake() {
+    try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { wakeLock = null; }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (running && document.visibilityState === "visible") keepAwake();
+  });
+
+  async function start() {
+    if (!token) { show("No token", "alert", "Open this page with ?token= set to the access token."); return; }
+    if (!window.isSecureContext) {
+      show("Needs HTTPS", "alert", "Browsers allow the microphone only over HTTPS or on localhost.");
+      return;
+    }
+    toggle.disabled = true;
+    try {
+      playCtx = new AudioContext();
+      await playCtx.resume();
+      await startMic();
+    } catch (e) {
+      show("No microphone", "alert", "Allow the microphone for this page, then try again.");
+      toggle.disabled = false;
+      return;
+    }
+    running = true;
+    toggle.disabled = false;
+    toggle.textContent = "Mute microphone";
+    keepAwake();
+    connect();
+    draw();
+  }
+
+  toggle.addEventListener("click", () => {
+    if (!running) { start(); return; }
+    muted = !muted;
+    toggle.setAttribute("aria-pressed", String(muted));
+    toggle.textContent = muted ? "Unmute microphone" : "Mute microphone";
+    if (!reply) listening();
+  });
+
+  // --- the meter: your level in teal, Hermes in amber ----------------------------------
+  const bars = 48, history = new Array(bars).fill(0), whoHistory = new Array(bars).fill(0);
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = meter.clientWidth, h = meter.clientHeight;
+    if (meter.width !== w * dpr) { meter.width = w * dpr; meter.height = h * dpr; }
+    const g = meter.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const hermesPlaying = reply && reply.started && !reply.stopped;
+    const v = hermesPlaying ? 0.35 + 0.5 * Math.abs(Math.sin(performance.now() / 140)) * speakingLevel : level;
+    history.shift(); history.push(muted ? 0 : v);
+    whoHistory.shift(); whoHistory.push(hermesPlaying ? 1 : 0);
+    level *= 0.85;
+    const gap = 3, bw = (w - gap * (bars - 1)) / bars;
+    for (let i = 0; i < bars; i++) {
+      const bh = Math.max(3, history[i] * h);
+      g.fillStyle = whoHistory[i] ? "#f2b544" : "#7fd1c7";
+      g.globalAlpha = 0.35 + 0.65 * (i / bars);
+      g.fillRect(i * (bw + gap), (h - bh) / 2, bw, bh);
+    }
+    g.globalAlpha = 1;
+    if (running) requestAnimationFrame(reduceMotion ? () => setTimeout(draw, 250) : draw);
+  }
+})();
+</script>
 </body>
 </html>

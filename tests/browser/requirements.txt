@@ -1,0 +1,5 @@
+playwright==1.64.0
+pytest
+pytest-asyncio
+websockets==15.0.1
+httpx

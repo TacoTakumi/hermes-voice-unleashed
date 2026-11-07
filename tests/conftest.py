@@ -18,12 +18,18 @@ PACKAGE = "voicemanager_live"
 
 
 def _load_package():
+    """The whole plugin when Hermes is importable; else a bare package, so the browser
+    tests can import the modules that do not need Hermes (server, session, turns)."""
     if PACKAGE in sys.modules:
         return sys.modules[PACKAGE]
     spec = importlib.util.spec_from_file_location(
         PACKAGE, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
     module = importlib.util.module_from_spec(spec)
     sys.modules[PACKAGE] = module
+    try:
+        import gateway  # noqa: F401
+    except ImportError:
+        return module  # bare package: __init__ is not run
     spec.loader.exec_module(module)
     return module
 
@@ -33,7 +39,10 @@ _load_package()
 
 def _register_platform():
     """Put the platform in Hermes's registry, as the plugin loader does, so Platform() knows it."""
-    from gateway.platform_registry import PlatformEntry, platform_registry
+    try:
+        from gateway.platform_registry import PlatformEntry, platform_registry
+    except ImportError:
+        return
 
     adapter = sys.modules[PACKAGE].adapter
     if not platform_registry.is_registered(adapter.PLATFORM):
