@@ -10,7 +10,10 @@ Two commands:
       Speak the WAV into the page's WebSocket in real time, as the page would, and
       time each run from the plugin's utterance frame (sent when the turn ended) to
       the first reply audio. Each run uses a new client id, so a new conversation.
-      Prints each run and the median; exits 1 when the median is over --max-ms.
+      --warmup questions (default 1) go first and are not timed: the first question
+      after a gateway start is much slower (the agent and the model's prompt cache
+      are cold). Prints each run and the median; exits 1 when the median is over
+      --max-ms.
 
 It needs websockets and httpx (tests/browser/requirements.txt has both).
 """
@@ -142,6 +145,10 @@ async def one_run(page_url: str, token: str, question: bytes, client: str, timeo
 
 async def run(args) -> int:
     question = _read_wav(args.wav)
+    for n in range(args.warmup):
+        heard, ms = await one_run(args.page, args.token, question, f"live-check-warmup-{int(time.time())}-{n}",
+                                  args.timeout)
+        print(f"warm-up {n + 1}: heard {heard!r}, reply audio after {ms:.0f} ms (not timed)")
     times = []
     for n in range(args.runs):
         heard, ms = await one_run(args.page, args.token, question, f"live-check-{int(time.time())}-{n}",
@@ -166,6 +173,7 @@ def main() -> int:
     rn.add_argument("--token", required=True)
     rn.add_argument("--wav", required=True)
     rn.add_argument("--runs", type=int, default=5)
+    rn.add_argument("--warmup", type=int, default=1)
     rn.add_argument("--max-ms", type=float, default=2000)
     rn.add_argument("--timeout", type=float, default=90)
     args = parser.parse_args()

@@ -133,6 +133,9 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   voice ones. Replies on other platforms do not change.
 - The page and its WebSocket check the access token on every request. The token
   is in the page URL, so treat the URL like a password.
+- The first question after a gateway start is slow: 14 to 16 s on our test rig,
+  against about 1.5 s for the questions after it. The agent and the model's prompt
+  cache start cold. Ask one question after a restart before you rely on it.
 - The page listens on the address you set and serves only the page and its
   WebSocket. It stores nothing.
 - The plugin makes no network calls except to your VoiceManager server.
@@ -154,8 +157,8 @@ python3 -m venv .venv-test && .venv-test/bin/pip install -r tests/browser/requir
 ```
 
 `scripts/live_check.sh` runs a throwaway gateway with this plugin against your
-VoiceManager and model and times five spoken questions, from the end of the turn
-to the first reply audio.
+VoiceManager and model, asks one warm-up question, then times five spoken
+questions from the end of the turn to the first reply audio.
 
 ## License
 

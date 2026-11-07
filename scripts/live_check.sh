@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live check: a throwaway Hermes gateway with this plugin, your VoiceManager and
-# your model; five spoken questions, timed from the end of turn to the first reply
-# audio. Nothing outside a temp directory is changed.
+# your model; one warm-up question, then five spoken questions, timed from the end
+# of turn to the first reply audio. Nothing outside a temp directory is changed.
 #
 # Needs:
 #   VMLIVE_VOICEMANAGER_TOKEN  a VoiceManager bearer token
