@@ -23,6 +23,10 @@ from .vm_client import TurnEngineError, VoiceManagerClient
 logger = logging.getLogger(__name__)
 
 TURN_ENGINE = "tyger"
+# How long the reply must be quiet after its Hermes turn ended before its TTS request is
+# closed. Each stream hook runs on its own thread, so the turn's end can overtake the
+# last text deltas by a few milliseconds.
+REPLY_QUIET_S = 0.3
 
 
 def client_from_url(url: str, token: str = "") -> VoiceManagerClient:
@@ -49,8 +53,8 @@ class VoiceSession:
         self.reply_id: Optional[str] = None
         self.reply_open = False  # the reply still takes text
         self.reply_request: Optional[vm_client.TTSRequest] = None
-        self._streamed: dict[tuple[str, int], str] = {}  # (turn, iteration) -> text sent
-        self._closed_iterations: set[tuple[str, int]] = set()
+        self._last_text_at = 0.0  # loop time of the reply's last text or of its turn's end
+        self._finishing: Optional[asyncio.Task] = None
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
         self._turn_ended_at: Optional[float] = None  # loop time of the last dispatch, for the log
@@ -137,33 +141,33 @@ class VoiceSession:
         running reply."""
         return self.reply_open and (not reply_id or reply_id == self.reply_id)
 
-    async def _speak(self, turn_id: str, iteration: int, text: str) -> None:
+    async def _speak(self, text: str) -> None:
         if self.reply_request is None:
             self.reply_request = self.duplex.tts_request(chunking="clause")
-        key = (turn_id, iteration)
-        self._streamed[key] = self._streamed.get(key, "") + text
+        self._last_text_at = asyncio.get_running_loop().time()
         self.tracker.reply_text()
         await self.reply_request.send(text)
         await self.send_page({"type": "reply_delta", "text": text})
 
     async def on_reply_delta(self, reply_id: str, turn_id: str, iteration: int, delta: str) -> None:
-        if (turn_id, iteration) in self._closed_iterations or not self._takes(reply_id):
-            return
-        await self._speak(turn_id, iteration, delta)
-
-    async def on_reply_stream_end(self, reply_id: str, turn_id: str, iteration: int,
-                                  final_text: str) -> None:
-        """One model call's stream ended: speak any text its deltas have not brought yet."""
-        key = (turn_id, iteration)
-        if key not in self._closed_iterations and self._takes(reply_id):
-            streamed = self._streamed.get(key, "")
-            if final_text.startswith(streamed) and len(final_text) > len(streamed):
-                await self._speak(turn_id, iteration, final_text[len(streamed):])
-        self._closed_iterations.add(key)
+        if self._takes(reply_id):
+            await self._speak(delta)
 
     async def on_turn_done(self, reply_id: str, turn_id: str, interrupted: bool) -> None:
-        """The Hermes turn finished: end the reply's text so VoiceManager speaks the rest."""
-        if not self._takes(reply_id):
+        """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
+        request so VoiceManager speaks the rest."""
+        if not self._takes(reply_id) or self._finishing is not None:
+            return
+        self._last_text_at = asyncio.get_running_loop().time()
+        self._finishing = asyncio.create_task(self._finish_when_quiet(reply_id))
+
+    async def _finish_when_quiet(self, reply_id: str) -> None:
+        loop = asyncio.get_running_loop()
+        while (wait := self._last_text_at + REPLY_QUIET_S - loop.time()) > 0:
+            await asyncio.sleep(wait)
+        if self._finishing is asyncio.current_task():
+            self._finishing = None
+        if not self._takes(reply_id):  # cancelled, or a newer utterance took over
             return
         self.reply_open = False
         request = self.reply_request
@@ -216,11 +220,17 @@ class VoiceSession:
 
     async def _dispatch(self, text: str) -> None:
         self._turn_ended_at = asyncio.get_running_loop().time()
+        self._cancel_finishing()
         self.reply_id = uuid.uuid4().hex
         self.reply_open, self.reply_request = True, None
         await self.send_page({"type": "utterance", "text": text})
         if self._on_utterance is not None:
             await self._on_utterance(text, self.reply_id)
+
+    def _cancel_finishing(self) -> None:
+        if self._finishing is not None:
+            self._finishing.cancel()
+            self._finishing = None
 
     async def cancel_reply(self, reason: str, send_cancel: bool = True) -> None:
         """Stop the running reply: no more of its text, no more of its audio on the page.
@@ -229,6 +239,7 @@ class VoiceSession:
         gateway interrupts a running turn for a new voice message (its default
         busy_input_mode)."""
         logger.info("voice page %s: reply cancelled (%s)", self.client_id, reason)
+        self._cancel_finishing()
         self.reply_open = False
         request, self.reply_request = self.reply_request, None
         if request is not None:
@@ -269,6 +280,7 @@ class VoiceSession:
                 await self.duplex.playback_stop(request_id, reply_sample=reply_sample)
 
     async def _stop(self) -> None:
+        self._cancel_finishing()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:

@@ -128,8 +128,8 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
 
 ## Things to know
 
-- The plugin registers Hermes stream hooks (`on_stream_delta`, `on_stream_end`,
-  `on_session_end`) to read reply text as it is written. A registered stream
+- The plugin registers Hermes hooks (`on_stream_delta`, `on_session_end`) to
+  read reply text as it is written. A registered stream
   hook makes Hermes use streaming requests for every conversation, not only
   voice ones. Replies on other platforms do not change.
 - The page and its WebSocket check the access token on every request. The token

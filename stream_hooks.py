@@ -2,9 +2,10 @@
 
 Registering a stream observer makes the agent stream on every surface, so
 replies reach TTS as they are written with no gateway streaming setting.
-The hooks run off the event loop (stream hooks on host worker threads,
-``on_session_end`` on the agent's thread), so each one only reads its
-routing and hands the event to the adapter's loop.
+The hooks run off the event loop (each stream hook on its own host worker
+thread, ``on_session_end`` on the agent's thread), so each one only reads its
+routing and hands the event to the adapter's loop. Nothing orders the two:
+the session closes a reply only after its text has gone quiet.
 
 Routing: a hook keeps an event only when the session's platform is this
 plugin's, and finds the page by the session's chat id, read through
@@ -69,18 +70,12 @@ def on_stream_delta(delta: str = "", kind: str = "text", turn_id: str = "", iter
         _post(surface, "on_reply_delta", turn_id, iteration, delta)
 
 
-def on_stream_end(final_text: str = "", finished: bool = False, turn_id: str = "", iteration: int = 0,
-                  surface: str = "", **_: Any) -> None:
-    _post(surface, "on_reply_stream_end", turn_id, iteration, final_text if finished else "")
-
-
 def on_session_end(turn_id: str = "", interrupted: bool = False, platform: str = "", **_: Any) -> None:
     _post(platform, "on_turn_done", turn_id, bool(interrupted))
 
 
 HOOKS = {
     "on_stream_delta": on_stream_delta,
-    "on_stream_end": on_stream_end,
     "on_session_end": on_session_end,
 }
 

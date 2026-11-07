@@ -113,4 +113,4 @@ def test_register_adds_one_platform(plugin):
     entry = ctx.platforms[0]
     assert entry["adapter_factory"] is plugin.adapter.VoiceLiveAdapter
     assert entry["allowed_users_env"] == "VMLIVE_ALLOWED_USERS"
-    assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta", "on_stream_end"]
+    assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta"]

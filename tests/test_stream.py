@@ -82,7 +82,7 @@ def ended(conn):
     return frames if frames and frames[-1]["done"] else None
 
 
-async def test_deltas_reach_tts_before_the_stream_ends(rig):
+async def test_deltas_reach_tts_before_the_turn_ends(rig):
     hooks, conn, page = rig
     fire(hooks.on_stream_delta, delta="Hello there.", kind="text", turn_id="t1", iteration=1,
          surface=PLATFORM)
@@ -90,16 +90,28 @@ async def test_deltas_reach_tts_before_the_stream_ends(rig):
     assert first[0]["text"] == "Hello there."
     assert first[0]["chunking"] == "clause"
     assert first[0]["done"] is False
-    fire(hooks.on_stream_end, final_text="Hello there. How are you?", finished=True, turn_id="t1",
-         iteration=1, surface=PLATFORM)
-    await wait_for(lambda: len(tts_frames(conn)) == 2)
-    assert tts_frames(conn)[1]["text"] == " How are you?"
+    fire(hooks.on_stream_delta, delta=" How are you?", kind="text", turn_id="t1", iteration=1,
+         surface=PLATFORM)
     fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
     frames = await wait_for(lambda: ended(conn))
     assert {f["request_id"] for f in frames} == {frames[0]["request_id"]}
     assert "".join(f["text"] for f in frames) == "Hello there. How are you?"
     await wait_for(lambda: page.of("reply_delta"))
     assert "".join(f["text"] for f in page.of("reply_delta")) == "Hello there. How are you?"
+
+
+async def test_deltas_that_arrive_after_the_turn_end_are_still_spoken(rig):
+    """Each hook runs on its own thread, so the turn's end can overtake its last deltas."""
+    hooks, conn, page = rig
+    fire(hooks.on_stream_delta, delta="The answer", kind="text", turn_id="t1", iteration=1,
+         surface=PLATFORM)
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    fire(hooks.on_stream_delta, delta=" is forty", kind="text", turn_id="t1", iteration=1,
+         surface=PLATFORM)
+    fire(hooks.on_stream_delta, delta="-two.", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
+    frames = await wait_for(lambda: ended(conn))
+    assert "".join(f["text"] for f in frames) == "The answer is forty-two."
+    assert [f["done"] for f in frames] == [False, False, False, True]
 
 
 async def test_reply_audio_reaches_the_page(rig):
@@ -149,3 +161,21 @@ async def test_a_turn_with_no_text_ends_the_reply(rig):
     frames = await wait_for(lambda: tts_frames(conn))
     assert frames[0]["text"] == "Second."
     assert conn.json_frames("tts_cancel") == []
+
+
+async def test_a_new_utterance_during_the_quiet_window_gets_its_own_reply(rig):
+    hooks, conn, page = rig
+    fire(hooks.on_stream_delta, delta="First.", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await conn.send({"type": "turn_end", "text": "second", "turn_id": 0})  # inside the quiet window
+    await wait_for(lambda: len(page.of("utterance")) == 2)
+    fire(hooks.on_stream_delta, delta="Second.", kind="text", turn_id="t2", iteration=1, surface=PLATFORM)
+    fire(hooks.on_session_end, turn_id="t2", interrupted=False, platform=PLATFORM)
+    await asyncio.sleep(0.6)
+    frames = tts_frames(conn)
+    by_request = {}
+    for f in frames:
+        by_request.setdefault(f["request_id"], []).append(f)
+    second = [fs for fs in by_request.values() if fs[0]["text"] == "Second."]
+    assert len(second) == 1 and second[0][-1]["done"] is True
+    assert sum(1 for f in frames if f["done"]) == 1  # the first reply was cancelled, never ended twice
