@@ -13,13 +13,16 @@ import contextlib
 import datetime
 import json
 import logging
+import re
 import uuid
 from typing import Any, Optional
 
 from gateway.config import Platform
 from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra_from_env
-from gateway.platforms.base import BasePlatformAdapter, SendResult
+from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.run_busy import approval_input_words
+from tools.approval import has_blocking_approval
 
 from . import stream_hooks
 from .server import VoiceServer
@@ -30,6 +33,10 @@ logger = logging.getLogger(__name__)
 PLATFORM = "voicemanager_live"
 OWNER = "owner"  # the one gateway user: whoever holds the access token
 DEFAULT_HOST, DEFAULT_PORT = "127.0.0.1", 8765
+# The approval.inputs keys whose words answer a plain-text approval prompt, the
+# same ones the gateway's run loop accepts.
+APPROVAL_INPUT_KEYS = ("approve", "deny", "always", "session")
+COMMAND_SPOKEN_CHARS = 80  # a longer command is cut here when the prompt is spoken
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -38,6 +45,24 @@ def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
         return value
     value = extra.get(key)
     return default if value in (None, "") else value
+
+
+def approval_words() -> set[str]:
+    """The lower-case words that answer an approval prompt, from the gateway's
+    language catalog. Read on each call: the language can change while running."""
+    words: set[str] = set()
+    for key in APPROVAL_INPUT_KEYS:
+        words.update(approval_input_words(key))
+    return words
+
+
+def approval_sentence(command: str) -> str:
+    """The spoken form of an approval prompt: the command, cut short when long,
+    and how to answer."""
+    short = re.sub(r"\s+", " ", command).strip()
+    if len(short) > COMMAND_SPOKEN_CHARS:
+        short = short[:COMMAND_SPOKEN_CHARS] + "..."
+    return f"Approval needed to run: {short}. Say yes or no."
 
 
 class VoiceLiveAdapter(BasePlatformAdapter):
@@ -127,8 +152,19 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         async def on_utterance(text: str, message_id: str) -> None:
             await self.dispatch_utterance(client_id, text, message_id)
 
+        async def approval_pending() -> bool:
+            # The gateway keeps the blocked approvals by session key; the page's
+            # chat maps to the same key every utterance is handled under.
+            return has_blocking_approval(self._source_session_key(self._voice_source(client_id)))
+
         return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
-                            on_utterance=on_utterance)
+                            on_utterance=on_utterance, approval_words=approval_words,
+                            approval_pending=approval_pending)
+
+    def _voice_source(self, chat_id: str, message_id: Optional[str] = None):
+        """The source every message from the page's chat ``chat_id`` is handled under."""
+        return self.build_source(chat_id=chat_id, chat_name="Voice", chat_type="dm",
+                                 user_id=OWNER, user_name="Owner", message_id=message_id)
 
     async def dispatch_utterance(self, chat_id: str, text: str, message_id: Optional[str] = None) -> None:
         """Hand one finished utterance to Hermes as a voice message.
@@ -140,8 +176,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         is how the stream hooks tell this reply's text from an older one.
         """
         message_id = message_id or uuid.uuid4().hex
-        source = self.build_source(chat_id=chat_id, chat_name="Voice", chat_type="dm",
-                                   user_id=OWNER, user_name="Owner", message_id=message_id)
+        source = self._voice_source(chat_id, message_id)
         await self.handle_message(MessageEvent(
             text=text, message_type=MessageType.VOICE, source=source,
             message_id=message_id, timestamp=datetime.datetime.now()))
@@ -173,6 +208,21 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if await self._send_json(chat_id, {"type": "reply", "text": content}):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")
+
+    async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
+        """Show and speak an approval prompt.
+
+        The page shows the gateway's prompt text as a reply. The short sentence is
+        spoken, so a user who is not looking at the page knows the turn waits and
+        how to answer. Without a connected page the prompt is not sent, and the
+        gateway falls back to its text prompt.
+        """
+        session = self.session_for(prompt.chat_id)
+        if self._clients.get(prompt.chat_id) is None or session is None:
+            return SendResult(success=False, error="the voice page is not connected")
+        await self._send_json(prompt.chat_id, {"type": "reply", "text": prompt.text})
+        await session.speak_notice(approval_sentence(prompt.command))
+        return SendResult(success=True, message_id=None)
 
     async def play_tts(self, chat_id: str, audio_path: str, **kwargs) -> SendResult:
         """VoiceManager already speaks every reply; a Hermes TTS file would say it twice."""

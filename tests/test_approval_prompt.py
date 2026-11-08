@@ -1,0 +1,120 @@
+"""An approval prompt is shown on the page and spoken; the session answers with the
+gateway's own approval words and asks the gateway whether one is pending."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+from websockets.asyncio.client import connect
+
+from gateway.config import PlatformConfig
+from gateway.run_busy import approval_input_words
+
+from fake_vm import FakeVoiceManager, wait_for
+
+TOKEN = "tok"
+
+
+class Page:
+    def __init__(self, ws):
+        self.ws, self.frames = ws, []
+        self.task = asyncio.create_task(self._read())
+
+    async def _read(self):
+        async for message in self.ws:
+            if not isinstance(message, bytes):
+                self.frames.append(json.loads(message))
+
+    def of(self, kind):
+        return [f for f in self.frames if f.get("type") == kind]
+
+
+class Rig:
+    """A ready page "phone", its VoiceManager connection and the adapter."""
+
+    def __init__(self, adapter, page, conn):
+        self.adapter, self.page, self.conn = adapter, page, conn
+
+    def tts_text(self) -> str:
+        return "".join(f["text"] for f in self.conn.json_frames("tts_stream"))
+
+
+@pytest.fixture
+async def rig(plugin):
+    async with FakeVoiceManager() as fake:
+        adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={
+            "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
+
+        async def handle_message(event):
+            pass
+
+        adapter.handle_message = handle_message
+        assert await adapter.connect()
+        try:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+                page = Page(ws)
+                await wait_for(lambda: page.of("ready"))
+                await ws.send(b"\x00\x00" * 160)
+                (conn,) = await fake.wait_connections(1)
+                yield Rig(adapter, page, conn)
+                page.task.cancel()
+        finally:
+            await adapter.disconnect()
+
+
+async def _prompt(adapter, chat_id: str):
+    return await adapter.send_exec_approval(chat_id=chat_id, command="rm -rf build", session_key="k",
+                                            description="deletes files", request_id="r1")
+
+
+async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
+    result = await _prompt(rig.adapter, "phone")
+    assert result.success
+    await wait_for(lambda: rig.page.of("reply"))
+    assert "rm -rf build" in rig.page.of("reply")[-1]["text"]
+    await wait_for(lambda: rig.tts_text())
+    assert "Approval needed to run: rm -rf build. Say yes or no." in rig.tts_text()
+
+
+async def test_without_a_page_the_prompt_is_not_sent(rig):
+    result = await _prompt(rig.adapter, "nobody")
+    assert not result.success
+    await asyncio.sleep(0.05)
+    assert rig.tts_text() == ""
+    assert not rig.page.of("reply")
+
+
+def test_a_long_command_is_cut_short_when_spoken(plugin):
+    sentence = plugin.adapter.approval_sentence("x" * 200)
+    assert sentence.endswith("Say yes or no.")
+    command = sentence[len("Approval needed to run: "):-len(". Say yes or no.")]
+    assert command.endswith("...") and len(command) <= 83
+    short = plugin.adapter.approval_sentence("ls  -la\n /tmp")
+    assert short == "Approval needed to run: ls -la /tmp. Say yes or no."
+
+
+async def test_the_session_uses_the_gateway_approval_words(rig):
+    session = rig.adapter.session_for("phone")
+    expected = set()
+    for key in ("approve", "deny", "always", "session"):
+        expected.update(approval_input_words(key))
+    words = set(session._approval_words())
+    assert words == expected
+    assert {"yes", "no"} <= words
+
+
+async def test_the_pending_check_asks_the_gateway_under_the_chat_session_key(rig, plugin, monkeypatch):
+    seen = []
+
+    def has_blocking_approval(session_key):
+        seen.append(session_key)
+        return True
+
+    monkeypatch.setattr(plugin.adapter, "has_blocking_approval", has_blocking_approval)
+    session = rig.adapter.session_for("phone")
+    assert await session._approval_pending() is True
+    source = rig.adapter.build_source(chat_id="phone", chat_name="Voice", chat_type="dm",
+                                      user_id=plugin.adapter.OWNER, user_name="Owner")
+    assert seen == [rig.adapter._source_session_key(source)]
