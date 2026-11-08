@@ -6,6 +6,31 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.1.1]
+
+### Added
+
+- Voice for a chat in Hermes Desktop and the Webapp. The plugin folder now
+  holds a desktop half, `desktop/plugin.js`, which Hermes copies into its
+  desktop plugins on load. It ships switched off: turn on its Desktop switch in
+  Capabilities > Plugins > Voice. It adds a voice toggle to the composer and a
+  settings page (Settings > Plugins > Voice) for the plugin's WebSocket address
+  and access token, kept in the app's plugin storage.
+- With voice on, the microphone and the speaker are on the machine that runs
+  the UI. The desktop half streams the microphone to the plugin, plays the reply
+  audio and stops at once when you talk over it, as the voice page does.
+- Each finished utterance goes into the open chat as your message. The reply
+  prints as usual, and only its first `<say>...</say>` block is spoken. A reply
+  without one is not spoken. Replies to typed messages in a voice chat are
+  spoken the same way.
+- A `pre_llm_call` hook asks the model for that `<say>` block, only for chats
+  that have voice on.
+- WebSocket attach mode: `/ws?token=...&attach=<session id>` binds a voice
+  session to a Hermes chat instead of the voice page's own conversation. The
+  client sends the reply's spoken text as `say` frames and ends it with
+  `say_end`, each with a `reply` key; text for a reply that was cut off is
+  dropped. An attach id longer than 256 characters is refused.
+
 ## [0.1.0] - 2026-11-07
 
 First version.
