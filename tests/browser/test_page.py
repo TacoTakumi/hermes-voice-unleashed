@@ -44,7 +44,10 @@ def _dominant_hz(pcm: bytes, rate: int) -> float:
 
 
 @pytest.fixture
-async def stack(tmp_path):
+async def stack(tmp_path, request):
+    """The page, started, on a VoiceServer in front of a fake VoiceManager. An indirect
+    parameter is a script the page runs before its own, to stub a browser API."""
+    init_script = getattr(request, "param", None)
     plugin = sys.modules["voicemanager_live"]
     from voicemanager_live.server import VoiceServer
     from voicemanager_live.session import VoiceSession, client_from_url
@@ -70,6 +73,8 @@ async def stack(tmp_path):
                 args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
                       f"--use-file-for-fake-audio-capture={wav}", "--autoplay-policy=no-user-gesture-required"])
             page = await browser.new_page(viewport={"width": 390, "height": 760})
+            if init_script:
+                await page.add_init_script(init_script)
             await page.goto(f"http://127.0.0.1:{server.bound_port}/?token={TOKEN}&client=phone")
             await page.click("#toggle")
             try:
@@ -163,9 +168,10 @@ def _is_count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-async def _reply_request(conn, page, sessions, utterances, text):
-    """Say one turn and open its reply on the fake VoiceManager; returns the TTS request id."""
-    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+async def _reply_request(conn, page, sessions, utterances, text, ready="Listening"):
+    """Say one turn and open its reply on the fake VoiceManager; returns the TTS request id.
+    ``ready`` is the state the page shows once it is connected and waiting."""
+    await page.wait_for_function(f"document.getElementById('state').textContent === {ready!r}",
                                  timeout=10000)
     await conn.send({"type": "turn_end", "text": text, "turn_id": 0})
     await wait_for(lambda: utterances, timeout=5)
@@ -229,6 +235,61 @@ async def test_playback_frames_carry_the_mic_sample_of_a_reply_cleared_part_way(
     assert stop["mic_sample"] >= start["mic_sample"]
     span = stop["mic_sample"] - start["mic_sample"]
     assert abs(span - stop["reply_sample"] * 16000 / 24000) <= 8000, (start, stop)
+
+
+async def test_playback_frames_of_a_muted_mic_map_to_the_end_of_the_sent_stream(stack):
+    """While the mic is muted no mic audio goes out, so both edges of a reply sit at the
+    count of samples sent before the mute: the end of the stream the server has."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await wait_for(lambda: len(conn.audio) > 0, timeout=15)
+    await page.click("#toggle")  # mute
+    await asyncio.sleep(0.1)  # frames already in flight land
+    sent = len(conn.audio) // 2
+    rid = await _reply_request(conn, page, sessions, utterances, "hello", ready="Muted")
+    for _ in range(5):
+        await conn.send(b"\x10\x00" * 2400)  # 5 x 0.1 s at 24 kHz
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=10)
+    start, stop = playback[:2]
+    assert (start["event"], stop["event"]) == ("start", "stop")
+    assert _is_count(start["mic_sample"]) and _is_count(stop["mic_sample"])
+    assert len(conn.audio) // 2 == sent  # nothing more was sent while muted
+    assert start["mic_sample"] == sent, (start, sent)
+    assert stop["mic_sample"] == sent, (stop, sent)
+    assert stop["reply_sample"] == 12000
+
+
+NO_LATENCY_APIS = """
+AudioContext.prototype.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 });
+Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => undefined, configurable: true });
+MediaStreamTrack.prototype.getSettings = () => ({});
+"""
+
+
+@pytest.mark.parametrize("stack", [NO_LATENCY_APIS], indirect=True)
+async def test_playback_frames_carry_mic_sample_without_latency_apis(stack):
+    """A browser without an output timestamp, output latency or a track latency still gets
+    integer mic_sample values that place the edges on the mic stream."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    assert await page.evaluate("new AudioContext().getOutputTimestamp().performanceTime") == 0
+    assert await page.evaluate("new AudioContext().outputLatency === undefined")
+    rid = await _reply_request(conn, page, sessions, utterances, "hello")
+    for _ in range(5):
+        await conn.send(b"\x10\x00" * 2400)  # 5 x 0.1 s at 24 kHz
+    start, sent_at_start = await _start_frame(conn)
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=10)
+    start, stop = playback[:2]
+    assert (start["event"], stop["event"]) == ("start", "stop")
+    assert _is_count(start["mic_sample"]) and _is_count(stop["mic_sample"])
+    assert abs(start["mic_sample"] - sent_at_start) <= 8000, (start["mic_sample"], sent_at_start)
+    assert stop["reply_sample"] == 12000
+    assert stop["mic_sample"] >= start["mic_sample"]
+    assert abs((stop["mic_sample"] - start["mic_sample"]) - 0.5 * 16000) <= 8000, (start, stop)
 
 
 async def test_the_page_shows_working_while_the_turn_runs_between_spoken_parts(stack):

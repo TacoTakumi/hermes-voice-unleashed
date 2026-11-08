@@ -404,7 +404,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     return performance.now() + (t - playCtx.currentTime + out) * 1000;
   }
   function micSampleAt(edgePerf) {
-    if (!micAnchor) return micSent;
+    // Muted, no mic audio exists past the sent count: an edge now sits at its end.
+    if (muted || !micAnchor) return micSent;
     return Math.max(0, Math.round(micAnchor.count + (edgePerf - micAnchor.time) / 1000 * MIC_RATE));
   }
 
@@ -702,6 +703,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       return;
     }
     muted = !muted;
+    if (muted) micAnchor = null; // after unmuting, the next sent frame anchors the count again
     toggle.setAttribute("aria-pressed", String(muted));
     toggle.textContent = muted ? "Unmute microphone" : "Mute microphone";
     status();
