@@ -166,6 +166,12 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   show tool calls on the page. A registered stream
   hook makes Hermes use streaming requests for every conversation, not only
   voice ones. Replies on other platforms do not change.
+- Hermes treats `pre_tool_call` as a guard: when a plugin's callback raises,
+  or Hermes cannot run it within `plugins.hook_callback_timeout` (30 s by
+  default), it blocks that tool call. The hook runs for every conversation in
+  the profile, not only voice ones. This plugin's callback catches its own
+  errors, does no blocking work and only passes the event on, so it allows
+  every call.
 - The page and its WebSocket check the access token on every request. The token
   is in the page URL, so treat the URL like a password.
 - Approvals by voice are limited. When a command needs your approval, the prompt
