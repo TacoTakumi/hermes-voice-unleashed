@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 import struct
 import sys
 import wave
@@ -275,3 +276,25 @@ async def test_the_activity_panel_shows_each_tool_call(stack):
     assert await page.is_visible("#tools")
     log = await page.text_content("#log")
     assert "terminal" not in log and "web_search" not in log
+
+
+async def test_a_finished_turn_folds_its_tool_lines_into_a_summary_line(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "check two things"})
+    for call in ("c1", "c2"):
+        await session.send_page({"type": "tool_start", "id": call, "name": "terminal", "summary": call})
+        await session.send_page({"type": "tool_end", "id": call, "status": "ok", "duration_ms": 10})
+    await session.send_page({"type": "turn_done"})
+    await page.wait_for_selector("#tools .group")
+    summary = await page.text_content("#tools .group")
+    assert "2 tools" in summary and re.search(r"\b\d+:\d\d\b", summary)
+    assert await page.evaluate("[...document.querySelectorAll('#tools .tool')].every(li => li.hidden)")
+    await page.click("#tools .group button")
+    assert await page.evaluate("[...document.querySelectorAll('#tools .tool')].every(li => !li.hidden)")
+    await session.send_page({"type": "utterance", "text": "and one more"})
+    await session.send_page({"type": "tool_start", "id": "c3", "name": "read_file", "summary": "c3"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 3")
+    order = await page.eval_on_selector_all("#tools > li", "els => els.map(e => e.className)")
+    assert order[0].startswith("group") and order[-1] == "tool running"

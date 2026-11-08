@@ -76,6 +76,7 @@ button.fold {
 .tool .status { color: var(--muted); font-variant-numeric: tabular-nums; }
 .tool.running .status { color: var(--hermes); }
 .tool.failed .status { color: var(--alert); }
+.group button.fold { padding: 2px 0; font-size: 15px; }
 main { overflow-y: auto; padding: 8px var(--gutter) 16px; }
 #log { list-style: none; margin: 0 auto; padding: 0; max-width: 40rem; display: flex; flex-direction: column; gap: 14px; }
 .turn { max-width: 34rem; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -175,6 +176,38 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 
   // --- the activity panel: one line per tool call ---------------------------------------
   const toolLines = new Map(); // call id -> its <li>
+  let turnStartedAt = null, turnTools = []; // the running turn: when it began, its tool lines
+  function clock(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+  function turnBegin() {
+    turnStartedAt = Date.now();
+    turnTools = [];
+  }
+  // The turn is over: its tool lines fold into one line that opens them again.
+  function turnFold() {
+    const lines = turnTools;
+    if (lines.length) {
+      const li = document.createElement("li");
+      li.className = "group";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "fold";
+      button.setAttribute("aria-expanded", "false");
+      button.textContent = `${lines.length} ${lines.length === 1 ? "tool" : "tools"}, ${clock(Date.now() - (turnStartedAt || Date.now()))}`;
+      button.addEventListener("click", () => {
+        const open = button.getAttribute("aria-expanded") !== "true";
+        button.setAttribute("aria-expanded", String(open));
+        for (const line of lines) line.hidden = !open;
+      });
+      li.appendChild(button);
+      toolsEl.insertBefore(li, lines[0]);
+      for (const line of lines) line.hidden = true;
+    }
+    turnStartedAt = null;
+    turnTools = [];
+  }
   function seconds(ms) {
     const s = ms / 1000;
     if (s < 60) return s.toFixed(1) + " s";
@@ -192,6 +225,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     li.append(part("name", f.name || "tool"), part("summary", f.summary || ""), part("status", "running"));
     toolsEl.appendChild(li);
     if (f.id) toolLines.set(f.id, li);
+    if (turnStartedAt === null) turnStartedAt = Date.now();
+    turnTools.push(li);
     activityEl.hidden = false;
     toolsEl.scrollTop = toolsEl.scrollHeight;
   }
@@ -311,6 +346,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         addTurn("user", f.text);
         hermesTurn = null;
         busy = true;
+        turnBegin();
         show("Thinking", "hermes", "Hermes is working on it.");
         break;
       case "tool_start":
@@ -321,6 +357,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         break;
       case "turn_done":
         busy = false;
+        turnFold();
         status();
         break;
       case "reply_delta":
