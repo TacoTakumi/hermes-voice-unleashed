@@ -283,6 +283,40 @@ async def test_playback_frames_of_a_muted_mic_map_to_the_end_of_the_sent_stream(
     assert stop["reply_sample"] == 12000
 
 
+async def test_the_stop_edge_is_clamped_to_the_start_edge(stack):
+    """The start edge is extrapolated past the sent count (output latency and the
+    scheduling lead). A mute right after the start freezes the count, and a muted stop
+    maps to that frozen count, which lies before the start. VoiceManager refuses a stop
+    before its start, so the page clamps the stop to the start edge."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    rid = await _reply_request(conn, page, sessions, utterances, "hello")
+    # Mute in the same task that sends the start frame: it shows Speaking right after.
+    await page.evaluate("""() => {
+      const state = document.getElementById('state');
+      new MutationObserver((_, obs) => {
+        if (state.textContent !== 'Speaking') return;
+        obs.disconnect();
+        document.getElementById('toggle').click();
+      }).observe(state, { childList: true, characterData: true, subtree: true });
+    }""")
+    for _ in range(5):
+        await conn.send(b"\x10\x00" * 2400)  # 5 x 0.1 s at 24 kHz
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=10)
+    start, stop = playback[:2]
+    assert (start["event"], stop["event"]) == ("start", "stop")
+    assert _is_count(start["mic_sample"]) and _is_count(stop["mic_sample"])
+    assert await page.evaluate("document.getElementById('toggle').getAttribute('aria-pressed')") == "true"
+    await asyncio.sleep(0.1)  # frames in flight before the mute land
+    frozen = len(conn.audio) // 2
+    assert start["mic_sample"] > frozen, (start, frozen)  # the unclamped stop would sit here
+    assert stop["mic_sample"] >= start["mic_sample"], (start, stop)
+    assert stop["mic_sample"] == max(start["mic_sample"], frozen) == start["mic_sample"], (start, stop, frozen)
+    assert stop["reply_sample"] == 12000
+
+
 NO_LATENCY_APIS = """
 AudioContext.prototype.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 });
 Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => undefined, configurable: true });

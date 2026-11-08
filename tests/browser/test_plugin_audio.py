@@ -267,6 +267,30 @@ async def test_mic_sample_holds_without_the_latency_apis(page):
     _check_mic_samples(await _playback_with_sent(page), 12000)
 
 
+async def test_the_stop_edge_is_clamped_to_the_start_edge(page):
+    """VoiceManager refuses a stop whose mic_sample is before its start's, so the
+    stop edge never maps below the start edge. After the start frame the output
+    clock is made to say the sound is heard 2 s before it is scheduled: the
+    unclamped stop would then sit about 32000 mic samples before the count, well
+    below the start."""
+    await _start(page)
+    await _send_reply(page, "r1", 12000)  # 0.5 s at 24 kHz
+    await _wait_playback(page, 1)
+    await page.evaluate("""() => {
+      AudioContext.prototype.getOutputTimestamp = function () {
+        return { contextTime: this.currentTime + 2, performanceTime: performance.now() }
+      }
+    }""")
+    await _wait_playback(page, 2)
+    (start, sent_at_start), (stop, sent_at_stop) = await _playback_with_sent(page)
+    assert start["event"] == "start" and stop["event"] == "stop"
+    start_sample, stop_sample = _mic_sample(start), _mic_sample(stop)
+    assert abs(start_sample - sent_at_start) <= 8000, (start_sample, sent_at_start)
+    assert sent_at_stop - 2 * MIC_RATE < start_sample, (sent_at_stop, start_sample)  # the unclamped stop
+    assert stop_sample >= start_sample, (start_sample, stop_sample)
+    assert stop_sample == start_sample, (start_sample, stop_sample)
+
+
 async def test_the_stop_after_a_gap_in_the_reply_lands_at_the_end_of_the_last_chunk(page):
     """A chunk that comes after the reply went quiet plays after a gap. The
     stop's mic_sample is the end of that chunk, so the span between the edges
