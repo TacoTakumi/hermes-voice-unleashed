@@ -122,13 +122,16 @@ The page shows each tool call in its activity panel, so the plugin turns
 Hermes's own tool progress messages off for this platform. A `tool_progress`
 setting in your `config.yaml` wins over that, and `display.tool_progress: all`
 puts every progress message in the conversation log as well. Turn it off for
-this platform only:
+this platform only. `display.show_reasoning: true` likewise puts a reasoning
+block in front of every answer in the log, where the page already shows the
+reasoning in its own line; turn that off for this platform too:
 
 ```yaml
 display:
   platforms:
     voicemanager_live:
       tool_progress: off
+      show_reasoning: false
 ```
 
 ## Open the page
