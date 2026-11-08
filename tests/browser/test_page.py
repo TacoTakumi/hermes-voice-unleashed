@@ -345,3 +345,28 @@ async def test_the_reasoning_line_folds_and_opens(stack):
     assert re.fullmatch(r"Reasoned for \d+:\d\d", await page.text_content("#reason-line"))
     await session.send_page({"type": "utterance", "text": "thanks"})
     await page.wait_for_function("document.getElementById('reasoning').hidden")
+
+
+async def _fills_width(page):
+    return await page.evaluate("""() => {
+        const b = document.getElementById('toggle').getBoundingClientRect();
+        return { scroll: document.documentElement.scrollWidth, width: window.innerWidth,
+                 button: b.left >= 0 && b.right <= window.innerWidth };
+    }""")
+
+
+async def test_long_lines_keep_the_page_at_the_screen_width(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "think hard"})
+    await session.send_page({"type": "reasoning_delta", "text": "word " * 60})
+    await session.send_page({"type": "tool_start", "id": "c1", "name": "terminal",
+                             "summary": "x" * 40})
+    await page.wait_for_selector("#tools .tool")
+    for width, height in ((390, 760), (1200, 800)):
+        await page.set_viewport_size({"width": width, "height": height})
+        await asyncio.sleep(0.2)
+        box = await _fills_width(page)
+        assert box["scroll"] <= box["width"], (width, box)
+        assert box["button"], (width, box)
