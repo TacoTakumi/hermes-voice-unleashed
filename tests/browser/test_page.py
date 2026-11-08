@@ -8,12 +8,16 @@ playback edges come back, and that the page shows what was said.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import os
 import re
 import struct
 import sys
+import time
 import wave
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -23,6 +27,19 @@ playwright_api = pytest.importorskip("playwright.async_api")
 
 TOKEN = "page-token"
 TONE_HZ = 440
+
+
+def _session_rows(now):
+    """What GET /sessions answers: a titled session, one with a preview only (the lane's
+    current one) and one with neither."""
+    return [
+        {"id": "sid-titled-111", "title": "Garden plans", "preview": "what should I plant",
+         "last_active": now - 300, "message_count": 12, "source": "telegram", "current": False},
+        {"id": "sid-untitled-222", "title": None, "preview": "remind me about the dentist",
+         "last_active": now - 7200, "message_count": 1, "source": "voicemanager_live", "current": True},
+        {"id": "sid-bare-333", "title": None, "preview": "", "last_active": now - 3 * 86400,
+         "message_count": 0, "source": "cli", "current": False},
+    ]
 
 
 def _tone_wav(path, seconds=6, rate=48000):
@@ -43,28 +60,38 @@ def _dominant_hz(pcm: bytes, rate: int) -> float:
     return crossings / 2 / (len(samples) / rate)
 
 
-@pytest.fixture
-async def stack(tmp_path, request):
-    """The page, started, on a VoiceServer in front of a fake VoiceManager. An indirect
-    parameter is a script the page runs before its own, to stub a browser API."""
-    init_script = getattr(request, "param", None)
+@contextlib.asynccontextmanager
+async def _site(tmp_path, init_script=None):
+    """A VoiceServer in front of a fake VoiceManager, and a headless Chrome page not yet
+    pointed at it. ``init_script`` is a script the page runs before its own, to stub a
+    browser API. The server answers GET /sessions with three rows and records the query
+    of every /ws request (``ws_requests``) and the client of every session list request
+    (``list_requests``)."""
     plugin = sys.modules["voicemanager_live"]
     from voicemanager_live.server import VoiceServer
     from voicemanager_live.session import VoiceSession, client_from_url
 
     async with FakeVoiceManager() as fake:
-        sessions, utterances = [], []
+        site = SimpleNamespace(fake=fake, sessions=[], utterances=[], ws_requests=[], list_requests=[],
+                               rows=_session_rows(int(time.time())))
 
-        async def on_client(connection, client_id):
+        async def on_client(connection, client_id, **options):
+            site.ws_requests.append(parse_qs(urlsplit(connection.request.path).query))
+
             async def on_utterance(text, message_id):
-                utterances.append((text, message_id))
+                site.utterances.append((text, message_id))
 
             session = VoiceSession(connection, client_from_url(fake.url), client_id, on_utterance=on_utterance)
-            sessions.append(session)
+            site.sessions.append(session)
             await session.run()
 
-        server = VoiceServer("127.0.0.1", 0, TOKEN, on_client)
+        def on_sessions(client_id):
+            site.list_requests.append(client_id)
+            return site.rows
+
+        server = VoiceServer("127.0.0.1", 0, TOKEN, on_client, on_sessions=on_sessions)
         await server.start()
+        site.url = f"http://127.0.0.1:{server.bound_port}"
         wav = tmp_path / "tone.wav"
         _tone_wav(wav)
         async with playwright_api.async_playwright() as pw:
@@ -72,17 +99,116 @@ async def stack(tmp_path, request):
                 executable_path=os.environ.get("CHROME") or None, headless=True,
                 args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
                       f"--use-file-for-fake-audio-capture={wav}", "--autoplay-policy=no-user-gesture-required"])
-            page = await browser.new_page(viewport={"width": 390, "height": 760})
+            site.page = await browser.new_page(viewport={"width": 390, "height": 760})
             if init_script:
-                await page.add_init_script(init_script)
-            await page.goto(f"http://127.0.0.1:{server.bound_port}/?token={TOKEN}&client=phone")
-            await page.click("#toggle")
+                await site.page.add_init_script(init_script)
             try:
-                yield fake, page, sessions, utterances
+                yield site
             finally:
                 await browser.close()
                 await server.stop()
         assert plugin  # loaded by conftest
+
+
+@pytest.fixture
+async def stack(tmp_path, request):
+    """The page, started in a new session from the chooser, on a VoiceServer in front of
+    a fake VoiceManager. An indirect parameter is the init script of ``_site``."""
+    async with _site(tmp_path, getattr(request, "param", None)) as site:
+        await site.page.goto(f"{site.url}/?token={TOKEN}&client=phone")
+        await site.page.click("#new")
+        yield site.fake, site.page, site.sessions, site.utterances
+
+
+@pytest.fixture
+async def site(tmp_path):
+    """The server and a page not yet loaded: the chooser tests pick their own URL."""
+    async with _site(tmp_path) as site:
+        yield site
+
+
+async def _chooser_rows(page):
+    await page.wait_for_function("document.querySelectorAll('#sessions .session').length === 3", timeout=5000)
+    return await page.eval_on_selector_all("#sessions .session", "els => els.map(e => e.textContent)")
+
+
+async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    texts = await _chooser_rows(page)
+    assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
+    assert site.list_requests == ["tablet"]
+    assert await page.evaluate(
+        "document.getElementById('new').compareDocumentPosition(document.getElementById('sessions'))"
+        " & Node.DOCUMENT_POSITION_FOLLOWING")
+    titled, preview, bare = texts
+    assert "Garden plans" in titled and "what should I plant" not in titled
+    assert "remind me about the dentist" in preview
+    names = await page.eval_on_selector_all("#sessions .session .name", "els => els.map(e => e.textContent)")
+    assert names[0] == "Garden plans" and names[1] == "remind me about the dentist"
+    assert re.search(r"\d", names[2]) and len(names[2]) <= 40  # the last-active time, nothing else
+    assert "5 min ago" in titled and "12 lines" in titled and "telegram" in titled
+    assert "2 h ago" in preview and "1 line" in preview and "1 lines" not in preview and "voicemanager_live" in preview
+    assert "3 days ago" in bare and "0 lines" in bare and "cli" in bare
+    current = await page.eval_on_selector_all("#sessions .session", "els => els.map(e => !!e.querySelector('[aria-current=\"true\"]'))")
+    assert current == [False, True, False]
+    assert "Current" in preview and "Current" not in titled and "Current" not in bare
+    for text in texts:
+        for row in site.rows:
+            assert row["id"] not in text, (row["id"], text)
+
+
+async def test_tapping_a_chooser_row_connects_with_that_session_and_the_lane(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await _chooser_rows(page)
+    await page.click("#sessions .session:nth-child(2) button")
+    await site.fake.wait_connections(1, timeout=10)
+    assert site.ws_requests[0]["session"] == ["sid-untitled-222"]
+    assert site.ws_requests[0]["client"] == ["tablet"]
+    assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+
+
+async def test_tapping_new_in_the_chooser_connects_with_session_new(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    assert site.ws_requests[0]["session"] == ["new"]
+    assert site.ws_requests[0]["client"] == ["tablet"]
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+
+
+async def test_a_session_in_the_page_url_skips_the_chooser(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet&session=sid-titled-111")
+    await asyncio.sleep(0.3)
+    assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
+    assert await page.text_content("#state") == "Tap to start"
+    assert site.list_requests == []
+    await page.click("#toggle")
+    await site.fake.wait_connections(1, timeout=10)
+    assert site.ws_requests[0]["session"] == ["sid-titled-111"]
+    assert site.ws_requests[0]["client"] == ["tablet"]
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+
+
+async def test_a_reconnect_after_the_chooser_does_not_ask_for_the_session_again(site):
+    """The choice is sent once. A reconnect stays on the session the lane is on: asking
+    for a new session again would open another one each time."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    await site.sessions[0].page.close()
+    await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
+    assert site.ws_requests[0]["session"] == ["new"]
+    assert "session" not in site.ws_requests[1]
+    assert site.ws_requests[1]["client"] == ["tablet"]
 
 
 async def test_mic_reaches_voicemanager_as_16k_mono_pcm(stack):

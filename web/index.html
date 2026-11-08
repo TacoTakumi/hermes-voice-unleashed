@@ -47,6 +47,7 @@ body[data-who="alert"] #state { color: var(--alert); }
 #elapsed[hidden] { display: none; }
 #detail { margin: 10px 0 0; color: var(--muted); font-size: 16px; min-height: 1.5em; }
 #meter { display: block; width: 100%; height: 72px; margin-top: 18px; }
+#meter[hidden] { display: none; }
 #transcript {
   margin: 14px 0 0;
   font-size: 22px;
@@ -88,6 +89,31 @@ button.fold {
 .group button.fold { padding: 2px 0; font-size: 15px; }
 main { overflow-y: auto; padding: 8px var(--gutter) 16px; }
 #log { list-style: none; margin: 0 auto; padding: 0; max-width: 40rem; display: flex; flex-direction: column; gap: 14px; }
+#log[hidden] { display: none; }
+/* The chooser: the New button, then one row per session. */
+#chooser { margin: 0 auto; max-width: 40rem; display: flex; flex-direction: column; gap: 10px; }
+#chooser[hidden] { display: none; }
+#new { width: 100%; min-width: 0; margin-bottom: 8px; }
+#sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+button.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  font: 400 17px/1.35 var(--type);
+  color: var(--paper);
+  background: var(--ink-raised);
+  border-radius: 14px;
+  padding: 12px 16px;
+}
+button.row .name { flex: 1 0 100%; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.row .meta { color: var(--muted); font-size: 14px; }
+button.row .current { color: var(--you); font-size: 14px; font-weight: 700; margin-left: auto; }
+button.row[aria-current="true"] { box-shadow: inset 0 0 0 2px var(--you); }
+footer[hidden] { display: none; }
 .turn { max-width: 34rem; overflow-wrap: anywhere; white-space: pre-wrap; }
 .turn.user { align-self: flex-end; text-align: right; color: var(--you); }
 .turn.hermes { align-self: flex-start; padding-left: 14px; border-left: 3px solid var(--hermes); }
@@ -150,6 +176,10 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   </section>
 </header>
 <main>
+  <section id="chooser" hidden aria-label="Sessions">
+    <button id="new" type="button">New session</button>
+    <ol id="sessions"></ol>
+  </section>
   <ol id="log" aria-live="polite"></ol>
 </main>
 <footer>
@@ -162,11 +192,16 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   const token = params.get("token") || "";
   const clientId = params.get("client") || "phone";
   const browserAec = params.get("aec") !== "0";
+  // The Hermes session the next connect asks for: an id, "new", or null for the one the
+  // lane is on. A page opened with ?session=<id> asks for that one and skips the chooser.
+  let sessionChoice = params.get("session") || null;
   const MIC_RATE = 16000;
 
   const $ = (id) => document.getElementById(id);
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
   const logEl = $("log"), toggle = $("toggle"), meter = $("meter");
+  const chooserEl = $("chooser"), sessionsEl = $("sessions"), newEl = $("new");
+  const footerEl = document.querySelector("footer");
   const reasoningEl = $("reasoning"), reasonFoldEl = $("reason-fold"), reasonLineEl = $("reason-line");
   const reasonFullEl = $("reason-full");
   const activityEl = $("activity"), toolsEl = $("tools"), foldEl = $("fold"), elapsedEl = $("elapsed");
@@ -564,12 +599,16 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // --- connection ------------------------------------------------------------------
   function connect() {
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`;
+    let url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`;
+    if (sessionChoice) url += `&session=${encodeURIComponent(sessionChoice)}`;
     show("Connecting", "none", "");
     ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     micSent = 0; // the plugin counts the mic samples of each connection from 0 too
     micAnchor = null;
+    // The choice is asked for once, on the connect that reached the server. A reconnect
+    // stays on the session the lane is on: asking for a new one again would open another.
+    ws.onopen = () => { sessionChoice = null; };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
         try { onFrame(JSON.parse(ev.data)); } catch (e) { /* not ours */ }
@@ -710,6 +749,69 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     toggle.textContent = muted ? "Unmute microphone" : "Mute microphone";
     status();
   });
+
+  // --- the chooser: New session first, then the lane's sessions ---------------------
+  // Shown on load when the page URL names no session. A row shows the session's title,
+  // else its preview, else when it was last active; never its id, which stays in the
+  // row's click handler. The tap on a row or on New is the gesture that starts the audio.
+  function ago(epoch) {
+    if (!epoch) return "";
+    const s = Math.max(0, Date.now() / 1000 - epoch);
+    if (s < 60) return "just now";
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + " min ago";
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + " h ago";
+    const d = Math.floor(h / 24);
+    return d === 1 ? "1 day ago" : d + " days ago";
+  }
+  function when(epoch) {
+    if (!epoch) return "Unknown time";
+    return new Date(epoch * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+  function sessionRow(row) {
+    const li = document.createElement("li");
+    li.className = "session";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "row";
+    button.append(part("name", row.title || row.preview || when(row.last_active)));
+    const n = row.message_count || 0;
+    const meta = [ago(row.last_active), n === 1 ? "1 line" : n + " lines", row.source].filter(Boolean);
+    button.append(part("meta", meta.join(", ")));
+    if (row.current) {
+      button.setAttribute("aria-current", "true");
+      button.append(part("current", "Current"));
+    }
+    button.addEventListener("click", () => choose(row.id));
+    li.appendChild(button);
+    return li;
+  }
+  async function showChooser() {
+    sessionsEl.textContent = "";
+    chooserEl.hidden = false;
+    logEl.hidden = meter.hidden = footerEl.hidden = true;
+    show("Sessions", "none", "Tap one to go on with it, or start a new one.");
+    let rows;
+    try {
+      const res = await fetch(`/sessions?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`);
+      if (!res.ok) throw new Error(String(res.status));
+      rows = await res.json();
+    } catch (e) {
+      detailEl.textContent = "The session list did not load. You can still start a new one.";
+      return;
+    }
+    for (const row of rows) sessionsEl.appendChild(sessionRow(row));
+    if (!rows.length) detailEl.textContent = "No sessions yet. Start a new one.";
+  }
+  function choose(id) {
+    sessionChoice = id;
+    chooserEl.hidden = true;
+    logEl.hidden = meter.hidden = footerEl.hidden = false;
+    start();
+  }
+  newEl.addEventListener("click", () => choose("new"));
+  if (!sessionChoice && token) showChooser();
 
   // --- the meter: your level in teal, Hermes in amber ----------------------------------
   const bars = 48, history = new Array(bars).fill(0), whoHistory = new Array(bars).fill(0);
