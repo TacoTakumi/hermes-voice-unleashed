@@ -410,6 +410,17 @@ async def test_an_attach_id_longer_than_256_characters_is_refused(adapter, fake_
     assert not adapter.is_attached("a" * 257)
 
 
+async def test_an_empty_attach_id_is_refused(adapter, fake_vm):
+    async with connect(_url(adapter, "attach=")) as ws:
+        with pytest.raises(ConnectionClosed) as info:
+            while True:
+                await asyncio.wait_for(ws.recv(), 2)
+    assert info.value.rcvd.code == 1008
+    assert "empty" in info.value.rcvd.reason
+    assert fake_vm.connections == []
+    assert not adapter.is_attached("")
+
+
 async def test_an_attach_id_of_256_characters_is_taken(adapter, fake_vm):
     async with connect(_url(adapter, "attach=" + "a" * 256)) as ws:
         client = Client(ws)

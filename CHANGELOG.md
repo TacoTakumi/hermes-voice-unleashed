@@ -20,8 +20,9 @@ entry names next to its pinned commit.
   the UI. The desktop half streams the microphone to the plugin, plays the reply
   audio and stops at once when you talk over it, as the voice page does.
 - Each finished utterance goes into the open chat as your message. The reply
-  prints as usual, and only its first `<say>...</say>` block is spoken. A reply
-  without one is not spoken. Replies to typed messages in a voice chat are
+  prints as usual, and the first `<say>...</say>` block of each assistant
+  message is spoken, so a turn with tool calls can speak more than once. A
+  message without one is not spoken. Replies to typed messages in a voice chat are
   spoken the same way.
 - A `pre_llm_call` hook asks the model for that `<say>` block, only for chats
   that have voice on.
@@ -29,7 +30,10 @@ entry names next to its pinned commit.
   session to a Hermes chat instead of the voice page's own conversation. The
   client sends the reply's spoken text as `say` frames and ends it with
   `say_end`, each with a `reply` key; text for a reply that was cut off is
-  dropped. An attach id longer than 256 characters is refused.
+  dropped. Each `utterance` and `clear` frame to the client carries a rising
+  `epoch`. The client puts the last epoch it got into each `say` and
+  `say_end`, and the session drops frames of an older epoch. An attach id that
+  is empty or longer than 256 characters is refused.
 - The voice page shows "Working" while a Hermes turn still runs and no reply
   audio plays, for example between a spoken "let me check" and the answer. The
   server sends a `turn_done` frame to the page when the turn and its reply
@@ -63,6 +67,14 @@ entry names next to its pinned commit.
   by." spoken as "Standing") waited until the turn ended, so it came after the
   tools ran, or never when you cut in. It is now spoken when the model's
   response ends.
+- `plugin.yaml` gave port 8250 in its VoiceManager URL example; the default is
+  8255. It also listed `VMLIVE_ALLOWED_USERS` as optional, but no utterance is
+  accepted without it, so it is now required.
+- An empty `attach=` in the WebSocket URL took over the voice page's own
+  conversation. It is now refused.
+- The folded reasoning line showed the start of a long run when the model
+  reasoned in lists or paragraphs with no sentence punctuation. It now also
+  splits on line breaks.
 
 ## [0.1.0] - 2026-11-07
 

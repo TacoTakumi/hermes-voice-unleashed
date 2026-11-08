@@ -36,7 +36,7 @@ MAX_ATTACH_ID = 256  # a longer Hermes session id is refused, never cut
 
 def _query(path: str) -> tuple[str, dict[str, list[str]]]:
     parts = urlsplit(path)
-    return parts.path, parse_qs(parts.query)
+    return parts.path, parse_qs(parts.query, keep_blank_values=True)
 
 
 def _response(status: HTTPStatus, body: bytes, content_type: str) -> Response:
@@ -103,10 +103,11 @@ class VoiceServer:
 
     async def _handle(self, connection: ServerConnection) -> None:
         _, query = _query(connection.request.path)
-        session_id = (query.get("attach") or [""])[0]
-        if session_id and self._on_attach is not None:
-            if len(session_id) > MAX_ATTACH_ID:
-                reason = f"attach id longer than {MAX_ATTACH_ID} characters"
+        if "attach" in query and self._on_attach is not None:
+            session_id = query["attach"][0]
+            if not session_id or len(session_id) > MAX_ATTACH_ID:
+                reason = ("empty attach id" if not session_id
+                          else f"attach id longer than {MAX_ATTACH_ID} characters")
                 with contextlib.suppress(Exception):
                     await connection.send(json.dumps({"type": "error", "message": reason}))
                 await connection.close(code=1008, reason=reason)  # policy violation

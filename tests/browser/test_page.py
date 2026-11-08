@@ -347,6 +347,16 @@ async def test_the_reasoning_line_folds_and_opens(stack):
     await page.wait_for_function("document.getElementById('reasoning').hidden")
 
 
+async def test_the_reasoning_line_shows_the_newest_line_without_punctuation(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "plan the release"})
+    for text in ("Steps\n- bump the version\n", "- tag it\n", "- push the mirror"):
+        await session.send_page({"type": "reasoning_delta", "text": text})
+    await page.wait_for_function("document.getElementById('reason-line').textContent === '- push the mirror'")
+
+
 async def _fills_width(page):
     return await page.evaluate("""() => {
         const b = document.getElementById('toggle').getBoundingClientRect();

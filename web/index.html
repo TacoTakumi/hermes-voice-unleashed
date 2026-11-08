@@ -213,7 +213,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // --- the reasoning line: the newest sentence, the whole text on a tap ------------------
   let reasonText = "", reasonFirstAt = null, reasonLastAt = null;
   function newestSentence(text) {
-    const parts = text.split(/(?<=[.!?])\s+/).map((t) => t.trim()).filter(Boolean);
+    const parts = text.split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter(Boolean);
     return parts.length ? parts[parts.length - 1] : "";
   }
   function reasoningClear() {

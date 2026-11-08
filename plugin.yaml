@@ -18,8 +18,12 @@ requires_env:
     prompt: "Voice page access token"
     password: true
   - name: VMLIVE_VOICEMANAGER_URL
-    description: "VoiceManager server URL (e.g. http://127.0.0.1:8250)"
+    description: "VoiceManager server URL (e.g. http://127.0.0.1:8255)"
     prompt: "VoiceManager URL"
+    password: false
+  - name: VMLIVE_ALLOWED_USERS
+    description: "Gateway allowlist for this platform; set it to owner"
+    prompt: "Allowed users (owner)"
     password: false
 optional_env:
   - name: VMLIVE_VOICEMANAGER_TOKEN
@@ -33,8 +37,4 @@ optional_env:
   - name: VMLIVE_PORT
     description: "Port the voice page listens on (default 8765)"
     prompt: "Listen port"
-    password: false
-  - name: VMLIVE_ALLOWED_USERS
-    description: "Gateway allowlist for this platform; set it to owner"
-    prompt: "Allowed users (owner)"
     password: false
