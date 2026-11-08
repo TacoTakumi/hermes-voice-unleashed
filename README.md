@@ -188,13 +188,15 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   without a valid `mic_sample` still works: the plugin uses its own count of
   the mic samples it forwarded, which places the edge early by the device
   latencies.
-- Approvals by voice are limited. When a command needs your approval, the prompt
-  shows as text on the page and is not spoken. VoiceManager sends plain words,
-  so an approval word said on its own ("yes", "approve", "ok", "no", "deny")
-  answers the waiting approval exactly as typing it would on another platform.
-  The reply that follows is not spoken yet; read it on the page. Anything longer
+- Approvals work by voice. When a command needs your approval, the page shows
+  the gateway's prompt and speaks one sentence: "Approval needed to run: <the
+  command>. Say yes or no." An approval word said on its own ("yes", "approve",
+  "ok", "no", "deny") answers it exactly as typing it would on another
+  platform; punctuation from the speech recognizer ("Yes.") does not matter.
+  The turn then goes on and its reply is spoken as usual. Anything longer
   ("yes, go ahead") reaches Hermes as a new message, which stops the waiting
-  turn, and the command does not run.
+  turn, and the command does not run. The gateway's confirmation ("Allowed
+  once") is screen text.
 - The first question after a gateway start is slow: 14 to 16 s on our test rig,
   against about 1.5 s for the questions after it. The agent and the model's prompt
   cache start cold. Ask one question after a restart before you rely on it.

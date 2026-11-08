@@ -58,6 +58,13 @@ entry names next to its pinned commit.
   latency. The plugin passes it to VoiceManager and falls back to its own
   count of forwarded mic samples when a client sends none. The README says
   how another client of `/ws` computes it.
+- Approvals by voice. When a command needs approval, the page shows the
+  gateway's prompt and speaks "Approval needed to run: <command>. Say yes or
+  no." A one-word answer reaches Hermes without the speech recognizer's
+  punctuation, so "Yes." approves and "No." denies, and the turn that resumes
+  is spoken: the plugin keeps the waiting reply open under its id instead of
+  opening a new one for the answer. Without a connected page the gateway sends
+  its text prompt as before.
 
 ### Fixed
 
