@@ -109,7 +109,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   /* The header stops at 62% of the screen. The reasoning text and the tool list give up
      their height first and scroll inside themselves, so the newest tool line stays in view.
      Only when the rest of the header alone does not fit (a phone held sideways) does the
-     header scroll. */
+     header scroll, and then only by the user's hand. */
   header { max-height: 62dvh; display: flex; flex-direction: column; overflow-y: auto; }
   header > * { flex-shrink: 0; }
   /* A section shrinks down to its control plus one line of its list, never below: a header
@@ -253,17 +253,6 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   function toolsToEnd() {
     toolsEl.scrollTop = toolsEl.scrollHeight;
     toolsAtEnd = true;
-    headerShows(toolsEl.lastElementChild);
-  }
-  // A header that scrolls itself (a phone held sideways) scrolls to show el. Only the
-  // header moves, never the window.
-  function headerShows(el) {
-    const header = stateEl.parentElement;
-    if (!el || header.scrollHeight <= header.clientHeight + 1) return;
-    const r = el.getBoundingClientRect(), h = header.getBoundingClientRect();
-    if (r.height === 0) return; // a folded line
-    if (r.bottom > h.bottom) header.scrollTop += r.bottom - h.bottom;
-    else if (r.top < h.top) header.scrollTop -= h.top - r.top;
   }
   for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
     toolsEl.addEventListener(kind, () => { toolsGestureUntil = Date.now() + 1000; }, { passive: true });
@@ -344,7 +333,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     turnTools.push(li);
     showElapsed();
     activityEl.hidden = false;
-    toolsToEnd(); // also scrolls a header that scrolls itself, never the window
+    toolsToEnd();
     toolsPinSoon();
   }
   const FAILED_WORDS = { error: "failed", timeout: "timed out", blocked: "blocked", cancelled: "cancelled" };

@@ -537,7 +537,6 @@ async def test_reasoning_and_tools_never_overlap_on_a_landscape_phone(stack):
         assert upper[1] <= lower[0] + 1, boxes  # each part ends before the next begins
     assert all(b[1] - b[0] > 10 for b in order), boxes  # none squeezed to nothing
     assert boxes["scrolls"], boxes
-    assert await _newest_tool_in_view(page)
 
 
 async def test_a_new_tool_line_never_scrolls_the_window(stack):
@@ -554,4 +553,25 @@ async def test_a_new_tool_line_never_scrolls_the_window(stack):
         await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
     await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 4")
     await asyncio.sleep(0.3)
+    assert await page.evaluate("window.scrollY") == 0
+
+
+async def test_the_header_stays_where_the_user_scrolled_it(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 740, "height": 360})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "sideways"})
+    for i in range(4):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 20})
+    await page.wait_for_selector("#reasoning:not([hidden])")
+    await asyncio.sleep(0.2)
+    await page.evaluate("document.querySelector('header').scrollTop = 0")
+    await session.send_page({"type": "reasoning_delta", "text": "More thought. "})
+    await page.evaluate("document.getElementById('reason-fold').click()")  # no scroll into view
+    await session.send_page({"type": "tool_start", "id": "c9", "name": "terminal", "summary": "step 9"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 5")
+    await asyncio.sleep(0.3)
+    assert await page.evaluate("document.querySelector('header').scrollTop") == 0
     assert await page.evaluate("window.scrollY") == 0
