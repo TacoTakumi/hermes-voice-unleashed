@@ -300,6 +300,17 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     li.className = "tool " + (failed ? "failed" : "done");
     li.querySelector(".status").textContent = (failed ? failed + " " : "") + seconds(f.duration_ms || 0);
   }
+  // The connection to this turn is gone: no tool_end, turn_done or reasoning will come
+  // for it. Mark what still ran as stopped and close the turn on the page.
+  function turnAbort() {
+    for (const li of toolLines.values()) {
+      li.className = "tool failed";
+      li.querySelector(".status").textContent = "stopped";
+    }
+    toolLines.clear();
+    turnFold();
+    reasoningDone();
+  }
   foldEl.addEventListener("click", () => {
     const open = toolsEl.hidden;
     toolsEl.hidden = !open;
@@ -474,6 +485,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     ws.onclose = (ev) => {
       ws = null;
       busy = false;
+      turnAbort();
       replyClear(null);
       if (ev.code === 4001) handOver();
       if (!running || replaced) return;

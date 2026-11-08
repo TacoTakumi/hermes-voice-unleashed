@@ -410,3 +410,41 @@ async def test_each_tool_status_shows_its_own_words(stack):
     await page.wait_for_function("document.querySelectorAll('#tools .tool.failed').length === 4")
     texts = await page.eval_on_selector_all("#tools .tool .status", "els => els.map(e => e.textContent)")
     assert [t.split(" 0.1 s")[0] for t in texts] == list(words.values())
+
+
+async def _turn_in_flight(session, page):
+    await session.send_page({"type": "utterance", "text": "long job"})
+    await session.send_page({"type": "reasoning_delta", "text": "Working on it. Still going"})
+    await session.send_page({"type": "tool_start", "id": "c1", "name": "terminal", "summary": "make"})
+    await page.wait_for_selector("#tools .tool.running")
+
+
+async def _turn_was_ended(page):
+    await page.wait_for_selector("#tools .group")
+    assert "stopped" in await page.text_content("#tools .tool")
+    assert await page.locator("#tools .tool.running").count() == 0
+    assert (await page.text_content("#reason-line")).startswith("Reasoned for ")
+    assert await page.is_hidden("#elapsed")
+
+
+async def test_a_reconnect_ends_the_turn_on_the_page(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    await _turn_in_flight(sessions[0], page)
+    await sessions[0].page.close()
+    await wait_for(lambda: len(sessions) == 2, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    await _turn_was_ended(page)
+
+
+async def test_a_replaced_page_ends_its_turn_on_reconnect(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    await _turn_in_flight(sessions[0], page)
+    import websockets
+    port = page.url.split(":")[2].split("/")[0]
+    async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={TOKEN}&client=phone"):
+        await page.wait_for_function(
+            "document.getElementById('state').textContent === 'In use on another device'", timeout=5000)
+        await _turn_was_ended(page)
