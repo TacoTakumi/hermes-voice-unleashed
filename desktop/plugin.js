@@ -329,6 +329,7 @@ const DEFAULTS = { address: '', token: '' }
 const MAX_ATTACH_ID = 256 // the voice server refuses longer attach ids
 const REPLACED_CLOSE = 4001 // another client took this chat's voice over
 const KEYS_KEPT = 64 // finished and cut-off reply keys a session remembers
+const SEEN_KEPT = 64 // segments whose streamed length a session remembers
 
 const MOVED = { kind: 'info', message: 'Voice off: you moved to another chat.' }
 const REPLACED = { kind: 'warning', message: 'Voice off: voice for this chat moved to another window.' }
@@ -415,7 +416,7 @@ function createLiveVoice(ctx, prefs) {
     const s = {
       runtime, stored, address, token, ws: null, stream: null, audio: null, capturing: false,
       errored: false, turn: null, reply: null, dead: keySet(), done: keySet(), epoch: 0,
-      cuts: 0, resumed: null, seen: { base: '', end: 0 }
+      cuts: 0, resumed: null, seen: new Map()
     }
     live = s
     state.set({ status: 'connecting' })
@@ -567,8 +568,13 @@ function createLiveVoice(ctx, prefs) {
     const base = `${turn}:${segment}`
     const stamped = Number.isInteger(payload.offset) && payload.offset >= 0
     // How far this segment had got before this delta, held back text included.
-    const seen = s.seen.base === base ? s.seen.end : 0
-    if (stamped) s.seen = { base, end: Math.max(seen, payload.offset + text.length) }
+    // Kept per segment, so a replay of any earlier segment is not spoken again.
+    const seen = s.seen.get(base) ?? 0
+    if (stamped) {
+      s.seen.delete(base)
+      s.seen.set(base, Math.max(seen, payload.offset + text.length))
+      if (s.seen.size > SEEN_KEPT) s.seen.delete(s.seen.keys().next().value)
+    }
     if (s.dead.has(turn)) return
     const key = s.resumed && s.resumed.turn === turn ? `${base}:${s.resumed.cuts}` : base
     if (s.done.has(key)) return

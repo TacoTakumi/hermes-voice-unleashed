@@ -386,6 +386,26 @@ async def test_a_steered_utterance_speaks_the_turns_next_segment(page, voice):
     assert says[2]["reply"] == says[3]["reply"] != says[0]["reply"]
 
 
+async def test_a_replayed_earlier_segment_of_a_resumed_turn_is_not_spoken_again(page, voice):
+    # After a resume the turn's segments get new keys; a replay of a segment that
+    # was spoken before the cut (a reconnect) must still not be spoken twice.
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await page.evaluate("window.holdSubmits = true")
+    await _stream(page, "rt-1", "t1", ["<say>Looking.</say> Checking the files."], complete=False)
+    await _fire(page, "message.interim", "rt-1", {"text": "<say>Looking.</say> Checking the files.",
+                                                  "already_streamed": True, "turn_id": "t1", "segment": 0})
+    await wait_for(lambda: any(f["type"] == "say_end" for f in conn.jsons))
+    await _cut_by_utterance(page, conn, "only the tests", epoch=1)
+    await page.evaluate("window.answerSubmit({ status: 'steered' })")
+    await _quiet()
+    await _stream(page, "rt-1", "t1", ["\n\n<say>Only the tests.</say> Done."], segment=1, start=False)
+    await wait_for(lambda: [f["type"] for f in conn.jsons].count("say_end") == 2)
+    await _stream(page, "rt-1", "t1", ["<say>Looking.</say> Checking the files."], start=False, complete=False)
+    await _quiet()
+    assert [f.get("text") for f in conn.says() if f["type"] == "say"] == ["Looking.", "Only the tests."]
+
+
 async def test_say_frames_carry_the_epoch_of_the_last_utterance_or_clear(page, voice):
     await _boot(page, voice)
     conn = await _on(page, voice)
