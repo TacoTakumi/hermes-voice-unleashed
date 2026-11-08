@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Voice audio harness</title>
+<script>
+// Loads desktop/plugin.js the way the app does: the plugin's bare imports are
+// rewritten to blob: stub modules and the plugin itself is imported from a
+// blob: URL. So the page also works under the Webapp's CSP, which allows
+// scripts from 'self' and blob: only. The stub's export names are read from
+// the plugin source, so new SDK imports in the plugin do not break the harness.
+//
+// The harness records every AudioContext and every buffer source the plugin
+// makes, and what the plugin sends: binary frames and JSON frames.
+(async () => {
+  try {
+    window.violations = []
+    document.addEventListener('securitypolicyviolation', e => {
+      window.violations.push(`${e.violatedDirective} ${e.blockedURI}`)
+    })
+
+    window.contexts = []
+    const Base = window.AudioContext
+    window.AudioContext = class extends Base {
+      constructor(...args) {
+        super(...args)
+        window.contexts.push(this)
+      }
+    }
+    // Each source: when it was started, and when its ended event fired (on the
+    // page clock). A listener, not onended: the plugin may clear onended.
+    window.sources = []
+    const create = Base.prototype.createBufferSource
+    Base.prototype.createBufferSource = function () {
+      const src = create.call(this)
+      const rec = { src, startedAt: null, endedAt: null }
+      const start = src.start
+      src.start = function (...args) {
+        rec.startedAt = performance.now()
+        return start.apply(this, args)
+      }
+      src.addEventListener('ended', () => { rec.endedAt = performance.now() })
+      window.sources.push(rec)
+      return src
+    }
+
+    const url = '/desktop/plugin.js'
+    const source = await (await fetch(url)).text()
+    const names = {}
+    for (const m of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+      const list = (names[m[2]] ||= new Set())
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split(/\s+as\s+/)[0].trim()
+        if (name) list.add(name)
+      }
+    }
+    for (const m of source.matchAll(/import\s+[^'"{]*from\s*['"]([^'"]+)['"]/g)) names[m[1]] ||= new Set()
+    // One stub value for every import: callable, and every property is the stub again.
+    const stub =
+      'const stub = new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => "" : stub),' +
+      ' apply: () => stub, construct: () => stub });\n'
+    const blobUrl = code => URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
+    const shims = {}
+    for (const [specifier, list] of Object.entries(names)) {
+      const code = stub + 'export default stub;\n' + [...list].map(n => `export const ${n} = stub;`).join('\n')
+      shims[specifier] = blobUrl(code)
+    }
+    const rewritten = source.replace(/(from\s*)(['"])([^'"]+)\2/g,
+      (whole, pre, quote, spec) => (shims[spec] ? `${pre}${quote}${shims[spec]}${quote}` : whole))
+    const plugin = await import(blobUrl(rewritten))
+    window.plugin = plugin
+
+    window.bins = []
+    window.jsons = []
+    window.speaking = []
+    window.makeAudio = () => {
+      window.audio = plugin.createVoiceAudio({
+        sendBinary: buf => window.bins.push(buf),
+        sendJson: frame => window.jsons.push(frame),
+        onSpeaking: on => window.speaking.push(on)
+      })
+      return true
+    }
+    window.openMic = async () => {
+      window.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      })
+      return true
+    }
+    window.binBytes = () => window.bins.reduce((n, b) => n + b.byteLength, 0)
+    // The captured PCM from byte `from` to byte `to`, as base64.
+    window.pcmBase64 = (from, to) => {
+      const all = new Uint8Array(window.binBytes())
+      let at = 0
+      for (const b of window.bins) { all.set(new Uint8Array(b), at); at += b.byteLength }
+      const part = all.subarray(from, to)
+      let text = ''
+      for (let i = 0; i < part.length; i += 0x8000) text += String.fromCharCode(...part.subarray(i, i + 0x8000))
+      return btoa(text)
+    }
+    // A tone as 16-bit PCM in an ArrayBuffer, as the server sends reply audio.
+    window.tone = (samples, rate, hz) => {
+      const pcm = new Int16Array(samples)
+      for (let i = 0; i < samples; i++) pcm[i] = Math.round(8000 * Math.sin(2 * Math.PI * hz * i / rate))
+      return pcm.buffer
+    }
+    window.harnessReady = true
+  } catch (err) {
+    window.harnessError = String(err && err.stack ? err.stack : err)
+  }
+})()
+</script>
+</head>
+<body></body>
+</html>
