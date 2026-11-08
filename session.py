@@ -11,6 +11,11 @@ back as ``say`` frames, ending it with ``say_end``. Each frame names its
 reply with a ``reply`` key (the client's id for that reply), so text of a reply
 that was ended or cut off never reaches a later one, and a reply the client
 starts on its own (an answer to a typed message) is spoken too.
+
+Some say frames are already on the way when the session cuts a reply whose key it
+never learned. So each ``utterance`` and ``clear`` frame to an attached client
+starts a new epoch and names it, the client puts the last epoch it got into each
+``say`` and ``say_end``, and the session drops the frames of an older epoch.
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ class VoiceSession:
         self.attached = attached  # the reply's text comes from the client's say frames
         self.reply_key: Optional[str] = None  # attached: the client's key for the running reply
         self._closed_keys: dict[str, None] = {}  # attached: keys that take no more text, oldest first
+        self.epoch = 0  # goes up with each utterance and each clear; attached frames name it
         self.tracker: Optional[TurnTracker] = None
         # The running reply. reply_id is the message id of the utterance it answers;
         # the stream hooks name it, so text of an older, cancelled turn never lands here.
@@ -133,7 +139,7 @@ class VoiceSession:
                     and heard_words(self.tracker.text)):
                 # Classic mode: the user speaks while the last reply's tail may still play.
                 self._cleared_turn = True
-                await self.send_page({"type": "clear", "request_id": None})
+                await self._send_clear(None)
             await self.send_page({"type": "transcript", "text": self.tracker.text,
                                   "final": bool(frame.get("is_final"))})
 
@@ -264,14 +270,24 @@ class VoiceSession:
             await self.cancel_reply("barge", send_cancel=False)
             self.tracker.reply_ended()
         else:  # the reply's text was done but its tail was still playing
-            await self.send_page({"type": "clear", "request_id": frame.get("request_id")})
+            await self._send_clear(frame.get("request_id"))
 
     async def _dispatch(self, text: str) -> None:
         self._turn_ended_at = asyncio.get_running_loop().time()
         self._open_reply()
-        await self.send_page({"type": "utterance", "text": text})
+        await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
         if self._on_utterance is not None:
             await self._on_utterance(text, self.reply_id)
+
+    def _next_epoch(self) -> dict[str, Any]:
+        """Start a new epoch: say frames the client sent before it gets this one are
+        dropped. Returns the field that names it on a frame to an attached client."""
+        self.epoch += 1
+        return {"epoch": self.epoch} if self.attached else {}
+
+    async def _send_clear(self, request_id: Optional[str]) -> None:
+        """Stop playback on the page; an attached client cuts its reply in flight."""
+        await self.send_page({"type": "clear", "request_id": request_id, **self._next_epoch()})
 
     def _open_reply(self) -> None:
         """Start a new reply that takes text; the one before it takes no more."""
@@ -312,7 +328,7 @@ class VoiceSession:
             if send_cancel and not request.cancelled:
                 with contextlib.suppress(Exception):
                     await request.cancel()
-        await self.send_page({"type": "clear", "request_id": request.request_id if request else None})
+        await self._send_clear(request.request_id if request else None)
 
     def _spawn(self, reader: Callable[[], Awaitable[None]]) -> None:
         # The reader's coroutine is made inside the task, so a task cancelled before it
@@ -375,7 +391,11 @@ class VoiceSession:
         """Reply text from an attached client.
 
         The frames of one WebSocket arrive in order, so ``say_end`` ends the reply at
-        once, with no quiet window."""
+        once, with no quiet window. A frame of an older epoch was sent before the client
+        heard of the last utterance or clear: the reply it belongs to is over."""
+        epoch = frame.get("epoch")
+        if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch < self.epoch:
+            return
         key = frame.get("reply")
         key = key if isinstance(key, str) and key else None
         if frame["type"] == "say_end":

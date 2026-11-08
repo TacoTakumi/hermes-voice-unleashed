@@ -40,18 +40,23 @@ class Client:
     def of(self, kind):
         return [f for f in self.frames if f.get("type") == kind]
 
-    async def say(self, *pieces, reply=None):
+    async def say(self, *pieces, reply=None, epoch=None):
         for piece in pieces:
-            await self.ws.send(json.dumps({"type": "say", "text": piece,
-                                           **({"reply": reply} if reply else {})}))
+            await self.ws.send(json.dumps({"type": "say", "text": piece, **_named(reply, epoch)}))
 
-    async def say_end(self, reply=None):
-        await self.ws.send(json.dumps({"type": "say_end", **({"reply": reply} if reply else {})}))
+    async def say_end(self, reply=None, epoch=None):
+        await self.ws.send(json.dumps({"type": "say_end", **_named(reply, epoch)}))
+
+
+def _named(reply, epoch):
+    """The optional fields of a say or say_end frame."""
+    return {**({"reply": reply} if reply else {}), **({"epoch": epoch} if epoch is not None else {})}
 
 
 @pytest.fixture
-async def fake_vm():
-    async with FakeVoiceManager() as fake:
+async def fake_vm(request):
+    """A fake VoiceManager; parametrize it indirectly with an error type to refuse the turn engine."""
+    async with FakeVoiceManager(turn_engine_refusal=getattr(request, "param", None)) as fake:
         yield fake
 
 
@@ -135,7 +140,7 @@ async def test_attach_starts_a_voicemanager_session_bound_to_the_session_id(adap
 
 async def test_an_utterance_goes_to_the_client_only(attached, adapter):
     client, conn = attached
-    assert client.of("utterance") == [{"type": "utterance", "text": "tell me something"}]
+    assert client.of("utterance") == [{"type": "utterance", "text": "tell me something", "epoch": 1}]
     await asyncio.sleep(0.1)
     assert adapter.messages == []
 
@@ -309,6 +314,79 @@ async def test_say_end_for_a_finished_key_does_nothing(ready):
     assert "".join(f["text"] for f in second) == "Two more."
     assert [f["done"] for f in second].count(True) == 1
     assert conn.json_frames("tts_cancel") == []
+
+
+async def test_utterance_and_clear_frames_carry_a_rising_epoch(attached, adapter):
+    client, conn = attached
+    (first,) = client.of("utterance")
+    await client.say("First part of ", reply="m1", epoch=first["epoch"])
+    (tts,) = await wait_for(lambda: tts_frames(conn))
+    await conn.send({"type": "barge", "request_id": tts["request_id"], "onset_mic_sample": 10,
+                     "mic_sample": 20})
+    (clear,) = await wait_for(lambda: client.of("clear"))
+    await conn.send({"type": "turn_end", "text": "and another thing", "turn_id": 0})
+    (second,) = await wait_for(lambda: client.of("utterance")[1:])
+    assert first["epoch"] < clear["epoch"] < second["epoch"]
+    assert adapter._attached[SESSION_ID].epoch == second["epoch"]
+
+
+async def test_a_page_gets_no_epoch(adapter, fake_vm):
+    async with connect(_url(adapter, "client=phone")) as ws:
+        page = Client(ws)
+        await wait_for(lambda: page.of("ready"))
+        (conn,) = await fake_vm.wait_connections(1)
+        await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
+        await conn.send({"type": "turn_end", "text": "hello again", "turn_id": 0})
+        await wait_for(lambda: len(page.of("utterance")) == 2 and page.of("clear"))
+        assert all("epoch" not in f for f in page.of("utterance") + page.of("clear"))
+        page.task.cancel()
+
+
+async def test_a_late_say_of_a_superseded_reply_never_reaches_the_next_one(ready, adapter):
+    client, conn = ready
+    session = adapter._attached[SESSION_ID]
+    await conn.send({"type": "turn_end", "text": "first question", "turn_id": 0})
+    (old,) = await wait_for(lambda: client.of("utterance"))
+    await conn.send({"type": "turn_end", "text": "first question, no, a better one", "turn_id": 0})
+    (new,) = await wait_for(lambda: client.of("utterance")[1:])
+    reply_id = session.reply_id
+    # Sent before the client got the second utterance: they belong to the first reply.
+    await client.say("Old answer words. ", reply="old:0", epoch=old["epoch"])
+    await client.say_end("old:0", epoch=old["epoch"])
+    await client.say("New answer.", reply="new:0", epoch=new["epoch"])
+    await client.say_end("new:0", epoch=new["epoch"])
+    await wait_for(lambda: ended(conn) and "New answer." in "".join(f["text"] for f in tts_frames(conn)))
+    (request,) = by_request(conn)
+    assert "".join(f["text"] for f in request) == "New answer."
+    assert session.reply_id == reply_id  # spoken as the reply the second utterance opened
+    assert "Old" not in "".join(f["text"] for f in client.of("reply_delta"))
+
+
+@pytest.mark.parametrize("fake_vm", ["turn_engine_unsupported"], indirect=True)
+async def test_a_late_say_after_a_classic_barge_in_opens_no_reply(ready, adapter):
+    client, conn = ready
+    session = adapter._attached[SESSION_ID]
+    await conn.send({"type": "transcription", "segment_index": 0, "text": "tell me a story",
+                     "endpoint": True, "is_final": False, "turn_id": 1})
+    (utterance,) = await wait_for(lambda: client.of("utterance"))
+    await conn.send({"type": "transcription", "segment_index": 1, "text": "wait",
+                     "endpoint": False, "is_final": False, "turn_id": 1})
+    await wait_for(lambda: client.of("clear"))
+    await asyncio.sleep(0.1)
+    assert not session.reply_open
+    # Sent before the client got the clear: the reply it belongs to was cut off.
+    await client.say("Once upon a time. ", reply="old:0", epoch=utterance["epoch"])
+    await client.say_end("old:0", epoch=utterance["epoch"])
+    await asyncio.sleep(0.2)
+    assert not session.reply_open
+    assert tts_frames(conn) == []
+    assert client.of("reply_delta") == []
+    # Say text with the epoch of the last clear is spoken as before.
+    current = client.of("clear")[-1]["epoch"]
+    await client.say("Typed reply.", reply="typed:0", epoch=current)
+    await client.say_end("typed:0", epoch=current)
+    frames = await wait_for(lambda: ended(conn))
+    assert "".join(f["text"] for f in frames) == "Typed reply."
 
 
 def test_the_finished_keys_kept_are_bounded(plugin):

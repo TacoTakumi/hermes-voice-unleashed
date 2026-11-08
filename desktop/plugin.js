@@ -367,6 +367,10 @@ const errorText = err => (err && (err.message || err.name)) || String(err)
 // (the text before and after tool calls) is its own reply to the server. When
 // the server clears playback or hears a new utterance, the turn in flight is
 // cut off: nothing more of it is sent, not even its say_end.
+//
+// Each utterance and clear frame names the server's epoch, and every say and
+// say_end carries the last epoch heard. Frames already on the way when the
+// server cut a reply name an older epoch, and the server drops them.
 function createLiveVoice(ctx, prefs) {
   const state = atom({ status: 'off' }) // 'off', 'connecting' or 'on'
   let live = null // the running session
@@ -398,7 +402,7 @@ function createLiveVoice(ctx, prefs) {
     }
     const s = {
       runtime, stored, address, token, ws: null, stream: null, audio: null, capturing: false,
-      errored: false, turn: null, reply: null, dead: keySet(), done: keySet()
+      errored: false, turn: null, reply: null, dead: keySet(), done: keySet(), epoch: 0
     }
     live = s
     state.set({ status: 'connecting' })
@@ -429,6 +433,7 @@ function createLiveVoice(ctx, prefs) {
     const ws = new WebSocket(attachUrl(s.address, s.token, s.stored))
     ws.binaryType = 'arraybuffer'
     s.ws = ws
+    s.epoch = 0 // a new voice session counts from the start
     ws.onopen = () => {
       if (live !== s || s.ws !== ws || s.capturing) return
       s.capturing = true
@@ -469,10 +474,12 @@ function createLiveVoice(ctx, prefs) {
         break
       case 'utterance':
         cut(s)
+        takeEpoch(s, frame)
         submit(s, frame.text)
         break
       case 'clear':
         cut(s)
+        takeEpoch(s, frame)
         s.audio.onJson(frame)
         break
       case 'replaced':
@@ -488,6 +495,11 @@ function createLiveVoice(ctx, prefs) {
     host.request('prompt.submit', { session_id: s.runtime, text, voice_turn: true }).catch(err => {
       if (live === s) host.notify({ kind: 'error', message: `Voice: what you said did not reach the chat: ${errorText(err)}` })
     })
+  }
+
+  // A server without epochs sends none: the last one stays.
+  function takeEpoch(s, frame) {
+    if (Number.isInteger(frame.epoch) && frame.epoch >= 0) s.epoch = frame.epoch
   }
 
   // The turn in flight takes no more say text.
@@ -508,8 +520,8 @@ function createLiveVoice(ctx, prefs) {
     s.done.add(r.key)
     if (s.dead.has(r.turn)) return
     const tail = r.cutter.end()
-    if (tail) sendJson(s, { type: 'say', text: tail, reply: r.key })
-    sendJson(s, { type: 'say_end', reply: r.key })
+    if (tail) sendJson(s, { type: 'say', text: tail, reply: r.key, epoch: s.epoch })
+    sendJson(s, { type: 'say_end', reply: r.key, epoch: s.epoch })
   }
 
   function replyDelta(s, payload) {
@@ -534,7 +546,7 @@ function createLiveVoice(ctx, prefs) {
       r.end = end
     }
     const say = r.cutter.push(fresh)
-    if (say) sendJson(s, { type: 'say', text: say, reply: key })
+    if (say) sendJson(s, { type: 'say', text: say, reply: key, epoch: s.epoch })
   }
 
   // Gateway events carry the runtime session id; only the attached chat's count.

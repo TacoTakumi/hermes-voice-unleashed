@@ -314,6 +314,42 @@ async def test_after_a_cut_the_in_flight_reply_sends_nothing_more(page, voice, c
     assert [f.get("text") for f in conn.says()[1:]] == ["Fresh.", None]
 
 
+async def test_say_frames_carry_the_epoch_of_the_last_utterance_or_clear(page, voice):
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+
+    def say_ends(count):
+        return lambda: [f["type"] for f in conn.jsons].count("say_end") == count
+
+    await _stream(page, "rt-1", "t0", ["<say>Typed.</say>"])
+    await wait_for(say_ends(1))
+    await conn.send({"type": "utterance", "text": "hello", "epoch": 3})
+    await _quiet()
+    await _stream(page, "rt-1", "t1", ["<say>One.</say>"])
+    await wait_for(say_ends(2))
+    await conn.send({"type": "clear", "request_id": None, "epoch": 4})
+    await conn.send({"type": "clear", "request_id": None})  # no epoch: the last one stays
+    await _quiet()
+    await _stream(page, "rt-1", "t2", ["<say>Two.</say>"])
+    await wait_for(say_ends(3))
+    assert [(f["type"], f.get("text"), f.get("epoch")) for f in conn.says()] == [
+        ("say", "Typed.", 0), ("say_end", None, 0), ("say", "One.", 3), ("say_end", None, 3),
+        ("say", "Two.", 4), ("say_end", None, 4)]
+
+
+async def test_a_reattach_starts_again_at_epoch_zero(page, voice):
+    await _boot(page, voice)
+    first = await _on(page, voice)
+    await first.send({"type": "clear", "request_id": None, "epoch": 7})
+    await _quiet()
+    await page.evaluate("window.host.state.focusedStoredSessionId.set('st-1-next')")
+    await wait_for(lambda: first.closed and len(voice.conns) == 2)
+    second = voice.conns[1]
+    await _stream(page, "rt-1", "t1", ["<say>Again.</say>"])
+    await wait_for(lambda: any(f["type"] == "say_end" for f in second.jsons))
+    assert [f.get("epoch") for f in second.says()] == [0, 0]
+
+
 async def test_switching_chats_closes_the_socket_and_submits_nothing_for_the_old_chat(page, voice):
     await _boot(page, voice)
     conn = await _on(page, voice)
