@@ -1,4 +1,5 @@
-"""Spoken commands: "end session" ends the voice session instead of going to Hermes."""
+"""Spoken commands: "end session" ends the voice session and "new session" starts a
+fresh one, instead of going to Hermes."""
 
 from __future__ import annotations
 
@@ -41,6 +42,16 @@ def test_the_end_phrases_match_the_end_command(plugin, said):
 @pytest.mark.parametrize("said", ["end session now please", "please end the session", "end", "session",
                                   "tell me a story"])
 def test_other_text_is_no_end_command(plugin, said):
+    assert plugin.turns.spoken_command(said) is None
+
+
+@pytest.mark.parametrize("said", ["New session!", "start a new session", "Start new session."])
+def test_the_new_phrases_match_the_new_command(plugin, said):
+    assert plugin.turns.spoken_command(said) == plugin.turns.NEW_SESSION
+
+
+@pytest.mark.parametrize("said", ["new session please", "start a new session now", "new", "a new session"])
+def test_other_text_is_no_new_command(plugin, said):
     assert plugin.turns.spoken_command(said) is None
 
 
@@ -238,4 +249,62 @@ async def test_end_session_now_please_is_an_ordinary_utterance(plugin):
         await asyncio.sleep(0.1)
         assert r.page.of("session_end") == []
         assert "Session ended" not in r.tts_text()
+        assert not r.page.closed
+
+
+async def test_new_session_speaks_the_notice_sends_session_new_and_keeps_the_page_open(plugin):
+    async with rig(plugin) as r:
+        await _heard(r, "New session!")
+        await _notice_played(r, "New session")
+        await wait_for(lambda: r.page.of("session_new"))
+        await asyncio.sleep(0.1)
+        assert r.messages == []  # the command never reached Hermes
+        assert r.page.of("utterance") == []
+        assert r.page.of("session_new") == [{"type": "session_new"}]
+        assert r.page.of("session_end") == []
+        assert _sequence(r.order, ("tts", "New session"), ("page", "session_new")) == [
+            ("tts", "New session"), ("page", "session_new")]
+        assert not r.page.closed
+        assert not r.conn.closed.is_set()
+        # The session still takes the next utterance until the page reconnects.
+        await _heard(r, "tell me a joke")
+        await wait_for(lambda: r.messages)
+        assert r.messages[0].text == "tell me a joke"
+        assert [f["text"] for f in r.page.of("utterance")] == ["tell me a joke"]
+        assert not r.page.closed
+
+
+@pytest.mark.parametrize("refusal", [None, "turn_engine_unsupported"])
+async def test_new_session_cancels_the_playing_reply_before_the_notice(plugin, refusal):
+    async with rig(plugin, refusal) as r:
+        message_id, rid = await _playing_reply(r, refusal)
+        await _heard(r, "start a new session", refusal)
+        notice_rid = await _notice_played(r, "New session")
+        await wait_for(lambda: r.page.of("session_new"))
+        assert notice_rid != rid
+        assert r.conn.json_frames("tts_cancel")[0]["request_id"] == rid  # the reply was cancelled
+        assert r.page.of("clear")
+        assert len(r.messages) == 1
+        assert r.messages[0].text == "tell me a story"
+        assert _sequence(r.order, ("tts", "New session"), ("page", "session_new")) == [
+            ("tts", "New session"), ("page", "session_new")]
+        fire(r.hooks.on_stream_delta, message_id, delta="there was a dragon", kind="text", turn_id="t1",
+             iteration=1)
+        await asyncio.sleep(0.1)
+        assert "dragon" not in r.tts_text()
+        assert not r.page.closed
+        assert not r.conn.closed.is_set()
+        await _heard(r, "tell me a joke", refusal)
+        await wait_for(lambda: len(r.messages) == 2)
+        assert r.messages[1].text == "tell me a joke"
+
+
+async def test_new_session_please_is_an_ordinary_utterance(plugin):
+    async with rig(plugin) as r:
+        await _heard(r, "new session please")
+        await wait_for(lambda: r.messages)
+        assert r.messages[0].text == "new session please"
+        await asyncio.sleep(0.1)
+        assert r.page.of("session_new") == []
+        assert "New session" not in r.tts_text()
         assert not r.page.closed

@@ -30,7 +30,7 @@ from typing import Any, Awaitable, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
 from . import vm_client
-from .turns import END_SESSION, TurnTracker, heard_words, spoken_command
+from .turns import END_SESSION, NEW_SESSION, TurnTracker, heard_words, spoken_command
 from .vm_client import TurnEngineError, VoiceManagerClient
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ TURN_START_TIMEOUT_S = 5.0
 # notice before it closes the page anyway.
 SESSION_END_TIMEOUT_S = 10.0
 SESSION_ENDED_NOTICE = "Session ended"
+SESSION_NEW_NOTICE = "New session"
 CLOSED_KEYS_KEPT = 64  # reply keys of ended or cut-off replies an attached session remembers
 _LAST_SPACE = re.compile(r".*\s", re.S)  # everything up to and including the last whitespace
 
@@ -91,8 +92,9 @@ class VoiceSession:
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
         self._turn_ended_at: Optional[float] = None  # loop time of the last dispatch, for the log
-        # The spoken notice that ends the session: its TTS request id, and the event set
-        # when its audio has ended.
+        # The spoken notice of a session command: its TTS request id (its audio end is
+        # no reply's end), and the event set when its audio has ended, for a command
+        # that waits for it.
         self._notice_request: Optional[str] = None
         self._notice_ended: Optional[asyncio.Event] = None
         self.duplex: Optional[vm_client.DuplexSession] = None
@@ -310,7 +312,8 @@ class VoiceSession:
         self._dropped.discard(rid)
         await self.send_page({"type": "audio_end", "request_id": rid, "reason": frame.get("reason")})
         if rid is not None and rid == self._notice_request:
-            self._notice_ended.set()
+            if self._notice_ended is not None:
+                self._notice_ended.set()
             return
         request = self.reply_request
         if request is None or rid != request.request_id or request.cancelled:
@@ -333,10 +336,14 @@ class VoiceSession:
             await self._send_clear(frame.get("request_id"))
 
     async def _dispatch(self, text: str) -> None:
-        if not self.attached and spoken_command(text) == END_SESSION:
-            # A page's spoken command is the session's to act on; an attached client
-            # gets every utterance and decides itself.
+        # A page's spoken command is the session's to act on; an attached client
+        # gets every utterance and decides itself.
+        command = spoken_command(text) if not self.attached else None
+        if command == END_SESSION:
             await self._end_session()
+            return
+        if command == NEW_SESSION:
+            await self._new_session()
             return
         self._turn_ended_at = asyncio.get_running_loop().time()
         words = heard_words(text)
@@ -378,20 +385,37 @@ class VoiceSession:
         with a ``session_end`` frame, and close the page once the notice has played
         (or the wait for its end ran out)."""
         logger.info("voice page %s: session ended by voice", self.client_id)
-        if self.reply_open or self.reply_request is not None:
-            await self.cancel_reply("session ended")
         self._notice_ended = asyncio.Event()
-        await self.speak_notice(SESSION_ENDED_NOTICE)
-        request, self.reply_request = self.reply_request, None
-        if request is not None:
-            self._notice_request = request.request_id
-            await request.done()
+        request = await self._command_notice(SESSION_ENDED_NOTICE, "session ended")
         await self.send_page({"type": "session_end"})
         if request is not None:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._notice_ended.wait(), SESSION_END_TIMEOUT_S)
         with contextlib.suppress(Exception):
             await self.page.close()
+
+    async def _new_session(self) -> None:
+        """The user asked for a new session by voice: stop the reply, say so, and tell
+        the page with a ``session_new`` frame. The connection stays open: the page
+        reconnects with a fresh session itself."""
+        logger.info("voice page %s: new session by voice", self.client_id)
+        await self._command_notice(SESSION_NEW_NOTICE, "new session")
+        await self.send_page({"type": "session_new"})
+        # The notice is no reply: the next utterance has nothing to cancel.
+        self.tracker.reply_ended()
+
+    async def _command_notice(self, text: str, reason: str) -> Optional[vm_client.TTSRequest]:
+        """Stop a running reply and speak ``text`` as a TTS request of its own, ended at
+        once. Its id is remembered so its audio end is not taken for a reply's end.
+        Returns the request, or None when no TTS request came of it."""
+        if self.reply_open or self.reply_request is not None:
+            await self.cancel_reply(reason)
+        await self.speak_notice(text)
+        request, self.reply_request = self.reply_request, None
+        if request is not None:
+            self._notice_request = request.request_id
+            await request.done()
+        return request
 
     def _next_epoch(self) -> dict[str, Any]:
         """Start a new epoch: say frames the client sent before it gets this one are

@@ -41,10 +41,14 @@ def normalized_phrase(text: str) -> str:
 # Spoken commands: a whole utterance that the session acts on itself instead of
 # sending it to Hermes. The phrase maps to the command it stands for.
 END_SESSION = "end"
+NEW_SESSION = "new"
 SPOKEN_COMMANDS = {
     "end session": END_SESSION,
     "end the session": END_SESSION,
     "end this session": END_SESSION,
+    "new session": NEW_SESSION,
+    "start a new session": NEW_SESSION,
+    "start new session": NEW_SESSION,
 }
 
 
