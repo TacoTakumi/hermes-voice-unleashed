@@ -34,6 +34,12 @@ entry names next to its pinned commit.
   audio plays, for example between a spoken "let me check" and the answer. The
   server sends a `turn_done` frame to the page when the turn and its reply
   audio are over.
+- An activity panel on the voice page shows each tool call of the turn: the
+  tool, a short form of its arguments, and running, done or failed with its
+  time. It holds about six lines, scrolls, and folds with "Hide tools". The
+  server sends `tool_start` and `tool_end` frames from Hermes's tool hooks, and
+  the gateway's own tool progress messages are off for this platform by
+  default.
 
 ### Fixed
 

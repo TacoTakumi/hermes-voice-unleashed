@@ -233,3 +233,45 @@ async def test_a_replaced_page_stops_reconnecting_until_used_here(stack):
             assert closed.rcvd.code == 4001
         assert any('"replaced"' in f for f in frames)
     assert await page.text_content("#toggle") == "Mute microphone"
+
+
+async def _listening(fake, page):
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    return conn
+
+
+async def test_the_activity_panel_shows_each_tool_call(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    assert await page.is_hidden("#activity")  # nothing to show yet
+    await session.send_page({"type": "tool_start", "id": "c1", "name": "terminal", "summary": "ls -la"})
+    await page.wait_for_selector("#tools .tool.running")
+    line = await page.text_content("#tools .tool")
+    assert "terminal" in line and "ls -la" in line
+    await session.send_page({"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 1234})
+    await page.wait_for_selector("#tools .tool.done")
+    assert "1.2 s" in await page.text_content("#tools .tool.done")
+    await session.send_page({"type": "tool_start", "id": "c2", "name": "web_search", "summary": "weather"})
+    await session.send_page({"type": "tool_end", "id": "c2", "status": "error", "duration_ms": 50})
+    await page.wait_for_selector("#tools .tool.failed")
+    for i in range(10):
+        await session.send_page({"type": "tool_start", "id": f"m{i}", "name": "read_file", "summary": f"f{i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 12")
+    await asyncio.sleep(0.2)
+    box = await page.evaluate("""() => {
+        const t = document.getElementById('tools'), li = t.querySelector('.tool');
+        const last = t.lastElementChild.getBoundingClientRect(), r = t.getBoundingClientRect();
+        return { h: t.clientHeight, line: li.getBoundingClientRect().height, scroll: t.scrollHeight,
+                 lastInView: last.bottom <= r.bottom + 1 && last.top >= r.top - 1 };
+    }""")
+    assert box["h"] <= 6.5 * box["line"] and box["scroll"] > box["h"]
+    assert box["lastInView"]
+    await page.click("#fold")
+    assert await page.is_hidden("#tools")
+    await page.click("#fold")
+    assert await page.is_visible("#tools")
+    log = await page.text_content("#log")
+    assert "terminal" not in log and "web_search" not in log
