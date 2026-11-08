@@ -65,6 +65,40 @@ entry names next to its pinned commit.
   is spoken: the plugin keeps the waiting reply open under its id instead of
   opening a new one for the answer. Without a connected page the gateway sends
   its text prompt as before.
+- A session chooser. Without `session` in its URL the voice page opens on a
+  list: "New session" first, then the profile's sessions from any Hermes
+  platform (Telegram, the CLI, Desktop...), the most recently active first, at
+  most 20, a compacted conversation as one row. A row shows the title, else
+  the first message, else the time, with how long ago it was active, its line
+  count and its platform; the session the page's conversation is on says
+  "Current", and no id is shown. A tap on a row connects with `session=<id>`:
+  the plugin sends `/resume <id> --all` on the conversation's behalf and keeps
+  the gateway's text reply off the page. The owner is seeded as the platform's
+  slash admin (`allow_admin_from: [owner]`, unless the setting is given) so
+  the cross-session resume passes the gateway's guard without configuration.
+  A tap on New connects with `session=new`, which sends `/new` only when the
+  current session holds messages; an empty session is kept, and a
+  conversation with no session yet gets one from its first utterance.
+  `&session=<id>` in the page URL skips the chooser.
+- Every connect gets a `history` frame before `ready`: the session id and the
+  last 40 stored user and assistant lines with text, oldest first, as
+  `{"role": "user" | "hermes", "text": ...}`. The page shows them as turns and
+  starts its log over on each history frame.
+- Two spoken commands on the page, matched on the whole utterance after
+  normalization (lower case, punctuation stripped, spaces collapsed), never on
+  an attached session. "End session", "end the session" or "end this session"
+  stops a playing reply, speaks "Session ended", sends a `session_end` frame
+  and closes the connection once the notice has played; the page stops the
+  microphone, releases the wake lock, closes the socket and shows the chooser
+  with a fresh list. "New session", "start a new session" or "start new
+  session" stops a playing reply, speaks "New session" and sends a
+  `session_new` frame; the connection stays open and the page reconnects with
+  `session=new`.
+- For other clients: `GET /sessions?token=...&client=<name>` (401 without the
+  token, `Cache-Control: no-store`) answers a JSON array of rows with `id`,
+  `title`, `preview`, `last_active` (epoch seconds), `message_count`, `source`
+  and `current`. A session that cannot be joined gets a `join_failed` frame
+  with a `message` and close code 4002, next to 4001 for a replaced page.
 
 ### Fixed
 

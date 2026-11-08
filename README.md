@@ -4,7 +4,9 @@ Talk to Hermes hands-free from your phone, with your own speech stack.
 
 Open a page on any phone or tablet, and Hermes listens while the page is open.
 You talk, Hermes answers out loud, and you can talk over the answer to stop it.
-Speech recognition, speech synthesis and turn-taking run on your own
+The page can go on with any session of the profile, from Telegram, the CLI or
+Desktop, or start a new one. Speech recognition, speech synthesis and
+turn-taking run on your own
 [VoiceManager](https://github.com/TacoTakumi/VoiceManager) server. Any model
 Hermes can use works, local or hosted.
 
@@ -140,10 +142,26 @@ display:
 https://<your-host>/?token=<VMLIVE_TOKEN>
 ```
 
-Tap "Start talking" and allow the microphone. The page keeps the screen on.
-Add `&client=<name>` to give a device its own conversation; the default is
-`phone`. Add `&aec=0` to turn off the browser's echo cancellation and noise
-suppression.
+The page opens on a list of sessions: a "New session" button first, then the
+profile's sessions, the most recently active first, at most 20. A session can
+come from any Hermes platform (Telegram, the CLI, Desktop...), so the phone can
+pick up a conversation you started elsewhere. A conversation that Hermes has
+compacted is one row. Each row shows the session's title, else its first
+message, else its time, with how long ago it was active, its number of lines
+and the platform it came from. The session this page's conversation is on says
+"Current". Row ids are not shown.
+
+Tap a row to go on with that session, or "New session" for a fresh one, and
+allow the microphone. The page keeps the screen on. The last 40 lines of the
+session appear in the log. "New session" opens a fresh session only when the
+current one holds messages; an empty session is used as it is, so a second tap
+on New does not stack up empty sessions.
+
+Add `&session=<Hermes session id>` to skip the list and join that session: the
+page then opens on "Start talking" as before. `&session=new` skips it and
+starts a fresh one, under the same rule. Add `&client=<name>` to give a device
+its own conversation; the default is `phone`. Add `&aec=0` to turn off the
+browser's echo cancellation and noise suppression.
 
 ## HTTPS for the phone
 
@@ -188,6 +206,37 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   without a valid `mic_sample` still works: the plugin uses its own count of
   the mic samples it forwarded, which places the edge early by the device
   latencies.
+- For your own client of `/ws`: `GET /sessions?token=...&client=<name>` (401
+  without the token, sent with `Cache-Control: no-store`) answers the session
+  list as a JSON array, most recently active first. Each row has `id`,
+  `title` (null when the session has none), `preview` (its first user
+  message, short), `last_active` (epoch seconds), `message_count`, `source`
+  (the platform it came from) and `current` (whether that client's
+  conversation is on it). `/ws?...&session=<id>` joins that session on
+  connect, `session=new` asks for a fresh one under the rule above, and
+  without `session` the connection stays on the session the conversation is
+  on. Every connect gets one `history` frame before `ready`: `{"type":
+  "history", "session_id": ..., "lines": [{"role": "user" | "hermes", "text":
+  ...}]}`, the last 40 stored user and assistant lines with text, oldest
+  first; `session_id` is null and `lines` empty when the conversation has no
+  session yet. When the session cannot be joined, the client gets a
+  `join_failed` frame with a `message` and the socket closes with code 4002,
+  next to 4001 for a connection another client took over. The spoken
+  commands below send a `session_end` frame, after which the server closes
+  the socket once its notice has played, or a `session_new` frame, after
+  which the connection stays open and the client reconnects with
+  `session=new` itself.
+- Two spoken commands end or restart the session from the page. A command is
+  the whole utterance, in any case and with any punctuation: "end session",
+  "end the session" or "end this session" stops a reply that is playing, says
+  "Session ended" and closes the connection once the notice has played; the
+  page stops the microphone, lets the screen go off and shows the session list
+  again. "new session", "start a new session" or "start new session" stops a
+  playing reply, says "New session", and the page reconnects on a fresh
+  session with the microphone on; an empty session is kept, as above.
+  Anything else ("end the session now") reaches Hermes as a message. An
+  attached client (the Desktop half) gets every utterance and these commands
+  do nothing there.
 - Approvals work by voice. When a command needs your approval, the page shows
   the gateway's prompt and speaks one sentence: "Approval needed to run: <the
   command>. Say yes or no." An approval word said on its own ("yes", "approve",
@@ -200,8 +249,9 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
 - The first question after a gateway start is slow: 14 to 16 s on our test rig,
   against about 1.5 s for the questions after it. The agent and the model's prompt
   cache start cold. Ask one question after a restart before you rely on it.
-- The page listens on the address you set and serves only the page and its
-  WebSocket. It stores nothing.
+- The page listens on the address you set and serves only the page, its
+  session list and its WebSocket. It stores nothing; the sessions and their
+  history are read from the profile's own Hermes state.
 - The plugin makes no network calls except to your VoiceManager server.
 - `vm_client.py` is VoiceManager's standalone Python client from v0.7.0,
   copied in because VoiceManager is not on PyPI.
