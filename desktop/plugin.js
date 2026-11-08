@@ -1,5 +1,6 @@
-// Voice for a Hermes chat: a composer toggle that opens the microphone for the
-// chat in front of you, and a settings page for the voice plugin's WebSocket
+// Voice for a Hermes chat: a composer toggle that attaches the chat in front of
+// you to the voice plugin's server (you speak to the chat, and the spoken part
+// of each reply is read out), and a settings page for the server's WebSocket
 // address and access token.
 
 import { atom, Button, host, icons, Input, ListRow, Tip, useValue } from '@hermes/plugin-sdk'
@@ -285,55 +286,334 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
 
 const ID = 'voicemanager-live'
 const DEFAULTS = { address: '', token: '' }
+const MAX_ATTACH_ID = 256 // the voice server refuses longer attach ids
+const REPLACED_CLOSE = 4001 // another client took this chat's voice over
+const KEYS_KEPT = 64 // finished and cut-off reply keys a session remembers
 
-// The live voice state. One microphone and one chat at a time.
-const voice = atom({ on: false, sessionId: null, error: '' })
-let micStream = null
+const MOVED = { kind: 'info', message: 'Voice off: you moved to another chat.' }
+const REPLACED = { kind: 'warning', message: 'Voice off: voice for this chat moved to another window.' }
 
-function stopMic() {
-  if (micStream) {
-    for (const track of micStream.getTracks()) track.stop()
-    micStream = null
+// The voice server's attach address for a stored session id. The address may
+// be given with or without /ws, and as http(s) for ws(s).
+function attachUrl(address, token, storedId) {
+  let base = address.trim().replace(/\/+$/, '').replace(/^http(s?):\/\//i, 'ws$1://')
+  if (!/\/ws$/.test(base)) base += '/ws'
+  return `${base}?token=${encodeURIComponent(token)}&attach=${encodeURIComponent(storedId)}`
+}
+
+// A set that forgets its oldest keys past KEYS_KEPT.
+function keySet() {
+  const keys = new Set()
+  return {
+    has: key => keys.has(key),
+    add(key) {
+      keys.delete(key)
+      keys.add(key)
+      while (keys.size > KEYS_KEPT) keys.delete(keys.values().next().value)
+    }
   }
 }
 
-async function startVoice() {
-  const sessionId = host.state.focusedSessionId.get()
-  if (!sessionId) {
-    host.notify({ kind: 'warning', message: 'Open a chat first, then turn voice on.' })
-    return
+const errorText = err => (err && (err.message || err.name)) || String(err)
+
+// Live voice for the chat in front of you, one chat at a time. Turning voice
+// on takes the chat's two ids at that moment: the runtime id, which
+// prompt.submit takes, and the stored id, which the voice server attaches to
+// (the gateway's hooks see that one). Each spoken utterance goes to the chat
+// as a voice turn, and the <say> block of each reply streamed in that chat,
+// typed or spoken, goes back to the server as say frames.
+//
+// A reply's key is its turn id and segment: each assistant message of a turn
+// (the text before and after tool calls) is its own reply to the server. When
+// the server clears playback or hears a new utterance, the turn in flight is
+// cut off: nothing more of it is sent, not even its say_end.
+function createLiveVoice(ctx, prefs) {
+  const state = atom({ status: 'off' }) // 'off', 'connecting' or 'on'
+  let live = null // the running session
+  let localTurns = 0
+
+  const localTurn = () => `local-${Date.now().toString(36)}-${++localTurns}`
+  const isOpen = s => live === s && s.ws && s.ws.readyState === WebSocket.OPEN
+
+  function sendJson(s, frame) {
+    if (isOpen(s)) s.ws.send(JSON.stringify(frame))
   }
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+
+  async function start() {
+    if (live) return
+    const { address, token } = prefs.get()
+    if (!address || !token) {
+      host.notify({ kind: 'warning', message: 'Set the voice server address and access token in the Voice settings first.' })
+      return
+    }
+    const runtime = host.state.focusedSessionId.get()
+    const stored = host.state.focusedStoredSessionId.get()
+    if (!runtime || !stored) {
+      host.notify({ kind: 'warning', message: 'Open a chat first, then turn voice on.' })
+      return
+    }
+    if (stored.length > MAX_ATTACH_ID) {
+      host.notify({ kind: 'error', message: 'Voice cannot attach to this chat: its id is too long.' })
+      return
+    }
+    const s = {
+      runtime, stored, address, token, ws: null, stream: null, audio: null, capturing: false,
+      errored: false, turn: null, reply: null, dead: keySet(), done: keySet()
+    }
+    live = s
+    state.set({ status: 'connecting' })
+    let stream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      })
+    } catch (err) {
+      end(s, { kind: 'error', message: `Microphone refused: ${err && err.name ? err.name : err}` })
+      return
+    }
+    if (live !== s) {
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    s.stream = stream
+    s.audio = createVoiceAudio({
+      sendBinary: buf => {
+        if (isOpen(s)) s.ws.send(buf)
+      },
+      sendJson: frame => sendJson(s, frame)
     })
-  } catch (err) {
-    const error = `Microphone refused: ${err && err.name ? err.name : err}`
-    voice.set({ on: false, sessionId: null, error })
-    host.notify({ kind: 'error', message: error })
-    return
+    connect(s)
   }
-  voice.set({ on: true, sessionId, error: '' })
-  host.notify({ kind: 'info', message: 'Voice on: microphone open.' })
+
+  function connect(s) {
+    const ws = new WebSocket(attachUrl(s.address, s.token, s.stored))
+    ws.binaryType = 'arraybuffer'
+    s.ws = ws
+    ws.onopen = () => {
+      if (live !== s || s.ws !== ws || s.capturing) return
+      s.capturing = true
+      s.audio.start(s.stream).catch(err => {
+        end(s, { kind: 'error', message: `Voice off: microphone capture failed: ${errorText(err)}` })
+      })
+    }
+    ws.onmessage = event => {
+      if (live !== s || s.ws !== ws) return
+      if (typeof event.data !== 'string') {
+        s.audio.onBinary(event.data)
+        return
+      }
+      let frame
+      try {
+        frame = JSON.parse(event.data)
+      } catch {
+        return // not a frame of ours
+      }
+      onFrame(s, frame)
+    }
+    ws.onclose = event => {
+      if (live !== s || s.ws !== ws) return
+      if (event.code === REPLACED_CLOSE) end(s, REPLACED)
+      else if (s.errored) end(s, null)
+      else end(s, { kind: 'warning', message: `Voice off: the voice server closed the connection (code ${event.code}).` })
+    }
+  }
+
+  function onFrame(s, frame) {
+    switch (frame && frame.type) {
+      case 'ready':
+        state.set({ status: 'on' })
+        break
+      case 'error':
+        s.errored = true
+        host.notify({ kind: 'error', message: `Voice: ${frame.message || 'the voice server reported an error.'}` })
+        break
+      case 'utterance':
+        cut(s)
+        submit(s, frame.text)
+        break
+      case 'clear':
+        cut(s)
+        s.audio.onJson(frame)
+        break
+      case 'replaced':
+        end(s, REPLACED)
+        break
+      default:
+        s.audio.onJson(frame)
+    }
+  }
+
+  function submit(s, text) {
+    if (typeof text !== 'string' || !text.trim()) return
+    host.request('prompt.submit', { session_id: s.runtime, text, voice_turn: true }).catch(err => {
+      if (live === s) host.notify({ kind: 'error', message: `Voice: what you said did not reach the chat: ${errorText(err)}` })
+    })
+  }
+
+  // The turn in flight takes no more say text.
+  function cut(s) {
+    if (s.reply) {
+      s.dead.add(s.reply.turn)
+      s.done.add(s.reply.key)
+      s.reply = null
+    }
+    if (s.turn) s.dead.add(s.turn)
+  }
+
+  // The reply in flight is over: the rest of its say text, then say_end.
+  function finishReply(s) {
+    const r = s.reply
+    if (!r) return
+    s.reply = null
+    s.done.add(r.key)
+    if (s.dead.has(r.turn)) return
+    const tail = r.cutter.end()
+    if (tail) sendJson(s, { type: 'say', text: tail, reply: r.key })
+    sendJson(s, { type: 'say_end', reply: r.key })
+  }
+
+  function replyDelta(s, payload) {
+    const text = typeof payload.text === 'string' ? payload.text : ''
+    const turn = typeof payload.turn_id === 'string' && payload.turn_id ? payload.turn_id : (s.turn ||= localTurn())
+    if (s.dead.has(turn)) return
+    const segment = Number.isInteger(payload.segment) && payload.segment >= 0 ? payload.segment : 0
+    const key = `${turn}:${segment}`
+    if (s.done.has(key)) return
+    if (!s.reply || s.reply.key !== key) {
+      finishReply(s)
+      s.reply = { key, turn, cutter: createSayCutter(), end: 0 }
+    }
+    const r = s.reply
+    let fresh = text
+    // A stamped delta can come twice (a replay after a reconnect): take only
+    // the part past what this reply has had.
+    if (Number.isInteger(payload.offset) && payload.offset >= 0) {
+      const end = payload.offset + text.length
+      if (end <= r.end) return
+      fresh = text.slice(Math.max(0, r.end - payload.offset))
+      r.end = end
+    }
+    const say = r.cutter.push(fresh)
+    if (say) sendJson(s, { type: 'say', text: say, reply: key })
+  }
+
+  // Gateway events carry the runtime session id; only the attached chat's count.
+  function onReplyEvent(event) {
+    const s = live
+    if (!s || !event || event.session_id !== s.runtime) return
+    const payload = event.payload || {}
+    switch (event.type) {
+      case 'message.start':
+        finishReply(s)
+        s.turn = typeof payload.turn_id === 'string' && payload.turn_id ? payload.turn_id : localTurn()
+        break
+      case 'message.delta':
+        replyDelta(s, payload)
+        break
+      case 'message.interim':
+        finishReply(s)
+        break
+      case 'message.complete':
+        finishReply(s)
+        s.turn = null
+        break
+    }
+  }
+
+  function dropSocket(s) {
+    const ws = s.ws
+    s.ws = null
+    if (!ws) return
+    ws.onopen = ws.onmessage = ws.onclose = null
+    try {
+      ws.close(1000)
+    } catch {
+      // already closed
+    }
+  }
+
+  // End the session: no more frames either way, no more submits for its chat.
+  function end(s, notice) {
+    if (live !== s) return
+    live = null
+    dropSocket(s)
+    if (s.audio) {
+      s.audio.onJson({ type: 'clear' })
+      void s.audio.stop()
+    }
+    if (s.stream) for (const track of s.stream.getTracks()) track.stop()
+    state.set({ status: 'off' })
+    if (notice) host.notify(notice)
+  }
+
+  function stop() {
+    if (live) end(live, null)
+  }
+
+  // The stored id moved under the same chat (context compression starts a new
+  // stored session): attach again with the new one.
+  function reattach(s, stored) {
+    s.stored = stored
+    if (!s.audio) return // still opening the mic; connect() takes the new id
+    cut(s)
+    dropSocket(s)
+    s.audio.onJson({ type: 'clear' })
+    s.errored = false
+    state.set({ status: 'connecting' })
+    connect(s)
+  }
+
+  // Both ids change when you move to another chat, in either order. A runtime
+  // change ends the session at once; a stored id change is looked at once the
+  // current change is over, so a chat switch never attaches to the new chat.
+  function checkStored() {
+    const s = live
+    if (!s) return
+    if (host.state.focusedSessionId.get() !== s.runtime) {
+      end(s, MOVED)
+      return
+    }
+    const stored = host.state.focusedStoredSessionId.get()
+    if (stored && stored !== s.stored && stored.length <= MAX_ATTACH_ID) reattach(s, stored)
+  }
+
+  const listen = (type, fn) => (ctx.onEvent ? ctx.onEvent(type, fn) : host.onEvent(type, fn))
+  for (const type of ['message.start', 'message.delta', 'message.interim', 'message.complete']) {
+    listen(type, onReplyEvent)
+  }
+  const unsubscribe = [
+    host.state.focusedSessionId.subscribe(id => {
+      if (live && id !== live.runtime) end(live, MOVED)
+    }),
+    host.state.focusedStoredSessionId.subscribe(id => {
+      if (live && id !== live.stored) setTimeout(checkStored, 0)
+    })
+  ]
+
+  return {
+    state,
+    start,
+    stop,
+    dispose() {
+      stop()
+      for (const off of unsubscribe) off()
+    }
+  }
 }
 
-function stopVoice() {
-  stopMic()
-  voice.set({ on: false, sessionId: null, error: '' })
-}
-
-function VoiceToggle() {
-  const state = useValue(voice)
-  const label = state.on ? 'Turn voice off' : 'Turn voice on'
+function VoiceToggle({ voice }) {
+  const { status } = useValue(voice.state)
+  const label = status === 'off' ? 'Turn voice on' : 'Turn voice off'
+  const icon = status === 'on' ? icons.Mic : status === 'connecting' ? icons.Loader2 || icons.Mic : icons.MicOff
   return jsx(Tip, {
-    label,
+    label: status === 'connecting' ? 'Voice connecting. Click to stop.' : label,
     children: jsx(Button, {
       variant: 'ghost',
       size: 'icon',
       'aria-label': label,
-      'aria-pressed': state.on,
-      onClick: () => (state.on ? stopVoice() : void startVoice()),
-      children: jsx(state.on ? icons.Mic : icons.MicOff, {})
+      'aria-pressed': status !== 'off',
+      onClick: () => (status === 'off' ? void voice.start() : voice.stop()),
+      children: jsx(icon, {})
     })
   })
 }
@@ -362,11 +642,13 @@ export default {
       ctx.storage.set('prefs', prefs.get())
     }
 
+    const voice = createLiveVoice(ctx, prefs)
+
     ctx.register({
       id: 'toggle',
       area: 'composer.actions',
       order: 10,
-      render: () => jsx(VoiceToggle, {})
+      render: () => jsx(VoiceToggle, { voice })
     })
 
     ctx.registerSettingsPage?.({
@@ -398,6 +680,6 @@ export default {
       }
     })
 
-    ctx.onDispose(stopVoice)
+    ctx.onDispose(voice.dispose)
   }
 }

@@ -408,6 +408,9 @@ class VoiceSession:
             if self.reply_key is None:
                 await self._end_reply(self.reply_id or "")
             return
+        if self.reply_open and self.reply_key is None and key not in self._closed_keys:
+            # The reply the utterance opened ends with no say text: it was all screen text.
+            self.reply_key = key
         running = key == self.reply_key
         self._retire(key)
         if running:

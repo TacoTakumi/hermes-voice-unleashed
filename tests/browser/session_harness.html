@@ -1,0 +1,202 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Voice session harness</title>
+<script>
+// Loads desktop/plugin.js the way the app does: the plugin's bare imports are
+// rewritten to blob: stub modules and the plugin itself is imported from a
+// blob: URL. Here the '@hermes/plugin-sdk' stub hands the plugin a host the
+// test controls: the focused chat's two ids as atoms, request() and notify()
+// that record their calls, and gateway events the test fires. The
+// 'react/jsx-runtime' stub builds plain { type, props } elements, so the test
+// can render the composer toggle and click it without React.
+(async () => {
+  try {
+    // Every atom the plugin or the test makes: get, set, subscribe, listen.
+    const atom = value => {
+      const subs = new Set()
+      return {
+        get: () => value,
+        set(next) {
+          value = next
+          for (const fn of [...subs]) fn(value)
+        },
+        subscribe(fn) {
+          subs.add(fn)
+          fn(value)
+          return () => subs.delete(fn)
+        },
+        listen(fn) {
+          subs.add(fn)
+          return () => subs.delete(fn)
+        }
+      }
+    }
+
+    window.requests = []
+    window.notices = []
+    window.listeners = new Map()
+    const onEvent = (type, listener) => {
+      const set = window.listeners.get(type) || new Set()
+      set.add(listener)
+      window.listeners.set(type, set)
+      return () => set.delete(listener)
+    }
+    const host = {
+      state: {
+        focusedSessionId: atom(null),
+        focusedStoredSessionId: atom(null)
+      },
+      request: async (method, params) => {
+        window.requests.push({ method, params })
+        return { status: 'streaming' }
+      },
+      notify: notice => window.notices.push(notice),
+      notifyError: notice => window.notices.push(notice),
+      onEvent
+    }
+    window.host = host
+
+    const jsx = (type, props) => ({ type, props: props || {} })
+    const named = name => function (props) { return { type: name, props } }
+    const icons = new Proxy({}, { get: (t, k) => named(`icon:${String(k)}`) })
+    window.__sdk = {
+      atom,
+      host,
+      icons,
+      useValue: a => a.get(),
+      Button: named('Button'),
+      Input: named('Input'),
+      ListRow: named('ListRow'),
+      Tip: named('Tip')
+    }
+    window.__jsx = { jsx, jsxs: jsx }
+
+    // Every WebSocket and every getUserMedia call the plugin makes.
+    window.sockets = []
+    const BaseSocket = window.WebSocket
+    window.WebSocket = class extends BaseSocket {
+      constructor(...args) {
+        super(...args)
+        window.sockets.push(this)
+      }
+    }
+    window.mics = []
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+    navigator.mediaDevices.getUserMedia = async constraints => {
+      const stream = await getUserMedia(constraints)
+      window.mics.push({ constraints, stream })
+      return stream
+    }
+    window.contexts = []
+    const BaseContext = window.AudioContext
+    window.AudioContext = class extends BaseContext {
+      constructor(...args) {
+        super(...args)
+        window.contexts.push(this)
+      }
+    }
+
+    const url = '/desktop/plugin.js'
+    const source = await (await fetch(url)).text()
+    const names = {}
+    for (const m of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+      const list = (names[m[2]] ||= new Set())
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split(/\s+as\s+/)[0].trim()
+        if (name) list.add(name)
+      }
+    }
+    const stub =
+      'const stub = new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => "" : stub),' +
+      ' apply: () => stub, construct: () => stub });\n'
+    const globals = { '@hermes/plugin-sdk': '__sdk', 'react/jsx-runtime': '__jsx' }
+    const blobUrl = code => URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
+    const shims = {}
+    for (const [specifier, list] of Object.entries(names)) {
+      const from = globals[specifier]
+      const code = stub + `const real = window.${from || '__none'} || {};\nexport default stub;\n` +
+        [...list].map(n => `export const ${n} = '${n}' in real ? real.${n} : stub;`).join('\n')
+      shims[specifier] = blobUrl(code)
+    }
+    const rewritten = source.replace(/(from\s*)(['"])([^'"]+)\2/g,
+      (whole, pre, quote, spec) => (shims[spec] ? `${pre}${quote}${shims[spec]}${quote}` : whole))
+    const plugin = await import(blobUrl(rewritten))
+    window.plugin = plugin
+
+    // The app's side of one plugin load: a context with storage, the
+    // registrations, tracked event listeners and disposers.
+    window.contributions = []
+    window.disposers = []
+    window.boot = ({ prefs, runtime, stored }) => {
+      host.state.focusedSessionId.set(runtime)
+      host.state.focusedStoredSessionId.set(stored)
+      const store = { prefs }
+      const ctx = {
+        source: 'plugin:voicemanager-live',
+        storage: {
+          get: (key, fallback) => (key in store ? store[key] : fallback),
+          set: (key, value) => { store[key] = value }
+        },
+        register: c => { window.contributions.push(c); return () => {} },
+        registerSettingsPage: () => () => {},
+        onEvent: (type, listener) => {
+          const off = onEvent(type, listener)
+          window.disposers.push(off)
+          return off
+        },
+        onDispose: fn => window.disposers.push(fn),
+        setTimeout: (fn, ms) => {
+          const t = setTimeout(fn, ms)
+          return () => clearTimeout(t)
+        }
+      }
+      plugin.default.register(ctx)
+      return true
+    }
+    window.dispose = () => {
+      for (const fn of window.disposers.splice(0)) fn()
+      return true
+    }
+
+    // The composer toggle, rendered: its button's props.
+    const button = () => {
+      const c = window.contributions.find(x => x.id === 'toggle')
+      let el = c.render()
+      while (el && typeof el.type === 'function' && el.type !== window.__sdk.Button) el = el.type(el.props)
+      // el is the Tip; its child is the button
+      return el.type === window.__sdk.Button ? el : el.props.children
+    }
+    window.toggleView = () => {
+      const b = button()
+      const icon = b.props.children
+      return {
+        pressed: Boolean(b.props['aria-pressed']),
+        label: b.props['aria-label'],
+        icon: icon && typeof icon.type === 'function' ? icon.type({}).type : String(icon && icon.type)
+      }
+    }
+    window.clickToggle = () => {
+      button().props.onClick()
+      return true
+    }
+
+    // A gateway event as the app's event tap hands it to plugins.
+    window.fire = (type, sessionId, payload) => {
+      const event = { type, session_id: sessionId, payload }
+      for (const key of [type, '*']) {
+        for (const listener of window.listeners.get(key) || []) listener(event)
+      }
+      return true
+    }
+    window.submits = () => window.requests.filter(r => r.method === 'prompt.submit')
+    window.harnessReady = true
+  } catch (err) {
+    window.harnessError = String(err && err.stack ? err.stack : err)
+  }
+})()
+</script>
+</head>
+<body></body>
+</html>

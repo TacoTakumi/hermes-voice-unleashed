@@ -174,6 +174,18 @@ async def test_say_end_with_no_text_ends_the_reply(attached, fake_vm):
     assert conn.json_frames("tts_cancel") == []
 
 
+async def test_a_keyed_say_end_with_no_text_ends_the_utterance_reply(attached, adapter):
+    client, conn = attached
+    session = adapter._attached[SESSION_ID]
+    assert session.reply_open
+    await client.ws.send(json.dumps({"type": "say_end", "reply": "screen-only"}))
+    await wait_for(lambda: not session.reply_open)
+    await client.ws.send(json.dumps({"type": "say", "text": "Late text. ", "reply": "screen-only"}))
+    await asyncio.sleep(0.1)
+    assert not session.reply_open
+    assert tts_frames(conn) == []
+
+
 async def test_closing_the_socket_detaches_and_ends_the_voicemanager_session(adapter, fake_vm):
     async with connect(_url(adapter, f"attach={SESSION_ID}")) as ws:
         client = Client(ws)
