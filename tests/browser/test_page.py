@@ -370,3 +370,30 @@ async def test_long_lines_keep_the_page_at_the_screen_width(stack):
         box = await _fills_width(page)
         assert box["scroll"] <= box["width"], (width, box)
         assert box["button"], (width, box)
+
+
+async def test_a_full_activity_area_leaves_room_for_the_log(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 390, "height": 664})
+    await _listening(fake, page)
+    session = sessions[0]
+    bare = await page.evaluate("document.querySelector('header').getBoundingClientRect().height")
+    await session.send_page({"type": "utterance", "text": "do a lot"})
+    await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 40})
+    for i in range(12):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 12")
+    await page.click("#reason-fold")
+    await asyncio.sleep(0.2)
+    box = await page.evaluate("""() => {
+        const m = document.querySelector('main').getBoundingClientRect();
+        const b = document.getElementById('toggle').getBoundingClientRect();
+        return { log: m.height, button: b.top >= 0 && b.bottom <= window.innerHeight };
+    }""")
+    assert box["log"] >= 120, box
+    assert box["button"], box
+    await page.click("#reason-fold")
+    await page.click("#fold")
+    await asyncio.sleep(0.2)
+    folded = await page.evaluate("document.querySelector('header').getBoundingClientRect().height")
+    assert folded <= bare + 120, (bare, folded)  # the time line, the reasoning line and the fold control
