@@ -291,13 +291,14 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     activityEl.hidden = false;
     toolsEl.scrollTop = toolsEl.scrollHeight;
   }
+  const FAILED_WORDS = { error: "failed", timeout: "timed out", blocked: "blocked", cancelled: "cancelled" };
   function toolEnd(f) {
     const li = toolLines.get(f.id);
     if (!li) return;
     toolLines.delete(f.id);
-    const failed = f.status === "error";
+    const failed = f.status && f.status !== "ok" ? (FAILED_WORDS[f.status] || "failed") : "";
     li.className = "tool " + (failed ? "failed" : "done");
-    li.querySelector(".status").textContent = (failed ? "failed " : "") + seconds(f.duration_ms || 0);
+    li.querySelector(".status").textContent = (failed ? failed + " " : "") + seconds(f.duration_ms || 0);
   }
   foldEl.addEventListener("click", () => {
     const open = toolsEl.hidden;

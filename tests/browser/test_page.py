@@ -397,3 +397,16 @@ async def test_a_full_activity_area_leaves_room_for_the_log(stack):
     await asyncio.sleep(0.2)
     folded = await page.evaluate("document.querySelector('header').getBoundingClientRect().height")
     assert folded <= bare + 120, (bare, folded)  # the time line, the reasoning line and the fold control
+
+
+async def test_each_tool_status_shows_its_own_words(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    words = {"error": "failed", "timeout": "timed out", "blocked": "blocked", "cancelled": "cancelled"}
+    for i, status in enumerate(words):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": status})
+        await session.send_page({"type": "tool_end", "id": f"c{i}", "status": status, "duration_ms": 100})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool.failed').length === 4")
+    texts = await page.eval_on_selector_all("#tools .tool .status", "els => els.map(e => e.textContent)")
+    assert [t.split(" 0.1 s")[0] for t in texts] == list(words.values())

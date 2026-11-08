@@ -361,3 +361,16 @@ async def test_reasoning_reaches_the_page_but_not_tts(rig):
     fire(hooks.on_stream_delta, delta="late", kind="reasoning", turn_id="t1", iteration=1, surface=PLATFORM)
     await asyncio.sleep(0.2)
     assert len(page.of("reasoning_delta")) == 1  # the reply is closed
+
+
+async def test_every_tool_status_hermes_reports_reaches_the_page(rig):
+    hooks, conn, page = rig
+    statuses = ["ok", "error", "timeout", "blocked", "cancelled", None, "something-new"]
+    for i, status in enumerate(statuses):
+        deliver(hooks, "pre_tool_call", tool_name="terminal", args={}, tool_call_id=f"c{i}", turn_id="t1",
+                session_id="s1")
+        deliver(hooks, "post_tool_call", tool_name="terminal", args={}, result="", tool_call_id=f"c{i}",
+                turn_id="t1", session_id="s1", duration_ms=1, status=status)
+    await wait_for(lambda: len(page.of("tool_end")) == len(statuses))
+    assert [f["status"] for f in page.of("tool_end")] == [
+        "ok", "error", "timeout", "blocked", "cancelled", "ok", "ok"]

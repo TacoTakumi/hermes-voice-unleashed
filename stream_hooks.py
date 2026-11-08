@@ -103,10 +103,15 @@ def pre_tool_call(tool_name: str = "", args: Any = None, tool_call_id: str = "",
     return None
 
 
+# The statuses Hermes gives a tool call that did not succeed; any other status is ok.
+FAILED_STATUSES = ("error", "timeout", "blocked", "cancelled")
+
+
 def post_tool_call(tool_call_id: str = "", status: Optional[str] = None, duration_ms: int = 0,
                    **_: Any) -> None:
     try:
-        _post(None, "on_tool_end", tool_call_id, "error" if status == "error" else "ok", int(duration_ms or 0))
+        _post(None, "on_tool_end", tool_call_id, status if status in FAILED_STATUSES else "ok",
+              int(duration_ms or 0))
     except Exception:
         logger.debug("tool end for the page failed", exc_info=True)
 
