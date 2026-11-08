@@ -159,6 +159,77 @@ async def test_reply_finishes_when_audio_end_comes_after_the_audio(stack):
                                  timeout=5000)
 
 
+def _is_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+async def _reply_request(conn, page, sessions, utterances, text):
+    """Say one turn and open its reply on the fake VoiceManager; returns the TTS request id."""
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    await conn.send({"type": "turn_end", "text": text, "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.on_reply_delta(reply_id, "t1", 1, "Hi. ")
+    rid = (await wait_for(lambda: conn.json_frames("tts_stream")))[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    return rid
+
+
+async def _start_frame(conn):
+    """The start playback frame, with the mic samples the fake VoiceManager had when it came."""
+    seen = {}
+
+    def check():
+        frames = conn.json_frames("playback")
+        if frames and "sent" not in seen:
+            seen["sent"] = len(conn.audio) // 2
+        return frames or None
+
+    (start, *_) = await wait_for(check, timeout=10)
+    return start, seen["sent"]
+
+
+async def test_playback_frames_carry_the_mic_sample_of_a_reply_played_to_the_end(stack):
+    """The edges are placed on the mic stream: the start near the count of mic samples
+    sent when it went out, the stop one reply length after it."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    rid = await _reply_request(conn, page, sessions, utterances, "hello")
+    for _ in range(5):
+        await conn.send(b"\x10\x00" * 2400)  # 5 x 0.1 s at 24 kHz
+    start, sent_at_start = await _start_frame(conn)
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=10)
+    start, stop = playback[:2]
+    assert (start["event"], stop["event"]) == ("start", "stop")
+    assert _is_count(start["mic_sample"]) and _is_count(stop["mic_sample"])
+    assert abs(start["mic_sample"] - sent_at_start) <= 8000, (start["mic_sample"], sent_at_start)
+    assert stop["reply_sample"] == 12000
+    assert abs((stop["mic_sample"] - start["mic_sample"]) - 0.5 * 16000) <= 8000, (start, stop)
+
+
+async def test_playback_frames_carry_the_mic_sample_of_a_reply_cleared_part_way(stack):
+    """A reply cut by a barge stops where it was cut: the mic span matches the played part."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    rid = await _reply_request(conn, page, sessions, utterances, "hello")
+    for _ in range(10):
+        await conn.send(b"\x10\x00" * 4800)  # 10 x 0.2 s at 24 kHz
+    start, _ = await _start_frame(conn)
+    await asyncio.sleep(0.5)
+    await conn.send({"type": "barge", "request_id": rid, "onset_mic_sample": 0, "mic_sample": 0})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=10)
+    start, stop = playback[:2]
+    assert (start["event"], stop["event"]) == ("start", "stop")
+    assert _is_count(start["mic_sample"]) and _is_count(stop["mic_sample"])
+    assert 0 < stop["reply_sample"] < 48000
+    assert stop["mic_sample"] >= start["mic_sample"]
+    span = stop["mic_sample"] - start["mic_sample"]
+    assert abs(span - stop["reply_sample"] * 16000 / 24000) <= 8000, (start, stop)
+
 
 async def test_the_page_shows_working_while_the_turn_runs_between_spoken_parts(stack):
     """A reply that speaks, then goes quiet while Hermes runs tools, shows Working, not
