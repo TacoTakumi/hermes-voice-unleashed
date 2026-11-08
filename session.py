@@ -423,7 +423,10 @@ class VoiceSession:
 
     async def on_page_frame(self, frame: dict[str, Any]) -> None:
         """A JSON control frame from the page: playback edges of a reply, and for an
-        attached client the reply's text."""
+        attached client the reply's text.
+
+        A playback edge carries the page's ``mic_sample`` when it is a whole number
+        >= 0; otherwise the count of mic samples forwarded so far stands in."""
         if self.attached and frame.get("type") in ("say", "say_end"):
             await self._on_say(frame)
             return
@@ -432,12 +435,15 @@ class VoiceSession:
         request_id = frame.get("request_id")
         if not isinstance(request_id, str) or not request_id:
             return
+        mic_sample = frame.get("mic_sample")
+        if not (isinstance(mic_sample, int) and not isinstance(mic_sample, bool) and mic_sample >= 0):
+            mic_sample = None
         if frame.get("event") == "start":
-            await self.duplex.playback_start(request_id)
+            await self.duplex.playback_start(request_id, mic_sample)
         elif frame.get("event") == "stop":
             reply_sample = frame.get("reply_sample")
             if isinstance(reply_sample, int) and not isinstance(reply_sample, bool) and reply_sample >= 0:
-                await self.duplex.playback_stop(request_id, reply_sample=reply_sample)
+                await self.duplex.playback_stop(request_id, mic_sample, reply_sample=reply_sample)
 
     async def _on_say(self, frame: dict[str, Any]) -> None:
         """Reply text from an attached client.

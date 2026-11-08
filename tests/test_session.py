@@ -211,3 +211,49 @@ async def test_a_second_page_takes_over_and_the_first_is_told_not_to_return(adap
             conns = await fake_vm.wait_connections(2)
             await wait_for(lambda: conns[1].audio)
             assert not conns[1].closed.is_set()
+
+
+async def _speaking_page(adapter, fake_vm, request_id: str, mic_chunks: int = 0):
+    """A ready page with a reply playing: it sent ``mic_chunks`` frames of 160 samples first."""
+    page = await connect(_page_url(adapter, "phone"))
+    assert (await _ready(page))["turn_engine"] == "tyger"
+    (conn,) = await fake_vm.wait_connections(1)
+    for _ in range(mic_chunks):
+        await page.send(b"\x01\x00" * 160)
+    await wait_for(lambda: len(conn.audio) == mic_chunks * 320)
+    await conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+    return page, conn
+
+
+async def test_a_playback_frame_with_mic_sample_passes_it_to_voicemanager(adapter, fake_vm):
+    page, conn = await _speaking_page(adapter, fake_vm, "r1", mic_chunks=2)
+    try:
+        await page.send(json.dumps({"type": "playback", "event": "start", "request_id": "r1",
+                                    "mic_sample": 12345}))
+        await page.send(json.dumps({"type": "playback", "event": "stop", "request_id": "r1",
+                                    "mic_sample": 67890, "reply_sample": 4800}))
+        await wait_for(lambda: len(conn.json_frames("playback")) == 2)
+    finally:
+        await page.close()
+    start, stop = conn.json_frames("playback")
+    assert start == {"type": "playback", "request_id": "r1", "event": "start", "mic_sample": 12345}
+    assert stop == {"type": "playback", "request_id": "r1", "event": "stop", "mic_sample": 67890,
+                    "reply_sample": 4800}
+
+
+@pytest.mark.parametrize("extra", [{}, {"mic_sample": -1}, {"mic_sample": True},
+                                   {"mic_sample": 1.5}, {"mic_sample": "12"}])
+async def test_a_playback_frame_without_a_valid_mic_sample_uses_the_forwarded_count(
+        adapter, fake_vm, extra):
+    page, conn = await _speaking_page(adapter, fake_vm, "r1", mic_chunks=3)
+    try:
+        await page.send(json.dumps({"type": "playback", "event": "start", "request_id": "r1", **extra}))
+        await page.send(json.dumps({"type": "playback", "event": "stop", "request_id": "r1",
+                                    "reply_sample": 2400, **extra}))
+        await wait_for(lambda: len(conn.json_frames("playback")) == 2)
+    finally:
+        await page.close()
+    start, stop = conn.json_frames("playback")
+    assert start["mic_sample"] == 480
+    assert stop["mic_sample"] == 480
+    assert stop["reply_sample"] == 2400
