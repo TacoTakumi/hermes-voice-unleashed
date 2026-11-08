@@ -530,6 +530,13 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // --- server frames ------------------------------------------------------------------
   function onFrame(f) {
     switch (f.type) {
+      case "history":
+        // Every connect gets one, before ready: the log starts over with the spoken lines
+        // of the session the page is on, so a reconnect shows them once.
+        logEl.textContent = "";
+        hermesTurn = null;
+        for (const line of f.lines || []) addTurn(line.role === "user" ? "user" : "hermes", line.text || "");
+        break;
       case "ready":
         retry = 0;
         busy = false;

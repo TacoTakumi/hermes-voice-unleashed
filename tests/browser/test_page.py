@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import math
 import os
 import re
@@ -66,17 +67,20 @@ async def _site(tmp_path, init_script=None):
     pointed at it. ``init_script`` is a script the page runs before its own, to stub a
     browser API. The server answers GET /sessions with three rows and records the query
     of every /ws request (``ws_requests``) and the client of every session list request
-    (``list_requests``)."""
+    (``list_requests``). The frames in ``before_ready`` go to the page on every connect
+    before the session starts, as the plugin sends its connect frames."""
     plugin = sys.modules["voicemanager_live"]
     from voicemanager_live.server import VoiceServer
     from voicemanager_live.session import VoiceSession, client_from_url
 
     async with FakeVoiceManager() as fake:
         site = SimpleNamespace(fake=fake, sessions=[], utterances=[], ws_requests=[], list_requests=[],
-                               rows=_session_rows(int(time.time())))
+                               rows=_session_rows(int(time.time())), before_ready=[])
 
         async def on_client(connection, client_id, **options):
             site.ws_requests.append(parse_qs(urlsplit(connection.request.path).query))
+            for frame in site.before_ready:
+                await connection.send(json.dumps(frame))
 
             async def on_utterance(text, message_id):
                 site.utterances.append((text, message_id))
@@ -209,6 +213,52 @@ async def test_a_reconnect_after_the_chooser_does_not_ask_for_the_session_again(
     assert site.ws_requests[0]["session"] == ["new"]
     assert "session" not in site.ws_requests[1]
     assert site.ws_requests[1]["client"] == ["tablet"]
+
+
+HISTORY_LINES = [
+    {"role": "user", "text": "what should I plant"},
+    {"role": "hermes", "text": "Tomatoes and basil, they like the same bed."},
+    {"role": "user", "text": "when do I sow them"},
+]
+
+# Installed before the connect: how many turns the log held the moment the page showed
+# Listening, so the test can tell the history was drawn before the ready state.
+TURNS_AT_LISTENING = """() => {
+  window.turnsAtListening = null;
+  const state = document.getElementById('state');
+  new MutationObserver(() => {
+    if (state.textContent === 'Listening' && window.turnsAtListening === null)
+      window.turnsAtListening = document.querySelectorAll('#log .turn').length;
+  }).observe(state, { childList: true, characterData: true, subtree: true });
+}"""
+
+
+async def _log_turns(page):
+    return await page.eval_on_selector_all(
+        "#log .turn", "els => els.map(e => [e.className, e.textContent])")
+
+
+async def test_the_history_frame_shows_its_lines_once_per_connect(site):
+    """The history frame draws one turn per line, in order and with the role's style,
+    before the page is Listening. A reconnect gets the same frame and the log shows the
+    lines once, not twice."""
+    page = site.page
+    site.before_ready.append({"type": "history", "session_id": "sid-titled-111", "lines": HISTORY_LINES})
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet&session=sid-titled-111")
+    await page.evaluate(TURNS_AT_LISTENING)
+    await page.click("#toggle")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    expected = [["turn user", "what should I plant"],
+                ["turn hermes", "Tomatoes and basil, they like the same bed."],
+                ["turn user", "when do I sow them"]]
+    assert await _log_turns(page) == expected
+    assert await page.evaluate("window.turnsAtListening") == 3
+    await site.sessions[0].page.close()
+    await wait_for(lambda: len(site.sessions) == 2, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    await asyncio.sleep(0.3)
+    assert await _log_turns(page) == expected
 
 
 async def test_mic_reaches_voicemanager_as_16k_mono_pcm(stack):
