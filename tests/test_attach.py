@@ -440,3 +440,48 @@ async def test_an_attach_id_of_256_characters_is_taken(adapter, fake_vm):
         await wait_for(lambda: client.of("ready"))
         assert adapter.is_attached("a" * 256)
         client.task.cancel()
+
+
+class LaneStore:
+    """The gateway's session store, as far as the attach needs it: every lane is on
+    the one session given."""
+
+    def __init__(self, session_id):
+        self.session_id = session_id
+
+    def peek_session_id(self, session_key):
+        return self.session_id
+
+
+async def test_an_attach_takes_the_session_from_the_page_on_it(adapter, fake_vm, plugin):
+    adapter._session_store = LaneStore(SESSION_ID)
+    async with connect(_url(adapter, "client=phone")) as page_ws:
+        page = Client(page_ws)
+        await wait_for(lambda: page.of("ready"))
+        async with connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
+            client = Client(attach_ws)
+            await wait_for(lambda: client.of("ready"))
+            await wait_for(lambda: page.of("replaced"))
+            await asyncio.wait_for(page_ws.wait_closed(), 3)
+            assert page_ws.close_code == plugin.server.REPLACED_CLOSE_CODE == 4001
+            assert page.of("replaced") == [{"type": "replaced"}]
+            await wait_for(lambda: adapter.session_for("phone") is None)
+            assert adapter.is_attached(SESSION_ID)
+            assert client.of("replaced") == []
+            client.task.cancel()
+        page.task.cancel()
+
+
+async def test_a_page_on_another_session_is_not_replaced_by_an_attach(adapter, fake_vm):
+    adapter._session_store = LaneStore("another")
+    async with connect(_url(adapter, "client=phone")) as page_ws, \
+            connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
+        page, client = Client(page_ws), Client(attach_ws)
+        await wait_for(lambda: page.of("ready") and client.of("ready"))
+        await asyncio.sleep(0.2)
+        assert page.of("replaced") == []
+        assert not page.task.done()
+        assert adapter.session_for("phone") is not None
+        assert adapter.is_attached(SESSION_ID)
+        page.task.cancel()
+        client.task.cancel()

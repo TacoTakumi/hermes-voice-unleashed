@@ -353,3 +353,53 @@ async def test_without_a_session_store_the_history_is_empty(adapter, fake_vm, pl
     history = _one_history_frame_before_ready(page)
     assert history == {"type": "history", "session_id": None, "lines": []}
     assert calls == []
+
+
+async def _attach(adapter, fake_vm, session_id):
+    """A UI client with voice attached to ``session_id``, its ready frame seen."""
+    ws = await connect(_url(adapter, f"attach={session_id}"))
+    client = Page(ws)
+    await wait_for(lambda: client.of("ready"))
+    await wait_for(lambda: adapter.is_attached(session_id))
+    return ws, client
+
+
+async def _replaced(ws, client):
+    """The frames and close code of a client the adapter switched off."""
+    await wait_for(lambda: client.of("replaced"))
+    await asyncio.wait_for(ws.wait_closed(), 3)
+    client.task.cancel()
+    return ws.close_code
+
+
+@pytest.mark.parametrize("query", ["client=tablet", "client=tablet&session=abc"])
+async def test_a_page_connect_takes_the_session_from_the_attached_client(adapter, fake_vm, plugin, query):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    attach_ws, client = await _attach(adapter, fake_vm, "abc")
+    async with connect(_url(adapter, query)) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        assert await _replaced(attach_ws, client) == plugin.server.REPLACED_CLOSE_CODE == 4001
+        assert client.of("replaced") == [{"type": "replaced"}]
+        await wait_for(lambda: not adapter.is_attached("abc"))
+        assert adapter.session_for("tablet") is not None
+        assert page.of("replaced") == []
+        page.task.cancel()
+    _one_history_frame_before_ready(page)
+
+
+async def test_a_client_attached_to_another_session_is_not_replaced_by_a_page_connect(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    attach_ws, client = await _attach(adapter, fake_vm, "other")
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        await asyncio.sleep(0.2)
+        assert client.of("replaced") == []
+        assert not client.task.done()
+        assert adapter.is_attached("other")
+        page.task.cancel()
+    client.task.cancel()
+    await attach_ws.close()
