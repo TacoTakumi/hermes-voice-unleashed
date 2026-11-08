@@ -153,6 +153,39 @@ async def _wait_playback(page, count, timeout=10000):
     return await _playback(page)
 
 
+def _mic_sample(frame):
+    """The frame's mic_sample, checked to be a whole number of mic samples."""
+    value = frame["mic_sample"]
+    assert isinstance(value, int) and not isinstance(value, bool), frame
+    assert value >= 0, frame
+    return value
+
+
+def _without_mic_sample(frames):
+    """The playback frames without mic_sample, after checking each has one."""
+    for frame in frames:
+        _mic_sample(frame)
+    return [{k: v for k, v in f.items() if k != "mic_sample"} for f in frames]
+
+
+async def _playback_with_sent(page):
+    """Each playback frame with the mic samples the harness had sent when it went out."""
+    return await page.evaluate(
+        "window.jsons.map((f, i) => [f, window.sentAt[i]]).filter(([f]) => f.type === 'playback')")
+
+
+def _check_mic_samples(frames_with_sent, played_samples, rate=24000):
+    """The start frame's mic_sample is near the mic samples sent when it went
+    out, and the stop's is after it by the length of the audio heard."""
+    (start, sent_at_start), (stop, _) = frames_with_sent
+    assert start["event"] == "start" and stop["event"] == "stop"
+    start_sample, stop_sample = _mic_sample(start), _mic_sample(stop)
+    assert abs(start_sample - sent_at_start) <= 8000, (start_sample, sent_at_start)
+    heard = played_samples * MIC_RATE / rate
+    assert stop_sample >= start_sample
+    assert abs((stop_sample - start_sample) - heard) <= 8000, (start_sample, stop_sample, heard)
+
+
 async def _send_reply(page, request_id, samples, chunk=4800, rate=24000, end=True):
     """audio_start, the reply's PCM in chunks, and audio_end, as the server sends them."""
     await page.evaluate(
@@ -189,13 +222,49 @@ async def test_a_reply_plays_and_reports_its_playback_edges(page):
     await _start(page)
     await _send_reply(page, "r1", 12000)  # 0.5 s at 24 kHz
     playback = await _wait_playback(page, 2)
-    assert playback == [
+    assert _without_mic_sample(playback) == [
         {"type": "playback", "event": "start", "request_id": "r1"},
         {"type": "playback", "event": "stop", "request_id": "r1", "reply_sample": 12000},
     ]
     assert await page.evaluate("window.sources.length") == 3
     assert await page.evaluate("window.sources.every(s => s.endedAt !== null)")
     assert await page.evaluate("window.speaking") == [True, False]
+
+
+async def test_playback_frames_place_the_reply_on_the_mic_stream_with_mic_sample(page):
+    """Both edges carry mic_sample: the start near the mic samples sent when
+    the reply was first heard, the stop later by the length of the reply."""
+    await _start(page)
+    await _send_reply(page, "r1", 12000)  # 0.5 s at 24 kHz
+    await _wait_playback(page, 2)
+    _check_mic_samples(await _playback_with_sent(page), 12000)
+
+
+async def test_a_cleared_reply_reports_mic_sample_for_the_part_heard(page):
+    await _start(page)
+    await _send_reply(page, "r1", 48000, end=False)  # 2 s
+    await _wait_playback(page, 1)
+    await page.wait_for_timeout(300)
+    await page.evaluate("window.audio.onJson({ type: 'clear', request_id: 'r1' })")
+    frames = await _playback_with_sent(page)
+    assert len(frames) == 2
+    stop = frames[1][0]
+    assert 0 < stop["reply_sample"] < 48000
+    _check_mic_samples(frames, stop["reply_sample"])
+
+
+async def test_mic_sample_holds_without_the_latency_apis(page):
+    """With no output timestamp, no output latency and no track latency the
+    edges are mapped through the context clock alone."""
+    await page.evaluate("""() => {
+      AudioContext.prototype.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 })
+      Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => undefined, configurable: true })
+      MediaStreamTrack.prototype.getSettings = () => ({})
+    }""")
+    await _start(page)
+    await _send_reply(page, "r1", 12000)
+    await _wait_playback(page, 2)
+    _check_mic_samples(await _playback_with_sent(page), 12000)
 
 
 async def test_a_reply_finishes_when_audio_end_comes_after_the_audio(page):
@@ -206,7 +275,8 @@ async def test_a_reply_finishes_when_audio_end_comes_after_the_audio(page):
     assert len(await _playback(page)) == 1  # played out, but the reply is not over yet
     await page.evaluate("window.audio.onJson({ type: 'audio_end', request_id: 'r1', reason: 'complete' })")
     playback = await _wait_playback(page, 2, timeout=2000)
-    assert playback[1] == {"type": "playback", "event": "stop", "request_id": "r1", "reply_sample": 4800}
+    assert _without_mic_sample(playback)[1] == {
+        "type": "playback", "event": "stop", "request_id": "r1", "reply_sample": 4800}
 
 
 async def test_clear_stops_all_scheduled_playback_at_once(page):
@@ -268,7 +338,7 @@ async def test_a_reply_that_starts_while_one_plays_is_queued_behind_it(page):
     await _wait_playback(page, 1)
     await _send_reply(page, "r2", 12000)  # 0.5 s
     playback = await _wait_playback(page, 4, timeout=5000)
-    assert playback == [
+    assert _without_mic_sample(playback) == [
         {"type": "playback", "event": "start", "request_id": "r1"},
         {"type": "playback", "event": "stop", "request_id": "r1", "reply_sample": 24000},
         {"type": "playback", "event": "start", "request_id": "r2"},

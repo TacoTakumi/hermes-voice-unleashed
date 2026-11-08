@@ -74,13 +74,19 @@
     window.bins = []
     window.jsons = []
     window.jsonTimes = [] // when each JSON frame was sent, on the page clock
+    window.micSamples = 0 // 16 kHz mic samples sent so far
+    window.sentAt = [] // micSamples when each JSON frame was sent
     window.speaking = []
     window.makeAudio = () => {
       window.audio = plugin.createVoiceAudio({
-        sendBinary: buf => window.bins.push(buf),
+        sendBinary: buf => {
+          window.bins.push(buf)
+          window.micSamples += buf.byteLength / 2
+        },
         sendJson: frame => {
           window.jsons.push(frame)
           window.jsonTimes.push(performance.now())
+          window.sentAt.push(window.micSamples)
         },
         onSpeaking: on => window.speaking.push(on)
       })

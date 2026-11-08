@@ -132,6 +132,34 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
   let replies = [] // queued in play order; replies[0] is the one heard
   let intake = null
   let speaking = false
+  // Each playback frame carries mic_sample: the index on the mic stream sent
+  // on this connection where the edge reached the speaker. The mic samples
+  // sent so far are counted, and each sent frame anchors that count to the
+  // page clock at the moment the sound entered the mic. The edge's speaker
+  // time on the page clock is then mapped onto the count through the anchor.
+  let micSent = 0 // 16 kHz samples sent since start()
+  let micAnchor = null // { count, time }: micSent when a frame went out, and its capture time
+  let captureLatencyMs = 0
+
+  // The page clock time (performance.now() ms) at which a playCtx time is heard.
+  function speakerTime(t) {
+    const ctx = playCtx
+    if (!ctx) return performance.now()
+    if (typeof ctx.getOutputTimestamp === 'function') {
+      const ts = ctx.getOutputTimestamp()
+      if (ts && ts.contextTime > 0 && ts.performanceTime > 0) {
+        return ts.performanceTime + (t - ts.contextTime) * 1000
+      }
+    }
+    const latency = ctx.outputLatency ?? ctx.baseLatency ?? 0
+    return performance.now() + (t - ctx.currentTime + latency) * 1000
+  }
+
+  // The mic sample index at a page clock time.
+  function micSampleAt(perfMs) {
+    if (!micAnchor) return micSent
+    return Math.max(0, Math.round(micAnchor.count + (perfMs - micAnchor.time) / 1000 * MIC_RATE))
+  }
 
   function replyBegin(id, rate) {
     if (!playCtx) return
@@ -187,7 +215,8 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     const r = replies[0]
     if (!r || !r.due || r.started) return
     r.started = true
-    sendJson({ type: 'playback', event: 'start', request_id: r.id })
+    r.startSample = micSampleAt(speakerTime(r.first))
+    sendJson({ type: 'playback', event: 'start', request_id: r.id, mic_sample: r.startSample })
     syncSpeaking()
   }
 
@@ -203,7 +232,13 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     r.stopped = true
     replies = replies.filter(x => x !== r)
     if (intake === r) intake = null
-    if (r.started) sendJson({ type: 'playback', event: 'stop', request_id: r.id, reply_sample: played })
+    if (r.started) {
+      // The edge is the end of the last sample heard: the reply's end when it
+      // played out, now when it was cut.
+      const edge = played >= r.samples || !playCtx ? r.first + r.samples / r.rate : playCtx.currentTime
+      const micSample = Math.max(r.startSample, micSampleAt(speakerTime(edge)))
+      sendJson({ type: 'playback', event: 'stop', request_id: r.id, reply_sample: played, mic_sample: micSample })
+    }
     replyAudible()
     syncSpeaking()
   }
@@ -264,6 +299,8 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     release()
     const mine = ++run
     stream = mediaStream
+    micSent = 0
+    micAnchor = null
     const play = (playCtx = new AudioContext())
     let ctx = null
     let source
@@ -288,9 +325,21 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
       URL.revokeObjectURL(url)
     }
     if (mine !== run) return
+    // How long the mic's sound takes to reach the page: the track's own
+    // latency when it says, else the capture context's.
+    let trackLatency
+    try {
+      trackLatency = mediaStream.getAudioTracks()[0]?.getSettings?.().latency
+    } catch {
+      trackLatency = undefined
+    }
+    captureLatencyMs = (typeof trackLatency === 'number' ? trackLatency : ctx.baseLatency || 0) * 1000
     const node = new AudioWorkletNode(ctx, 'mic-16k')
     node.port.onmessage = event => {
-      if (mine === run) sendBinary(event.data.pcm)
+      if (mine !== run) return
+      sendBinary(event.data.pcm)
+      micSent += event.data.pcm.byteLength / 2
+      micAnchor = { count: micSent, time: performance.now() - captureLatencyMs }
     }
     source.connect(node)
     const sink = ctx.createGain()
