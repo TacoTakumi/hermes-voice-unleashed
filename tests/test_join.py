@@ -4,6 +4,9 @@ The owner is the platform's slash admin, and a connect with ``session=<id>``
 sends ``/resume <id> --all`` through the adapter's own message path before the
 page is ready. The gateway's reply to that command stays off the page, and a
 session that could not be joined closes the connection with its own code.
+
+After the join step, every connect gets one history frame with the spoken
+lines of the session the lane is on, before the ready frame.
 """
 
 from __future__ import annotations
@@ -103,7 +106,9 @@ async def test_a_connect_with_a_session_sends_resume_before_the_page_is_ready(ad
     assert event.source.platform == adapter.platform
     # The ready frame follows the VoiceManager connection, which did not exist yet.
     assert adapter.vm_connections_at_dispatch == [0]
-    assert adapter._session_store.peeked == [adapter._source_session_key(adapter._voice_source("tablet"))]
+    # The join check and the history step each read the lane's key.
+    lane_key = adapter._source_session_key(adapter._voice_source("tablet"))
+    assert adapter._session_store.peeked == [lane_key, lane_key]
 
 
 async def test_a_connect_without_a_session_sends_no_command(adapter, fake_vm):
@@ -159,3 +164,131 @@ def test_a_configured_admin_list_is_kept(plugin):
     config = _config(allow_admin_from=["alice"])
     plugin.adapter.VoiceLiveAdapter(config)
     assert config.extra["allow_admin_from"] == ["alice"]
+
+
+class FakeDB:
+    """The state DB as far as the history read needs it: ``get_messages`` returns the rows
+    it was given, and records each session asked for."""
+
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.asked = []
+
+    def get_messages(self, session_id, limit=None, offset=0, latest=True):
+        self.asked.append(session_id)
+        return self.rows[offset:offset + limit] if limit else self.rows[offset:]
+
+
+def _with_db(adapter, db):
+    """The runner's state DB sits behind an async facade; the adapter unwraps it."""
+    adapter.gateway_runner = SimpleNamespace(session_store=adapter._session_store,
+                                             _session_db=SimpleNamespace(_db=db))
+
+
+def _record_history_lines(plugin, monkeypatch, lines):
+    """Replace the module's history reader with one that records its arguments."""
+    calls = []
+
+    def fake_history_lines(db, session_id, limit=40):
+        calls.append((db, session_id))
+        return lines
+
+    monkeypatch.setattr(plugin.sessions, "history_lines", fake_history_lines)
+    return calls
+
+
+def _one_history_frame_before_ready(page):
+    (history,) = page.of("history")
+    kinds = [f.get("type") for f in page.frames]
+    assert kinds.index("history") < kinds.index("ready")
+    return history
+
+
+LINES = [{"role": "user", "text": "hello"}, {"role": "hermes", "text": "hi there"}]
+
+
+async def test_a_plain_connect_gets_the_history_of_the_lanes_session_before_ready(adapter, fake_vm, plugin, monkeypatch):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB()
+    _with_db(adapter, db)
+    calls = _record_history_lines(plugin, monkeypatch, LINES)
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": "abc", "lines": LINES}
+    assert calls == [(db, "abc")]
+    assert adapter.messages == []
+
+
+async def test_a_session_connect_gets_the_history_of_the_joined_session_before_ready(adapter, fake_vm, plugin, monkeypatch):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB()
+    _with_db(adapter, db)
+    calls = _record_history_lines(plugin, monkeypatch, LINES)
+    async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": "abc", "lines": LINES}
+    assert calls == [(db, "abc")]
+    assert [m.text for m in adapter.messages] == ["/resume abc --all"]
+
+
+async def test_a_new_session_connect_gets_an_empty_history_before_ready(adapter, fake_vm):
+    adapter._session_store = FakeStore("fresh")
+    db = FakeDB()  # the new session has no rows
+    _with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet&session=new")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": "fresh", "lines": []}
+    assert db.asked == ["fresh"]
+    assert not any(m.text.startswith("/resume") for m in adapter.messages)
+
+
+async def test_the_history_lines_come_from_the_stored_rows(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB([
+        {"role": "user", "content": "hello"},
+        {"role": "tool", "content": "ignored"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi there"}]},
+    ])
+    _with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    history = _one_history_frame_before_ready(page)
+    assert history["lines"] == LINES
+
+
+async def test_a_failed_history_read_sends_an_empty_history_and_the_page_still_connects(adapter, fake_vm, plugin, monkeypatch):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+
+    def broken(db, session_id, limit=40):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(plugin.sessions, "history_lines", broken)
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": "abc", "lines": []}
+
+
+async def test_without_a_session_store_the_history_is_empty(adapter, fake_vm, plugin, monkeypatch):
+    calls = _record_history_lines(plugin, monkeypatch, LINES)
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": None, "lines": []}
+    assert calls == []

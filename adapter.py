@@ -253,20 +253,15 @@ class VoiceLiveAdapter(BasePlatformAdapter):
     def session_for(self, chat_id: str) -> Optional[VoiceSession]:
         return self._sessions.get(chat_id)
 
-    def _session_rows(self, client_id: str) -> list[dict[str, Any]]:
-        """The session list for the page's chat ``client_id``: the profile's sessions
-        from the runner's state DB, the one its lane is on marked as current.
+    @contextlib.contextmanager
+    def _session_db(self):
+        """The state DB to read sessions from, for the duration of the block.
 
-        The runner keeps the DB behind an async facade; the reader wants the plain
+        The runner keeps the DB behind an async facade; the readers want the plain
         SessionDB under it. A runner without a DB (or no runner, as in a test)
-        gets the profile's state DB opened read-only for this one answer.
+        gets the profile's state DB opened read-only for this one block.
         """
         runner = getattr(self, "gateway_runner", None)
-        store = getattr(runner, "session_store", None) or getattr(self, "_session_store", None)
-        if store is None:
-            logger.warning("voice page: no session store yet, the session list is empty")
-            return []
-        lane_key = self._source_session_key(self._voice_source(client_id))
         try:
             db = getattr(runner, "_session_db", None)
         except Exception:
@@ -274,16 +269,53 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             db = None
         db = getattr(db, "_db", db)
         if db is not None:
-            return sessions.session_rows(store, db, lane_key)
+            yield db
+            return
         fallback = SessionDB(read_only=True)
         try:
-            return sessions.session_rows(store, fallback, lane_key)
+            yield fallback
         finally:
             fallback.close()
 
+    def _session_rows(self, client_id: str) -> list[dict[str, Any]]:
+        """The session list for the page's chat ``client_id``: the profile's sessions
+        from the runner's state DB, the one its lane is on marked as current."""
+        runner = getattr(self, "gateway_runner", None)
+        store = getattr(runner, "session_store", None) or getattr(self, "_session_store", None)
+        if store is None:
+            logger.warning("voice page: no session store yet, the session list is empty")
+            return []
+        lane_key = self._source_session_key(self._voice_source(client_id))
+        with self._session_db() as db:
+            return sessions.session_rows(store, db, lane_key)
+
+    def _history_lines(self, session_id: str) -> list[dict[str, Any]]:
+        """The spoken lines of the session ``session_id`` from the state DB."""
+        with self._session_db() as db:
+            return sessions.history_lines(db, session_id)
+
+    async def _send_history(self, client_id: str) -> None:
+        """Send the page the history frame: the session its lane is on and that
+        session's spoken lines. A session the lane does not have yet, or a read that
+        fails, gives an empty history; the connect goes on either way."""
+        session_id = self.lane_session_id(client_id)
+        lines: list[dict[str, Any]] = []
+        if session_id:
+            try:
+                # SQLite reads block; keep them off the event loop.
+                lines = await asyncio.to_thread(self._history_lines, session_id)
+            except Exception:
+                logger.warning("voice page %s: cannot read the history of session %s",
+                               client_id, session_id, exc_info=True)
+                lines = []
+        await self._send_json(client_id, {"type": "history", "session_id": session_id, "lines": lines})
+
     async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
-        if session and not await self._join_session(connection, client_id, session):
+        # session=new asks for a fresh session, not a join; the history is of
+        # whatever session the lane is on once the connect steps are done.
+        if session and session != "new" and not await self._join_session(connection, client_id, session):
             return
+        await self._send_history(client_id)
         session = self._new_session(connection, client_id)
         self._sessions[client_id] = session
         try:
