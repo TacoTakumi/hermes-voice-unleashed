@@ -210,6 +210,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 
   let ws = null, micCtx = null, micStream = null, micNode = null, playCtx = null;
   let running = false, muted = false, retry = 0, wakeLock = null;
+  let ending = false; // the session ended: the notice plays out, then the chooser
   // Mic samples sent on this connection, and when the last frame of them was captured.
   let micSent = 0, micAnchor = null;
   let moved = false; // the voice moved to another page: the button leads back to the sessions
@@ -236,13 +237,13 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     return li;
   }
   function listening() {
-    if (!running) return;
+    if (!running || ending) return;
     show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : "Say something.");
   }
   // What the page shows when nobody is talking: Hermes speaking, Hermes still at work, or
   // waiting for the user.
   function status() {
-    if (!running) return;
+    if (!running || ending) return;
     if (reply && reply.audible) show("Speaking", "hermes", "Talk over it to stop it.");
     else if (busy) show("Working", "hermes", muted ? "Hermes is still working." : "Hermes is still working. Speaking now stops it.");
     else listening();
@@ -602,16 +603,19 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         handOver();
         break;
       case "session_end":
-        // The user ended the session by voice. The server closes the connection once
-        // its notice has played; the page is done with it now.
-        leave();
+        // The user ended the session by voice. The server closes the connection next;
+        // the page is done with it, once the notice still queued has played.
+        endSession();
         break;
       case "session_new":
-        // The user asked for a new session by voice. The connection stays open until
-        // the page closes it; the next one asks for a new session, the mic stays on.
-        disconnect();
-        sessionChoice = "new";
-        connect();
+        // The user asked for a new session by voice. The server moved this connection
+        // onto a fresh session itself; its history frame comes next and starts the log
+        // over. The turn that was running belonged to the old session.
+        busy = false;
+        turnAbort();
+        hermesTurn = null;
+        transcriptEl.textContent = "";
+        status();
         break;
       case "join_failed":
         // The session the page asked for could not be joined; the server closes next.
@@ -764,18 +768,26 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     draw();
   }
 
+  // The mic and its context go. The worklet stops with the context: on a stopped track
+  // alone it would go on sending frames of silence.
+  function micOff() {
+    if (micStream) for (const track of micStream.getTracks()) track.stop();
+    micStream = micNode = null;
+    if (micCtx) micCtx.close().catch(() => {});
+    micCtx = null;
+  }
   // The reverse of start: the socket, the mic, its contexts and the wake lock go; the
   // button offers a start again. The drawing loop ends on its own once running is off.
   function stop() {
     running = false;
+    ending = false;
     moved = false;
     disconnect();
     retry = 0;
     muted = false;
-    if (micStream) for (const track of micStream.getTracks()) track.stop();
-    micStream = micNode = null;
-    for (const ctx of [micCtx, playCtx]) if (ctx) ctx.close().catch(() => {});
-    micCtx = playCtx = null;
+    micOff();
+    if (playCtx) playCtx.close().catch(() => {});
+    playCtx = null;
     if (wakeLock) Promise.resolve(wakeLock.release()).catch(() => {});
     wakeLock = null;
     level = speakingLevel = 0;
@@ -792,6 +804,25 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     activityEl.hidden = true;
     showChooser(detail);
   }
+  // The session ended by voice. The mic goes at once and the socket no longer counts:
+  // the server closes it next, and that close must not reconnect. The reply context
+  // stays up until the notice queued on it has played (capped, should the clock stall),
+  // then the page leaves.
+  const END_DRAIN_CAP_MS = 5000;
+  function endSession() {
+    if (ending) return;
+    ending = true;
+    if (ws) ws.onopen = ws.onmessage = ws.onclose = null;
+    micOff();
+    busy = false;
+    turnAbort();
+    show("Session ended", "none", "");
+    const since = performance.now();
+    const drained = () => !reply || !playCtx || playCtx.currentTime >= reply.next
+      || performance.now() - since > END_DRAIN_CAP_MS;
+    const tick = () => { if (drained()) leave(); else setTimeout(tick, 50); };
+    tick();
+  }
 
   // Another page (this profile's voice on another device or tab) took the voice. The server
   // closed this page's socket, or will next; the mic and the wake lock go. The page does not
@@ -804,6 +835,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   }
 
   toggle.addEventListener("click", () => {
+    if (ending) return;
     if (moved) { leave(); return; }
     if (!running) { start(); return; }
     muted = !muted;

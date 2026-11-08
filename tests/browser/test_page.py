@@ -331,6 +331,14 @@ STATES_SEEN = """() => {
 
 MIC_TRACK_STATES = "window.micStreams.flatMap(s => s.getAudioTracks().map(t => t.readyState))"
 
+# With the mic streams and wake locks: how many audio contexts the page closed so far.
+# The page keeps one for the mic and one for the replies.
+MIC_WAKE_LOCK_AND_CONTEXTS = MIC_AND_WAKE_LOCK + """
+window.contextCloses = 0;
+const realClose = AudioContext.prototype.close;
+AudioContext.prototype.close = function () { window.contextCloses += 1; return realClose.call(this); };
+"""
+
 
 async def _listening_from_the_chooser(site):
     page = site.page
@@ -345,14 +353,46 @@ async def _listening_from_the_chooser(site):
     await page.evaluate(STATES_SEEN)
 
 
-@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
-async def test_a_session_end_frame_stops_the_page_and_shows_the_chooser_again(site):
-    """The user ended the session by voice. The page lets go of the mic and the wake lock,
-    closes its socket for good and offers the sessions again, freshly listed."""
+NOTICE_SECONDS = 1.5  # the spoken notice the server sends before its session_end frame
+
+
+async def _notice_to_the_page(session, request_id, seconds=NOTICE_SECONDS):
+    """The audio of a spoken notice, as the plugin forwards it: audio_start, the PCM in
+    0.2 s chunks at 24 kHz, audio_end. The page queues it all for playback."""
+    await session.send_page({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+    tone = b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 300 * i / 24000)))
+                    for i in range(int(seconds * 24000)))
+    for start in range(0, len(tone), 9600):
+        await session.page.send(tone[start:start + 9600])
+    await session.send_page({"type": "audio_end", "request_id": request_id, "reason": "complete"})
+
+
+@pytest.mark.parametrize("site", [MIC_WAKE_LOCK_AND_CONTEXTS], indirect=True)
+async def test_a_session_end_frame_stops_the_mic_at_once_and_shows_the_chooser_once_the_notice_played(site):
+    """The user ended the session by voice. The server speaks its notice, sends the
+    session_end frame once the notice's audio has all gone out, then closes. The page
+    stops the mic the moment the frame comes, lets the queued notice play to its end,
+    and only then closes its socket, lets go of the wake lock and offers the sessions
+    again, freshly listed. The server's close does not make it reconnect."""
     page = site.page
     await _listening_from_the_chooser(site)
-    await site.sessions[0].send_page({"type": "session_end"})
-    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    session = site.sessions[0]
+    await _notice_to_the_page(session, "notice-1")
+    await page.wait_for_function("document.getElementById('state').textContent === 'Speaking'", timeout=5000)
+    sent_at = time.monotonic()
+    await session.send_page({"type": "session_end"})
+    await session.page.close()  # as the server does right after the frame
+    await page.wait_for_function(f"{MIC_TRACK_STATES}.every(s => s === 'ended')", timeout=2000)
+    mic_off_at = time.monotonic()
+    assert mic_off_at - sent_at < 1.0, mic_off_at - sent_at
+    assert await page.is_hidden("#chooser")
+    assert await page.text_content("#state") == "Session ended"
+    assert await page.evaluate("window.contextCloses") == 1  # the mic context; the replies still play
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=8000)
+    chooser_at = time.monotonic()
+    drained = chooser_at - sent_at
+    assert NOTICE_SECONDS - 0.5 <= drained < 4.0, drained  # the notice played out; the cap did not hit
+    assert await page.evaluate("window.contextCloses") == 2  # now the reply context too
     await wait_for(lambda: len(site.ended) == 1, timeout=10)
     await wait_for(lambda: len(site.list_requests) == 2, timeout=5)
     await asyncio.sleep(1.0)  # long enough for a first reconnect try
@@ -364,30 +404,44 @@ async def test_a_session_end_frame_stops_the_page_and_shows_the_chooser_again(si
     assert len(site.ws_requests) == 1  # no reconnect
     states = await page.evaluate("window.statesSeen")
     assert "Reconnecting" not in states and "Voice moved to another device" not in states, states
+    assert "Listening" not in states[states.index("Session ended"):], states  # nothing undid the end
     await _chooser_rows(page)
 
 
 @pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
-async def test_a_session_new_frame_reconnects_with_session_new(site):
-    """The user asked for a new session by voice. The page closes its socket itself and
-    opens a new one asking for a new session; the mic stays on and the hand-over path
-    (another page took over) stays quiet."""
+async def test_a_session_new_frame_keeps_the_socket_and_starts_the_log_over(site):
+    """The user asked for a new session by voice. The server moves the connection onto
+    a fresh session itself and sends session_new, then that session's (empty) history.
+    The page keeps its socket, the mic and the wake lock, shows the empty log and
+    Listening, and goes on with the next utterance on the same connection."""
     page = site.page
     await _listening_from_the_chooser(site)
-    await site.sessions[0].send_page({"type": "session_new"})
-    await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
-    await wait_for(lambda: len(site.ended) == 1, timeout=10)
-    await site.fake.wait_connections(2, timeout=10)
-    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
-    assert site.ws_requests[1]["session"] == ["new"]
-    assert "client" not in site.ws_requests[1]
-    assert site.ended[0] is site.sessions[0]
+    session = site.sessions[0]
+    await session.send_page({"type": "utterance", "text": "end of the old session"})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Thinking'", timeout=5000)
+    assert await _log_turns(page) == [["turn user", "end of the old session"]]
+    await session.send_page({"type": "session_new", "session_id": "fresh"})
+    await session.send_page({"type": "history", "session_id": "fresh", "lines": []})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=5000)
+    await page.wait_for_function("document.querySelectorAll('#log .turn').length === 0", timeout=5000)
+    await asyncio.sleep(1.0)  # long enough for a reconnect, had the page tried one
+    assert len(site.ws_requests) == 1 and len(site.sessions) == 1 and site.ended == []
+    assert len(site.fake.connections) == 1
+    assert await page.text_content("#state") == "Listening"
+    assert await _log_turns(page) == []
+    assert await page.text_content("#transcript") == ""
+    assert await page.is_hidden("#elapsed")
     assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
     assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 0}
     assert await page.text_content("#toggle") == "Mute microphone"
     assert await page.is_hidden("#chooser")
+    assert await page.evaluate("!document.getElementById('log').hidden")  # empty, so not visible to Playwright
+    await session.send_page({"type": "utterance", "text": "first words of the new one"})
+    await page.wait_for_function("document.querySelectorAll('#log .turn').length === 1", timeout=5000)
+    assert await _log_turns(page) == [["turn user", "first words of the new one"]]
     states = await page.evaluate("window.statesSeen")
     assert "Voice moved to another device" not in states and "Reconnecting" not in states, states
+    assert "Connecting" not in states and "Sessions" not in states, states
     assert site.list_requests == ["phone"]
 
 
