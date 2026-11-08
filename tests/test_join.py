@@ -150,6 +150,80 @@ async def test_a_session_that_was_not_joined_is_refused_with_its_own_close_code(
     assert fake_vm.connections == []
 
 
+class FakeDB:
+    """The profile's state DB, as far as the connect steps need it: the stored message
+    count per session (else the number of rows given), ``get_messages`` returning the
+    rows it was given, and a record of the sessions counted and read."""
+
+    def __init__(self, counts=None, rows=()):
+        self.counts = counts
+        self.rows = list(rows)
+        self.counted = []  # sessions whose message count was asked for
+        self.asked = []  # sessions whose messages were read
+
+    def message_count(self, session_id):
+        self.counted.append(session_id)
+        if self.counts is None:
+            return len(self.rows)
+        return self.counts[session_id]
+
+    def get_messages(self, session_id, limit=None, offset=0, latest=True):
+        self.asked.append(session_id)
+        return self.rows[offset:offset + limit] if limit else self.rows[offset:]
+
+
+def _runner_with_db(adapter, db):
+    """A gateway runner that holds the DB behind an async facade, as the real one does."""
+    adapter.gateway_runner = SimpleNamespace(_session_db=SimpleNamespace(_db=db))
+
+
+async def test_a_connect_with_session_new_sends_new_when_the_lanes_session_has_messages(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 3})
+    _runner_with_db(adapter, db)
+    adapter.gateway_reply = "New session started."
+    async with connect(_url(adapter, "client=tablet&session=new")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/new"]
+    (event,) = adapter.messages
+    assert event.source.chat_id == "tablet"
+    assert db.counted == ["abc"]
+    assert adapter.vm_connections_at_dispatch == [0]
+    assert page.of("reply") == []
+    assert page.of("join_failed") == []
+
+
+async def test_a_connect_with_session_new_sends_nothing_when_the_lanes_session_is_empty(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 0})
+    _runner_with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet&session=new")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert adapter.messages == []
+    assert db.counted == ["abc"]
+    assert adapter._session_store.session_id == "abc"
+    lane_key = adapter._source_session_key(adapter._voice_source("tablet"))
+    assert adapter._session_store.peeked == [lane_key, lane_key]  # the new-session step, then the history
+    assert page.of("join_failed") == []
+
+
+async def test_a_connect_with_session_new_sends_nothing_when_the_lane_has_no_session(adapter, fake_vm):
+    adapter._session_store = FakeStore(None)
+    db = FakeDB({})
+    _runner_with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet&session=new")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert adapter.messages == []
+    assert db.counted == []
+    assert page.of("join_failed") == []
+
+
 def test_the_owner_is_the_slash_admin_without_configuration(plugin):
     config = _config()
     adapter = plugin.adapter.VoiceLiveAdapter(config)
@@ -164,19 +238,6 @@ def test_a_configured_admin_list_is_kept(plugin):
     config = _config(allow_admin_from=["alice"])
     plugin.adapter.VoiceLiveAdapter(config)
     assert config.extra["allow_admin_from"] == ["alice"]
-
-
-class FakeDB:
-    """The state DB as far as the history read needs it: ``get_messages`` returns the rows
-    it was given, and records each session asked for."""
-
-    def __init__(self, rows=()):
-        self.rows = list(rows)
-        self.asked = []
-
-    def get_messages(self, session_id, limit=None, offset=0, latest=True):
-        self.asked.append(session_id)
-        return self.rows[offset:offset + limit] if limit else self.rows[offset:]
 
 
 def _with_db(adapter, db):
@@ -253,7 +314,7 @@ async def test_a_new_session_connect_gets_an_empty_history_before_ready(adapter,
 
 async def test_the_history_lines_come_from_the_stored_rows(adapter, fake_vm):
     adapter._session_store = FakeStore("abc")
-    db = FakeDB([
+    db = FakeDB(rows=[
         {"role": "user", "content": "hello"},
         {"role": "tool", "content": "ignored"},
         {"role": "assistant", "content": [{"type": "text", "text": "hi there"}]},

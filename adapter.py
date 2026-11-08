@@ -310,10 +310,32 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 lines = []
         await self._send_json(client_id, {"type": "history", "session_id": session_id, "lines": lines})
 
+    async def _start_new_session(self, client_id: str) -> None:
+        """Move the lane ``client_id`` onto a fresh session with /new, unless the one it
+        is on is empty already: a session without a stored message is as good as new,
+        and sending /new would only stack up empty sessions. A lane with no session yet
+        gets its first one from its first utterance. The command's reply stays off the
+        page, like /resume's."""
+        session_id = self.lane_session_id(client_id)
+        if session_id is None:
+            return
+        try:
+            with self._session_db() as db:
+                count = int(db.message_count(session_id))
+        except Exception:
+            # The user asked for a new session; without a count, /new is the safe side.
+            logger.warning("voice page %s: cannot count the messages of session %s, sending /new",
+                           client_id, session_id, exc_info=True)
+            count = 1
+        if count > 0:
+            await self.send_command(client_id, "/new")
+
     async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
         # session=new asks for a fresh session, not a join; the history is of
         # whatever session the lane is on once the connect steps are done.
-        if session and session != "new" and not await self._join_session(connection, client_id, session):
+        if session == "new":
+            await self._start_new_session(client_id)
+        elif session and not await self._join_session(connection, client_id, session):
             return
         await self._send_history(client_id)
         session = self._new_session(connection, client_id)
