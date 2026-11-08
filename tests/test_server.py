@@ -146,7 +146,7 @@ def test_gateway_tool_progress_is_off_by_default_for_the_voice_platform(plugin, 
 # GET /sessions: the session list the page shows, answered from a callback the adapter supplies.
 
 ROWS = [{"id": "abc123", "title": None, "preview": "hello there", "last_active": 1_700_000_000.0,
-         "message_count": 2, "source": "voicemanager_live", "current": True}]
+         "message_count": 2, "source": "voicemanager_live", "current": True, "voice_attached": False}]
 
 
 @pytest.fixture
@@ -229,11 +229,27 @@ def test_adapter_sessions_callback_reads_the_runners_store_and_db(plugin, monkey
         return [{"id": "x"}]
 
     monkeypatch.setattr(plugin.sessions, "session_rows", fake_rows)
-    assert adapter._session_rows("tablet") == [{"id": "x"}]
+    assert adapter._session_rows("tablet") == [{"id": "x", "voice_attached": False}]
     assert seen["store"] is store
     assert seen["db"] is db
     assert seen["lane_key"] == adapter._source_session_key(adapter._voice_source("tablet"))
     assert seen["lane_key"] != adapter._source_session_key(adapter._voice_source("phone"))
+
+
+def test_adapter_sessions_callback_marks_the_row_whose_session_has_voice_attached(plugin, monkeypatch):
+    """One voice device per session: the row of a session a UI client has voice
+    attached to carries voice_attached true, every other row false."""
+    adapter = plugin.adapter.VoiceLiveAdapter(_config())
+    adapter.gateway_runner = SimpleNamespace(session_store=object(), _session_db=SimpleNamespace(_db=object()))
+    adapter._attached["b"] = object()
+
+    def fake_rows(store_, db_, lane_key, limit=20):
+        return [{"id": "a", "current": True}, {"id": "b", "current": False}, {"id": "c", "current": False}]
+
+    monkeypatch.setattr(plugin.sessions, "session_rows", fake_rows)
+    rows = adapter._session_rows("tablet")
+    assert [(row["id"], row["voice_attached"]) for row in rows] == [("a", False), ("b", True), ("c", False)]
+    assert rows[0]["current"] is True  # the other fields stay as the reader gave them
 
 
 def test_adapter_sessions_callback_opens_the_state_db_read_only_without_a_runner_db(plugin, monkeypatch):

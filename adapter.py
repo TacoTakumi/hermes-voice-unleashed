@@ -279,7 +279,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     def _session_rows(self, client_id: str) -> list[dict[str, Any]]:
         """The session list for the page's chat ``client_id``: the profile's sessions
-        from the runner's state DB, the one its lane is on marked as current."""
+        from the runner's state DB, the one its lane is on marked as current, and the
+        one a UI client has voice attached to marked ``voice_attached``."""
         runner = getattr(self, "gateway_runner", None)
         store = getattr(runner, "session_store", None) or getattr(self, "_session_store", None)
         if store is None:
@@ -287,7 +288,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             return []
         lane_key = self._source_session_key(self._voice_source(client_id))
         with self._session_db() as db:
-            return sessions.session_rows(store, db, lane_key)
+            rows = sessions.session_rows(store, db, lane_key)
+        # A compacted chain is one row whose id is its live tip, the id a client attaches to.
+        for row in rows:
+            row["voice_attached"] = row.get("id") in self._attached
+        return rows
 
     def _history_lines(self, session_id: str) -> list[dict[str, Any]]:
         """The spoken lines of the session ``session_id`` from the state DB."""
