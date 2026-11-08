@@ -31,15 +31,17 @@ TONE_HZ = 440
 
 
 def _session_rows(now):
-    """What GET /sessions answers: a titled session, one with a preview only (the lane's
-    current one) and one with neither."""
+    """What GET /sessions answers: a titled session (the one a UI client has voice attached
+    to), one with a preview only (the one the lane is on) and one with neither."""
     return [
         {"id": "sid-titled-111", "title": "Garden plans", "preview": "what should I plant",
-         "last_active": now - 300, "message_count": 12, "source": "telegram", "current": False},
+         "last_active": now - 300, "message_count": 12, "source": "telegram", "current": False,
+         "voice_attached": True},
         {"id": "sid-untitled-222", "title": None, "preview": "remind me about the dentist",
-         "last_active": now - 7200, "message_count": 1, "source": "voicemanager_live", "current": True},
+         "last_active": now - 7200, "message_count": 1, "source": "voicemanager_live", "current": True,
+         "voice_attached": False},
         {"id": "sid-bare-333", "title": None, "preview": "", "last_active": now - 3 * 86400,
-         "message_count": 0, "source": "cli", "current": False},
+         "message_count": 0, "source": "cli", "current": False, "voice_attached": False},
     ]
 
 
@@ -67,7 +69,8 @@ async def _site(tmp_path, init_script=None):
     pointed at it. ``init_script`` is a script the page runs before its own, to stub a
     browser API. The server answers GET /sessions with three rows and records the query
     of every /ws request (``ws_requests``) and the client of every session list request
-    (``list_requests``). The frames in ``before_ready`` go to the page on every connect
+    (``list_requests``); the page records the URL of every HTTP request it makes
+    (``http_requests``). The frames in ``before_ready`` go to the page on every connect
     before the session starts, as the plugin sends its connect frames. With
     ``join_failed_message`` set, a connect gets a join_failed frame with that message and
     the join-failed close instead of a session. A session whose page connection is gone
@@ -78,7 +81,8 @@ async def _site(tmp_path, init_script=None):
 
     async with FakeVoiceManager() as fake:
         site = SimpleNamespace(fake=fake, sessions=[], ended=[], utterances=[], ws_requests=[], list_requests=[],
-                               rows=_session_rows(int(time.time())), before_ready=[], join_failed_message=None)
+                               http_requests=[], rows=_session_rows(int(time.time())), before_ready=[],
+                               join_failed_message=None)
 
         async def on_client(connection, client_id, **options):
             site.ws_requests.append(parse_qs(urlsplit(connection.request.path).query))
@@ -114,6 +118,7 @@ async def _site(tmp_path, init_script=None):
                 args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
                       f"--use-file-for-fake-audio-capture={wav}", "--autoplay-policy=no-user-gesture-required"])
             site.page = await browser.new_page(viewport={"width": 390, "height": 760})
+            site.page.on("request", lambda request: site.http_requests.append(request.url))
             if init_script:
                 await site.page.add_init_script(init_script)
             try:
@@ -129,7 +134,7 @@ async def stack(tmp_path, request):
     """The page, started in a new session from the chooser, on a VoiceServer in front of
     a fake VoiceManager. An indirect parameter is the init script of ``_site``."""
     async with _site(tmp_path, getattr(request, "param", None)) as site:
-        await site.page.goto(f"{site.url}/?token={TOKEN}&client=phone")
+        await site.page.goto(f"{site.url}/?token={TOKEN}")
         await site.page.click("#new")
         yield site.fake, site.page, site.sessions, site.utterances
 
@@ -147,12 +152,21 @@ async def _chooser_rows(page):
     return await page.eval_on_selector_all("#sessions .session", "els => els.map(e => e.textContent)")
 
 
+def _list_queries(site):
+    """The query of every session list request the page made."""
+    return [parse_qs(urlsplit(url).query) for url in site.http_requests if urlsplit(url).path == "/sessions"]
+
+
 async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
+    """The page has one voice: the session list is asked for without a client lane, no
+    row is marked current, and the row a UI client has voice attached to says so."""
     page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await page.goto(f"{site.url}/?token={TOKEN}")
     texts = await _chooser_rows(page)
     assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
-    assert site.list_requests == ["tablet"]
+    assert site.list_requests == ["phone"]  # the server's default lane: the page named none
+    (query,) = _list_queries(site)
+    assert query["token"] == [TOKEN] and "client" not in query
     assert await page.evaluate(
         "document.getElementById('new').compareDocumentPosition(document.getElementById('sessions'))"
         " & Node.DOCUMENT_POSITION_FOLLOWING")
@@ -165,40 +179,56 @@ async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
     assert "5 min ago" in titled and "12 lines" in titled and "telegram" in titled
     assert "2 h ago" in preview and "1 line" in preview and "1 lines" not in preview and "voicemanager_live" in preview
     assert "3 days ago" in bare and "0 lines" in bare and "cli" in bare
-    current = await page.eval_on_selector_all("#sessions .session", "els => els.map(e => !!e.querySelector('[aria-current=\"true\"]'))")
-    assert current == [False, True, False]
-    assert "Current" in preview and "Current" not in titled and "Current" not in bare
+    assert await page.locator("#sessions [aria-current]").count() == 0
+    assert "Current" not in await page.text_content("#chooser")
+    voice = await page.eval_on_selector_all("#sessions .session", "els => els.map(e => e.querySelector('.voice')?.textContent ?? null)")
+    assert voice == ["Voice on Desktop", None, None]
+    assert "Voice on Desktop" in titled and "Voice on Desktop" not in preview and "Voice on Desktop" not in bare
     for text in texts:
         for row in site.rows:
             assert row["id"] not in text, (row["id"], text)
 
 
-async def test_tapping_a_chooser_row_connects_with_that_session_and_the_lane(site):
+async def test_tapping_a_chooser_row_connects_with_that_session_and_no_client(site):
     page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     await page.click("#sessions .session:nth-child(2) button")
     await site.fake.wait_connections(1, timeout=10)
     assert site.ws_requests[0]["session"] == ["sid-untitled-222"]
-    assert site.ws_requests[0]["client"] == ["tablet"]
+    assert "client" not in site.ws_requests[0]
     assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
 
 
 async def test_tapping_new_in_the_chooser_connects_with_session_new(site):
     page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     await page.click("#new")
     await site.fake.wait_connections(1, timeout=10)
     assert site.ws_requests[0]["session"] == ["new"]
-    assert site.ws_requests[0]["client"] == ["tablet"]
+    assert "client" not in site.ws_requests[0]
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+
+
+async def test_a_client_in_the_page_url_is_not_sent_on_from_the_chooser(site):
+    """The page has one voice per profile: a leftover client parameter in its URL is
+    not read and reaches neither the session list nor the connection."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await _chooser_rows(page)
+    assert site.list_requests == ["phone"]
+    (query,) = _list_queries(site)
+    assert "client" not in query
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    assert "client" not in site.ws_requests[0]
 
 
 async def test_a_session_in_the_page_url_skips_the_chooser(site):
     page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet&session=sid-titled-111")
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
     await asyncio.sleep(0.3)
     assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
     assert await page.text_content("#state") == "Tap to start"
@@ -206,7 +236,7 @@ async def test_a_session_in_the_page_url_skips_the_chooser(site):
     await page.click("#toggle")
     await site.fake.wait_connections(1, timeout=10)
     assert site.ws_requests[0]["session"] == ["sid-titled-111"]
-    assert site.ws_requests[0]["client"] == ["tablet"]
+    assert "client" not in site.ws_requests[0]
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
 
 
@@ -214,7 +244,7 @@ async def test_a_reconnect_after_the_chooser_does_not_ask_for_the_session_again(
     """The choice is sent once. A reconnect stays on the session the lane is on: asking
     for a new session again would open another one each time."""
     page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
+    await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     await page.click("#new")
     await site.fake.wait_connections(1, timeout=10)
@@ -223,7 +253,7 @@ async def test_a_reconnect_after_the_chooser_does_not_ask_for_the_session_again(
     await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
     assert site.ws_requests[0]["session"] == ["new"]
     assert "session" not in site.ws_requests[1]
-    assert site.ws_requests[1]["client"] == ["tablet"]
+    assert "client" not in site.ws_requests[1]
 
 
 HISTORY_LINES = [
@@ -255,7 +285,7 @@ async def test_the_history_frame_shows_its_lines_once_per_connect(site):
     lines once, not twice."""
     page = site.page
     site.before_ready.append({"type": "history", "session_id": "sid-titled-111", "lines": HISTORY_LINES})
-    await page.goto(f"{site.url}/?token={TOKEN}&client=tablet&session=sid-titled-111")
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
     await page.evaluate(TURNS_AT_LISTENING)
     await page.click("#toggle")
     await site.fake.wait_connections(1, timeout=10)
@@ -304,7 +334,7 @@ MIC_TRACK_STATES = "window.micStreams.flatMap(s => s.getAudioTracks().map(t => t
 
 async def _listening_from_the_chooser(site):
     page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&client=phone")
+    await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     await page.click("#new")
     await site.fake.wait_connections(1, timeout=10)
@@ -333,7 +363,7 @@ async def test_a_session_end_frame_stops_the_page_and_shows_the_chooser_again(si
     assert site.list_requests == ["phone", "phone"]
     assert len(site.ws_requests) == 1  # no reconnect
     states = await page.evaluate("window.statesSeen")
-    assert "Reconnecting" not in states and "In use on another device" not in states, states
+    assert "Reconnecting" not in states and "Voice moved to another device" not in states, states
     await _chooser_rows(page)
 
 
@@ -350,14 +380,14 @@ async def test_a_session_new_frame_reconnects_with_session_new(site):
     await site.fake.wait_connections(2, timeout=10)
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
     assert site.ws_requests[1]["session"] == ["new"]
-    assert site.ws_requests[1]["client"] == ["phone"]
+    assert "client" not in site.ws_requests[1]
     assert site.ended[0] is site.sessions[0]
     assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
     assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 0}
     assert await page.text_content("#toggle") == "Mute microphone"
     assert await page.is_hidden("#chooser")
     states = await page.evaluate("window.statesSeen")
-    assert "In use on another device" not in states and "Reconnecting" not in states, states
+    assert "Voice moved to another device" not in states and "Reconnecting" not in states, states
     assert site.list_requests == ["phone"]
 
 
@@ -367,7 +397,7 @@ async def test_a_join_failed_frame_shows_the_chooser_with_the_message(site):
     with its own code. The page shows the chooser with the message and does not reconnect."""
     page = site.page
     site.join_failed_message = "could not join session sid-titled-111: no such session"
-    await page.goto(f"{site.url}/?token={TOKEN}&client=phone&session=sid-titled-111")
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
     await page.evaluate(STATES_SEEN)
     await page.click("#toggle")
     await wait_for(lambda: len(site.ws_requests) == 1, timeout=10)
@@ -383,8 +413,67 @@ async def test_a_join_failed_frame_shows_the_chooser_with_the_message(site):
     assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
     assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
     states = await page.evaluate("window.statesSeen")
-    assert "Reconnecting" not in states and "In use on another device" not in states, states
+    assert "Reconnecting" not in states and "Voice moved to another device" not in states, states
     await _chooser_rows(page)
+
+
+MOVED = "document.getElementById('state').textContent === 'Voice moved to another device'"
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_replaced_page_shows_voice_moved_and_its_sessions_button_returns_to_the_chooser(site):
+    """A second page connects for the same profile and the server replaces the first: a
+    replaced frame, then the replaced close. The first page lets go of the mic and the wake
+    lock, shows that the voice moved, does not reconnect or offer to take the voice back,
+    and its one button returns to the chooser."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    import websockets
+    async with websockets.connect(f"{site.url.replace('http', 'ws')}/ws?token={TOKEN}") as other:
+        await page.wait_for_function(MOVED, timeout=5000)
+        await site.fake.wait_connections(2, timeout=5)  # the page's own session, then the other page's
+        await wait_for(lambda: len(site.ended) == 1, timeout=10)
+        await asyncio.sleep(2.0)  # long enough for a first reconnect try
+        assert len(site.ws_requests) == 2  # the page's connect and the other page's: no reconnect
+        assert len(site.fake.connections) == 2
+        assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+        assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
+        assert await page.is_visible("#toggle") and await page.is_hidden("#chooser")
+        assert await page.text_content("#toggle") == "Sessions"
+        assert "Use here" not in await page.text_content("body")
+        detail = await page.text_content("#detail")
+        assert "another device" in detail and "Sessions" in detail
+        await page.click("#toggle")
+        await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+        await wait_for(lambda: len(site.list_requests) == 2, timeout=5)
+        assert await page.text_content("#state") == "Sessions"
+        assert await page.is_hidden("#toggle")
+        await _chooser_rows(page)
+        await asyncio.sleep(0.5)
+        assert len(site.ws_requests) == 2 and len(site.fake.connections) == 2
+        assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+        assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
+        assert other.state.name == "OPEN"  # the other page keeps the voice
+        states = await page.evaluate("window.statesSeen")
+        assert "Reconnecting" not in states and "Listening" not in states, states
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_replaced_frame_alone_shows_voice_moved_and_closes_the_socket(site):
+    """The replaced frame on its own, before the server's close: the page shuts its socket,
+    the mic and the wake lock, and shows that the voice moved."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    await site.sessions[0].send_page({"type": "replaced"})
+    await page.wait_for_function(MOVED, timeout=5000)
+    await wait_for(lambda: len(site.ended) == 1, timeout=10)
+    await asyncio.sleep(1.5)  # long enough for a first reconnect try
+    assert len(site.ws_requests) == 1
+    assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
+    assert await page.text_content("#toggle") == "Sessions"
+    states = await page.evaluate("window.statesSeen")
+    assert "Reconnecting" not in states, states
 
 
 async def test_mic_reaches_voicemanager_as_16k_mono_pcm(stack):
@@ -697,35 +786,6 @@ async def test_gateway_messages_never_replace_the_streamed_reply(stack):
     assert texts == ["Let me check.", "web_search: weather today", "It is sunny."]
 
 
-async def test_a_replaced_page_stops_reconnecting_until_used_here(stack):
-    fake, page, sessions, utterances = stack
-    await fake.wait_connections(1, timeout=10)
-    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
-                                 timeout=10000)
-    import websockets
-    port = page.url.split(":")[2].split("/")[0]
-    async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={TOKEN}&client=phone") as other:
-        await page.wait_for_function(
-            "document.getElementById('state').textContent === 'In use on another device'", timeout=5000)
-        await fake.wait_connections(2, timeout=5)  # the page's own session, then the new client's
-        await asyncio.sleep(2.0)
-        assert len(fake.connections) == 2  # the replaced page did not come back by itself
-        assert await page.text_content("#toggle") == "Use here"
-        await page.click("#toggle")
-        await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
-                                     timeout=10000)
-        frames = []
-        try:
-            async with asyncio.timeout(5):
-                async for message in other:
-                    if isinstance(message, str):
-                        frames.append(message)
-        except websockets.exceptions.ConnectionClosed as closed:
-            assert closed.rcvd.code == 4001
-        assert any('"replaced"' in f for f in frames)
-    assert await page.text_content("#toggle") == "Mute microphone"
-
-
 async def _listening(fake, page):
     (conn,) = await fake.wait_connections(1, timeout=10)
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
@@ -938,15 +998,14 @@ async def test_a_reconnect_ends_the_turn_on_the_page(stack):
     await _turn_was_ended(page)
 
 
-async def test_a_replaced_page_ends_its_turn_on_reconnect(stack):
+async def test_a_replaced_page_ends_its_turn_on_the_moved_screen(stack):
     fake, page, sessions, utterances = stack
     await _listening(fake, page)
     await _turn_in_flight(sessions[0], page)
     import websockets
     port = page.url.split(":")[2].split("/")[0]
-    async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={TOKEN}&client=phone"):
-        await page.wait_for_function(
-            "document.getElementById('state').textContent === 'In use on another device'", timeout=5000)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={TOKEN}"):
+        await page.wait_for_function(MOVED, timeout=5000)
         await _turn_was_ended(page)
 
 

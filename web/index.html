@@ -111,8 +111,7 @@ button.row {
 }
 button.row .name { flex: 1 0 100%; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.row .meta { color: var(--muted); font-size: 14px; }
-button.row .current { color: var(--you); font-size: 14px; font-weight: 700; margin-left: auto; }
-button.row[aria-current="true"] { box-shadow: inset 0 0 0 2px var(--you); }
+button.row .voice { color: var(--hermes); font-size: 14px; font-weight: 700; margin-left: auto; }
 footer[hidden] { display: none; }
 .turn { max-width: 34rem; overflow-wrap: anywhere; white-space: pre-wrap; }
 .turn.user { align-self: flex-end; text-align: right; color: var(--you); }
@@ -190,14 +189,13 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 (() => {
   const params = new URLSearchParams(location.search);
   const token = params.get("token") || "";
-  const clientId = params.get("client") || "phone";
   const browserAec = params.get("aec") !== "0";
   // The Hermes session the next connect asks for: an id, "new", or null for the one the
   // lane is on. A page opened with ?session=<id> asks for that one and skips the chooser.
   let sessionChoice = params.get("session") || null;
   const MIC_RATE = 16000;
-  // The server's close codes: another page took the conversation over; the session the
-  // page asked for could not be joined.
+  // The server's close codes: another page took the voice; the session the page asked
+  // for could not be joined.
   const REPLACED_CLOSE = 4001, JOIN_FAILED_CLOSE = 4002;
 
   const $ = (id) => document.getElementById(id);
@@ -214,7 +212,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   let running = false, muted = false, retry = 0, wakeLock = null;
   // Mic samples sent on this connection, and when the last frame of them was captured.
   let micSent = 0, micAnchor = null;
-  let replaced = false; // another page took this conversation over: do not reconnect
+  let moved = false; // the voice moved to another page: the button leads back to the sessions
   let level = 0, speakingLevel = 0;
   let hermesTurn = null; // the <li> the current reply's text goes into
   let busy = false; // a Hermes turn runs: from its utterance until turn_done
@@ -625,7 +623,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // --- connection ------------------------------------------------------------------
   function connect() {
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    let url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`;
+    // One voice per profile: the page names no client lane, so a second page replaces the first.
+    let url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}`;
     if (sessionChoice) url += `&session=${encodeURIComponent(sessionChoice)}`;
     show("Connecting", "none", "");
     ws = new WebSocket(url);
@@ -647,11 +646,11 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       busy = false;
       turnAbort();
       replyClear(null);
-      if (ev.code === REPLACED_CLOSE) handOver();
-      // The join_failed frame came before this close and already did the work; this
-      // covers a close without it.
+      // The replaced and join_failed frames come before these closes and already did the
+      // work; this covers a close without its frame.
+      if (ev.code === REPLACED_CLOSE) { handOver(); return; }
       if (ev.code === JOIN_FAILED_CLOSE) { leave("The session could not be joined."); return; }
-      if (!running || replaced) return;
+      if (!running) return;
       const wait = Math.min(10000, 500 * 2 ** retry++);
       show("Reconnecting", "alert", `Trying again in ${Math.round(wait / 1000) || 1} s.`);
       setTimeout(() => { if (running) connect(); }, wait);
@@ -769,6 +768,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // button offers a start again. The drawing loop ends on its own once running is off.
   function stop() {
     running = false;
+    moved = false;
     disconnect();
     retry = 0;
     muted = false;
@@ -793,25 +793,19 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     showChooser(detail);
   }
 
-  // Another page (this conversation on another device or tab) took over. Stay off until
-  // the user takes it back here; that page is then the one that steps aside.
+  // Another page (this profile's voice on another device or tab) took the voice. The server
+  // closed this page's socket, or will next; the mic and the wake lock go. The page does not
+  // take the voice back; its one button leads to the sessions.
   function handOver() {
-    replaced = true;
-    show("In use on another device", "alert", "This conversation moved to another page. Tap Use here to take it back.");
-    toggle.textContent = "Use here";
-    toggle.setAttribute("aria-pressed", "false");
+    stop();
+    moved = true;
+    show("Voice moved to another device", "alert", "The voice is on another device now. Tap Sessions to pick one here.");
+    toggle.textContent = "Sessions";
   }
 
   toggle.addEventListener("click", () => {
+    if (moved) { leave(); return; }
     if (!running) { start(); return; }
-    if (replaced) {
-      replaced = false;
-      retry = 0;
-      muted = false;
-      toggle.textContent = "Mute microphone";
-      connect();
-      return;
-    }
     muted = !muted;
     if (muted) micAnchor = null; // after unmuting, the next sent frame anchors the count again
     toggle.setAttribute("aria-pressed", String(muted));
@@ -822,7 +816,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // --- the chooser: New session first, then the lane's sessions ---------------------
   // Shown on load when the page URL names no session. A row shows the session's title,
   // else its preview, else when it was last active; never its id, which stays in the
-  // row's click handler. The tap on a row or on New is the gesture that starts the audio.
+  // row's click handler. A row whose session has voice on a UI client (the Desktop or the
+  // Webapp) says so. The tap on a row or on New is the gesture that starts the audio.
   function ago(epoch) {
     if (!epoch) return "";
     const s = Math.max(0, Date.now() / 1000 - epoch);
@@ -848,10 +843,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     const n = row.message_count || 0;
     const meta = [ago(row.last_active), n === 1 ? "1 line" : n + " lines", row.source].filter(Boolean);
     button.append(part("meta", meta.join(", ")));
-    if (row.current) {
-      button.setAttribute("aria-current", "true");
-      button.append(part("current", "Current"));
-    }
+    if (row.voice_attached) button.append(part("voice", "Voice on Desktop"));
     button.addEventListener("click", () => choose(row.id));
     li.appendChild(button);
     return li;
@@ -863,7 +855,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     show("Sessions", "none", detail || "Tap one to go on with it, or start a new one.");
     let rows;
     try {
-      const res = await fetch(`/sessions?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`);
+      const res = await fetch(`/sessions?token=${encodeURIComponent(token)}`);
       if (!res.ok) throw new Error(String(res.status));
       rows = await res.json();
     } catch (e) {
