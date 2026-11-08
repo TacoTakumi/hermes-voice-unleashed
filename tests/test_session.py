@@ -97,6 +97,9 @@ async def test_unreachable_voicemanager_tells_the_page(plugin):
     assert await adapter.connect()
     try:
         async with connect(_page_url(adapter, "phone")) as page:
+            # Every connect starts with the history frame; the error comes after it.
+            frame = json.loads(await asyncio.wait_for(page.recv(), 3))
+            assert frame["type"] == "history"
             frame = json.loads(await asyncio.wait_for(page.recv(), 3))
     finally:
         await adapter.disconnect()
