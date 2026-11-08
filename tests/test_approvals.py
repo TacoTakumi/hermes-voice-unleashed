@@ -185,6 +185,17 @@ async def test_a_notice_is_spoken_at_once_through_the_running_reply(rig):
     assert not any(f["done"] for f in frames)  # the reply goes on
 
 
+async def test_a_notice_does_not_run_into_the_word_the_reply_holds(rig):
+    reply_id = await _reply_in_progress(rig)
+    await rig.session.on_reply_delta(reply_id, "t1", 1, "that.")  # no space: the word waits
+    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
+    await wait_for(lambda: rig.tts_text().endswith("Say yes or no."))
+    chunks = [f["text"] for f in rig.conn.json_frames("tts_stream")]
+    assert "that." in chunks  # sent on its own, before the notice
+    assert all(not c.startswith("that.Approval") for c in chunks)
+    assert rig.tts_text() == "Let me check. that.Approval needed to run: ls. Say yes or no."
+
+
 async def test_a_notice_with_no_reply_open_is_still_spoken(rig):
     assert not rig.session.reply_open
     await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")

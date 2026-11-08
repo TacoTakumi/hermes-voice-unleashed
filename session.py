@@ -348,7 +348,11 @@ class VoiceSession:
     async def speak_notice(self, text: str) -> None:
         """Speak ``text`` now, through the running reply's TTS request or a new one.
 
-        All of it goes to TTS at once, so nothing waits for more text."""
+        All of it goes to TTS at once, so nothing waits for more text. A word the
+        reply still holds (its last delta ended without a space) goes first, as
+        its own chunk, so it is not run together with the notice."""
+        held, self._unsent = self._unsent, ""
+        await self._send_tts(held)
         await self._speak(text)
         rest, self._unsent = self._unsent, ""
         await self._send_tts(rest)
