@@ -35,11 +35,12 @@ entry names next to its pinned commit.
   server sends a `turn_done` frame to the page when the turn and its reply
   audio are over.
 - An activity panel on the voice page shows each tool call of the turn: the
-  tool, a short form of its arguments, and running, done or failed with its
-  time. It holds about six lines, scrolls, and folds with "Hide tools". The
-  server sends `tool_start` and `tool_end` frames from Hermes's tool hooks, and
-  the gateway's own tool progress messages are off for this platform by
-  default.
+  tool, a short form of its arguments, and its state with its time: running,
+  done, failed, timed out, blocked or cancelled. A call still running when the
+  connection drops shows "stopped". The panel holds about six lines, follows
+  the newest one unless you scroll it, and folds with "Hide tools". The server
+  sends `tool_start` and `tool_end` frames from Hermes's tool hooks, and the
+  gateway's own tool progress messages are off for this platform by default.
 - A reasoning line on the voice page shows the newest sentence of the model's
   reasoning while it thinks, the whole text on a tap, and "Reasoned for m:ss"
   when the turn ends. It needs `plugins.stream_reasoning_deltas: true`; the
