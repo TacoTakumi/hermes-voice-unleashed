@@ -79,6 +79,7 @@ button.fold {
   line-height: 1.6;
 }
 .tool { display: flex; gap: 8px; white-space: nowrap; }
+.tool[hidden] { display: none; } /* the display above would override the hidden attribute */
 .tool .name { color: var(--paper); font-weight: 700; }
 .tool .summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .tool .status { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -304,6 +305,12 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         const open = button.getAttribute("aria-expanded") !== "true";
         button.setAttribute("aria-expanded", String(open));
         for (const line of lines) line.hidden = !open;
+        if (open) {
+          // Show the opened lines from their summary line; stop following the end until
+          // the next tool line.
+          toolsAtEnd = false;
+          toolsEl.scrollTop += li.getBoundingClientRect().top - toolsEl.getBoundingClientRect().top;
+        }
       });
       li.appendChild(button);
       toolsEl.insertBefore(li, lines[0]);

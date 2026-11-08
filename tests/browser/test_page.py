@@ -575,3 +575,33 @@ async def test_the_header_stays_where_the_user_scrolled_it(stack):
     await asyncio.sleep(0.3)
     assert await page.evaluate("document.querySelector('header').scrollTop") == 0
     assert await page.evaluate("window.scrollY") == 0
+
+
+async def test_folded_tool_lines_take_no_room_and_open_at_their_summary(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "many steps"})
+    for i in range(10):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+        await session.send_page({"type": "tool_end", "id": f"c{i}", "status": "ok", "duration_ms": 5})
+    await session.send_page({"type": "turn_done"})
+    await page.wait_for_selector("#tools .group")
+    await asyncio.sleep(0.2)
+    drawn = "[...document.querySelectorAll('#tools .tool')].map(li => li.getBoundingClientRect().height)"
+    assert all(h == 0 for h in await page.evaluate(drawn))
+    await page.evaluate("document.querySelector('#tools .group button').click()")
+    await asyncio.sleep(0.3)
+    assert all(h > 0 for h in await page.evaluate(drawn))
+    view = await page.evaluate("""() => {
+        const t = document.getElementById('tools').getBoundingClientRect();
+        const b = document.querySelector('#tools .group button').getBoundingClientRect();
+        const list = document.getElementById('tools');
+        return { inView: b.top >= t.top - 1 && b.bottom <= t.bottom + 1,
+                 atEnd: list.scrollTop + list.clientHeight >= list.scrollHeight - 4 };
+    }""")
+    assert view["inView"] and not view["atEnd"], view
+    await session.send_page({"type": "tool_start", "id": "n1", "name": "read_file", "summary": "next"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 11")
+    await asyncio.sleep(0.2)
+    assert await _newest_tool_in_view(page)
