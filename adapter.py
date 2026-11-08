@@ -25,7 +25,7 @@ from gateway.run_busy import approval_input_words
 from tools.approval import has_blocking_approval
 
 from . import stream_hooks
-from .server import VoiceServer
+from .server import JOIN_FAILED_CLOSE_CODE, VoiceServer
 from .session import VoiceSession, client_from_url
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,10 @@ DEFAULT_HOST, DEFAULT_PORT = "127.0.0.1", 8765
 # same ones the gateway's run loop accepts.
 APPROVAL_INPUT_KEYS = ("approve", "deny", "always", "session")
 COMMAND_SPOKEN_CHARS = 80  # a longer command is cut to this many characters, "..." included
+# How long a command the plugin sent on a lane's behalf may take to be answered. The
+# gateway handles a slash command in a background task, so its reply comes through
+# send() after handle_message returned; without a reply the lane's session is checked.
+COMMAND_REPLY_TIMEOUT_S = 15.0
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -87,6 +91,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         # Hermes session id -> the voice session of the UI client attached to it. Kept
         # apart from the pages, so the stream hooks and send() never reach one.
         self._attached: dict[str, VoiceSession] = {}
+        # chat_id -> the gateway's reply to a command the plugin sent on that lane. While
+        # one is pending, send() for the lane resolves it instead of showing a reply frame.
+        self._pending_replies: dict[str, asyncio.Future] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
@@ -125,10 +132,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             self._server = None
         self._clients.clear()
 
-    async def _on_client(self, connection, client_id: str) -> None:
+    async def _on_client(self, connection, client_id: str, **options) -> None:
+        """A page connected; ``options`` are the server's connect options (``session``)."""
         self._clients[client_id] = connection
         try:
-            await self._run_client(connection, client_id)
+            await self._run_client(connection, client_id, **options)
         finally:
             if self._clients.get(client_id) is connection:
                 del self._clients[client_id]
@@ -186,10 +194,67 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             text=text, message_type=MessageType.VOICE, source=source,
             message_id=message_id, timestamp=datetime.datetime.now()))
 
+    async def send_command(self, chat_id: str, text: str) -> Optional[str]:
+        """Send the slash command ``text`` on the lane ``chat_id`` as if the page had said it,
+        and return the gateway's reply, which stays off the page. None when no reply came
+        in time."""
+        loop = asyncio.get_running_loop()
+        reply: asyncio.Future = loop.create_future()
+        self._pending_replies[chat_id] = reply
+        try:
+            await self.handle_message(MessageEvent(
+                text=text, message_type=MessageType.TEXT, source=self._voice_source(chat_id),
+                message_id=uuid.uuid4().hex, timestamp=datetime.datetime.now()))
+            async with asyncio.timeout(COMMAND_REPLY_TIMEOUT_S):
+                return await reply
+        except TimeoutError:
+            logger.warning("voice page %s: no reply to %r", chat_id, text)
+            return None
+        finally:
+            if self._pending_replies.get(chat_id) is reply:
+                del self._pending_replies[chat_id]
+
+    def _gateway_session_store(self):
+        """The gateway's session store: the one set on this adapter, else the runner's."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            runner = getattr(self._message_handler, "__self__", None)
+            store = getattr(runner, "session_store", None)
+        return store
+
+    def lane_session_id(self, chat_id: str) -> Optional[str]:
+        """The Hermes session the lane ``chat_id`` points at, None when unknown."""
+        store = self._gateway_session_store()
+        if store is None:
+            return None
+        return store.peek_session_id(self._source_session_key(self._voice_source(chat_id)))
+
+    async def _join_session(self, connection, client_id: str, session_id: str) -> bool:
+        """Move the lane ``client_id`` onto the Hermes session ``session_id`` with /resume.
+
+        The command goes through the gateway's slash dispatch like any message of the
+        lane, so the lane's session key moves. When the key does not point at the
+        session afterwards, the page is told and the connection is closed with a code
+        of its own, so the page does not reconnect into a conversation it did not ask
+        for."""
+        reply = await self.send_command(client_id, f"/resume {session_id} --all")
+        if self.lane_session_id(client_id) == session_id:
+            return True
+        message = f"could not join session {session_id}"
+        if reply:
+            message = f"{message}: {reply}"
+        logger.info("voice page %s: %s", client_id, message)
+        await self._send_json(client_id, {"type": "join_failed", "message": message})
+        with contextlib.suppress(Exception):
+            await connection.close(code=JOIN_FAILED_CLOSE_CODE, reason="join failed")
+        return False
+
     def session_for(self, chat_id: str) -> Optional[VoiceSession]:
         return self._sessions.get(chat_id)
 
-    async def _run_client(self, connection, client_id: str) -> None:
+    async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
+        if session and not await self._join_session(connection, client_id, session):
+            return
         session = self._new_session(connection, client_id)
         self._sessions[client_id] = session
         try:
@@ -210,6 +275,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        pending = self._pending_replies.get(chat_id)
+        if pending is not None and not pending.done():
+            # The reply to a command the plugin sent: it is for the plugin, not the page.
+            pending.set_result(content)
+            return SendResult(success=True, message_id=None)
         if await self._send_json(chat_id, {"type": "reply", "text": content}):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")

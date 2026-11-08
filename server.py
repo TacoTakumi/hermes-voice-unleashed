@@ -8,6 +8,8 @@ VoiceManager session.
 
 ``/ws?attach=<Hermes session id>`` attaches a UI client to a Hermes session
 instead of a page conversation; it is handed to ``on_attach``.
+``/ws?client=<id>&session=<Hermes session id>`` asks for the page's
+conversation to join that session; the id goes to ``on_client`` as ``session``.
 """
 
 from __future__ import annotations
@@ -29,8 +31,9 @@ logger = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
-ClientHandler = Callable[[ServerConnection, str], Awaitable[None]]
+ClientHandler = Callable[..., Awaitable[None]]  # (connection, id, **options)
 REPLACED_CLOSE_CODE = 4001  # another page took this conversation over
+JOIN_FAILED_CLOSE_CODE = 4002  # the session the page asked to join could not be joined
 MAX_ATTACH_ID = 256  # a longer Hermes session id is refused, never cut
 
 
@@ -115,10 +118,12 @@ class VoiceServer:
             await self._own(connection, ("attach", session_id), self._on_attach)
             return
         client_id = (query.get("client") or ["phone"])[0][:64] or "phone"
-        await self._own(connection, ("client", client_id), self._on_client)
+        session = (query.get("session") or [""])[0]
+        options = {"session": session} if session else {}
+        await self._own(connection, ("client", client_id), self._on_client, **options)
 
     async def _own(self, connection: ServerConnection, key: tuple[str, str],
-                   handler: ClientHandler) -> None:
+                   handler: ClientHandler, **options) -> None:
         """Run ``handler`` for the connection that now owns ``key``."""
         previous = self._pages.get(key)
         if previous is not None:
@@ -131,7 +136,7 @@ class VoiceServer:
                 await previous.close(code=REPLACED_CLOSE_CODE, reason="replaced")
         self._pages[key] = connection
         try:
-            await handler(connection, key[1])
+            await handler(connection, key[1], **options)
         finally:
             if self._pages.get(key) is connection:
                 del self._pages[key]
