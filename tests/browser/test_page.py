@@ -512,3 +512,29 @@ async def test_the_newest_tool_line_stays_in_view_when_the_list_shrinks(stack):
     await page.set_viewport_size({"width": 390, "height": 600})
     await asyncio.sleep(0.2)
     assert await page.evaluate("document.getElementById('tools').scrollTop") == 0
+
+
+async def test_reasoning_and_tools_never_overlap_on_a_landscape_phone(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 740, "height": 360})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "sideways"})
+    await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 40})
+    for i in range(3):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 3")
+    await page.click("#reason-fold")
+    await asyncio.sleep(0.3)
+    boxes = await page.evaluate("""() => {
+        const r = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return [b.top, b.bottom]; };
+        const h = document.querySelector('header');
+        return { line: r('reason-fold'), text: r('reason-full'), fold: r('fold'), tools: r('tools'),
+                 scrolls: h.scrollHeight > h.clientHeight };
+    }""")
+    order = [boxes["line"], boxes["text"], boxes["fold"], boxes["tools"]]
+    for upper, lower in zip(order, order[1:]):
+        assert upper[1] <= lower[0] + 1, boxes  # each part ends before the next begins
+    assert all(b[1] - b[0] > 10 for b in order), boxes  # none squeezed to nothing
+    assert boxes["scrolls"], boxes
+    assert await _newest_tool_in_view(page)

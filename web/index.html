@@ -112,7 +112,12 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
      header scroll. */
   header { max-height: 62dvh; display: flex; flex-direction: column; overflow-y: auto; }
   header > * { flex-shrink: 0; }
+  /* A section shrinks down to its control plus one line of its list, never below: a header
+     too short for that scrolls instead of drawing the parts over each other. */
   #reasoning:not([hidden]), #activity:not([hidden]) { display: flex; flex-direction: column; min-height: 0; flex-shrink: 1; }
+  #reasoning:not([hidden]) { min-height: 28px; }
+  #reasoning:has(> #reason-full:not([hidden])) { min-height: 58px; }
+  #activity:has(> #tools:not([hidden])) { min-height: 56px; }
   #reasoning > button, #activity > button { flex-shrink: 0; }
   #activity > button { align-self: flex-start; }
   #reason-full, #tools { min-height: 1.6em; flex-shrink: 1; }
@@ -248,6 +253,17 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   function toolsToEnd() {
     toolsEl.scrollTop = toolsEl.scrollHeight;
     toolsAtEnd = true;
+    headerShows(toolsEl.lastElementChild);
+  }
+  // A header that scrolls itself (a phone held sideways) scrolls to show el. Only the
+  // header moves, never the window.
+  function headerShows(el) {
+    const header = stateEl.parentElement;
+    if (!el || header.scrollHeight <= header.clientHeight + 1) return;
+    const r = el.getBoundingClientRect(), h = header.getBoundingClientRect();
+    if (r.height === 0) return; // a folded line
+    if (r.bottom > h.bottom) header.scrollTop += r.bottom - h.bottom;
+    else if (r.top < h.top) header.scrollTop -= h.top - r.top;
   }
   for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
     toolsEl.addEventListener(kind, () => { toolsGestureUntil = Date.now() + 1000; }, { passive: true });
