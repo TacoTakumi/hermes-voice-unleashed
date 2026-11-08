@@ -59,6 +59,10 @@ entry names next to its pinned commit.
   s by default) while Hermes ran tools lost the rest of its audio, and the
   voice page stayed on "Working" after the turn. The rest of the reply now goes
   into a new TTS request, and the turn ends as usual.
+- The last word of text the model wrote just before a tool call ("Standing
+  by." spoken as "Standing") waited until the turn ended, so it came after the
+  tools ran, or never when you cut in. It is now spoken when the model's
+  response ends.
 
 ## [0.1.0] - 2026-11-07
 

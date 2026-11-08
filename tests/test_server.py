@@ -113,8 +113,8 @@ def test_register_adds_one_platform(plugin):
     entry = ctx.platforms[0]
     assert entry["adapter_factory"] is plugin.adapter.VoiceLiveAdapter
     assert entry["allowed_users_env"] == "VMLIVE_ALLOWED_USERS"
-    assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta", "post_tool_call", "pre_llm_call",
-                                 "pre_tool_call"]
+    assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta", "on_stream_end", "post_tool_call",
+                                 "pre_llm_call", "pre_tool_call"]
 
 
 def test_gateway_tool_progress_is_off_by_default_for_the_voice_platform(plugin, monkeypatch):

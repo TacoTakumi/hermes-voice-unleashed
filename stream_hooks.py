@@ -72,6 +72,11 @@ def on_stream_delta(delta: str = "", kind: str = "text", turn_id: str = "", iter
         _post(surface, "on_reasoning_delta", delta)
 
 
+def on_stream_end(surface: str = "", **_: Any) -> None:
+    """One model response ended: its last word may still wait for a space."""
+    _post(surface, "on_stream_end")
+
+
 def on_session_end(turn_id: str = "", interrupted: bool = False, platform: str = "", **_: Any) -> None:
     _post(platform, "on_turn_done", turn_id, bool(interrupted))
 
@@ -139,6 +144,7 @@ def pre_llm_call(session_id: str = "", **_: Any) -> Optional[str]:
 
 HOOKS = {
     "on_stream_delta": on_stream_delta,
+    "on_stream_end": on_stream_end,
     "on_session_end": on_session_end,
     "pre_tool_call": pre_tool_call,
     "post_tool_call": post_tool_call,

@@ -374,3 +374,20 @@ async def test_every_tool_status_hermes_reports_reaches_the_page(rig):
     await wait_for(lambda: len(page.of("tool_end")) == len(statuses))
     assert [f["status"] for f in page.of("tool_end")] == [
         "ok", "error", "timeout", "blocked", "cancelled", "ok", "ok"]
+
+
+# --- text before a tool call -----------------------------------------------------------
+
+async def test_the_last_word_before_a_tool_call_is_spoken_at_the_stream_end(rig):
+    """A model response that ends with a tool call ends its text without a space; its last
+    word must not wait for the next text or the end of the turn."""
+    hooks, conn, page = rig
+    fire(hooks.on_stream_delta, delta="Acknowledged. Standing", kind="text", turn_id="t1", iteration=1,
+         surface=PLATFORM)
+    deliver(hooks, "on_stream_end", final_text="Acknowledged. Standing by.", finished=True, error=None,
+            turn_id="t1", iteration=1, surface=PLATFORM)  # may overtake the last delta
+    fire(hooks.on_stream_delta, delta=" by.", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
+    frames = await wait_for(lambda: tts_frames(conn) if "".join(
+        f["text"] for f in tts_frames(conn)).endswith("by.") else None, timeout=1.0)
+    assert "".join(f["text"] for f in frames) == "Acknowledged. Standing by."
+    assert not any(f["done"] for f in frames)  # the turn goes on: the request stays open

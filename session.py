@@ -77,6 +77,7 @@ class VoiceSession:
         self._last_text_at = 0.0  # loop time of the reply's last text or of its turn's end
         self._unsent = ""  # reply text after the last whitespace, not yet sent to TTS
         self._finishing: Optional[asyncio.Task] = None
+        self._flushing: Optional[asyncio.Task] = None  # sends the held text after a model response
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
         self._turn_ended_at: Optional[float] = None  # loop time of the last dispatch, for the log
@@ -217,6 +218,26 @@ class VoiceSession:
             await self.send_page({"type": "tool_end", "id": call_id, "status": status,
                                   "duration_ms": duration_ms})
 
+    async def on_stream_end(self, reply_id: str) -> None:
+        """A model response ended. If the turn goes on with tool calls, no more text comes
+        for a while: once the reply's text has gone quiet, send what waits for a space so
+        the response's last word is spoken now. The stream end can overtake that response's
+        last delta, hence the quiet window instead of sending at once."""
+        if not self._takes(reply_id) or self._flushing is not None:
+            return
+        self._flushing = asyncio.create_task(self._guarded(self._flush_when_quiet(reply_id)))
+
+    async def _flush_when_quiet(self, reply_id: str) -> None:
+        loop = asyncio.get_running_loop()
+        while (wait := self._last_text_at + REPLY_QUIET_S - loop.time()) > 0:
+            await asyncio.sleep(wait)
+        if self._flushing is asyncio.current_task():
+            self._flushing = None
+        if not self._takes(reply_id):
+            return
+        rest, self._unsent = self._unsent, ""
+        await self._send_tts(rest)
+
     async def on_turn_done(self, reply_id: str, turn_id: str, interrupted: bool) -> None:
         """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
         request so VoiceManager speaks the rest."""
@@ -332,6 +353,9 @@ class VoiceSession:
         if self._finishing is not None:
             self._finishing.cancel()
             self._finishing = None
+        if self._flushing is not None:
+            self._flushing.cancel()
+            self._flushing = None
 
     async def cancel_reply(self, reason: str, send_cancel: bool = True) -> None:
         """Stop the running reply: no more of its text, no more of its audio on the page.
