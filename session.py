@@ -381,16 +381,17 @@ class VoiceSession:
         await self._send_tts(rest)
 
     async def _end_session(self) -> None:
-        """The user ended the session by voice: stop the reply, say so, tell the page
-        with a ``session_end`` frame, and close the page once the notice has played
-        (or the wait for its end ran out)."""
+        """The user ended the session by voice: stop the reply, say so, and once the
+        notice has played (or the wait for its end ran out) tell the page with a
+        ``session_end`` frame and close it. The frame waits for the notice: a page
+        leaves on it, and audio still in flight would go unheard."""
         logger.info("voice page %s: session ended by voice", self.client_id)
         self._notice_ended = asyncio.Event()
         request = await self._command_notice(SESSION_ENDED_NOTICE, "session ended")
-        await self.send_page({"type": "session_end"})
         if request is not None:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._notice_ended.wait(), SESSION_END_TIMEOUT_S)
+        await self.send_page({"type": "session_end"})
         with contextlib.suppress(Exception):
             await self.page.close()
 

@@ -219,8 +219,9 @@ async def test_end_the_session_cancels_the_reply_speaks_the_notice_and_closes_th
         assert r.page.of("session_end") == [{"type": "session_end"}]
         close = r.order[-1]
         assert close[0] == "closed"
-        assert _sequence(r.order, ("tts", "Session ended"), ("page", "session_end"), close) == [
-            ("tts", "Session ended"), ("page", "session_end"), close]
+        # The notice plays out before the page is told the session ended and is closed.
+        assert _sequence(r.order, ("tts", "Session ended"), ("page", "audio_end"), ("page", "session_end"),
+                         close) == [("tts", "Session ended"), ("page", "audio_end"), ("page", "session_end"), close]
         fire(r.hooks.on_stream_delta, message_id, delta="there was a dragon", kind="text", turn_id="t1",
              iteration=1)
         await asyncio.sleep(0.1)
@@ -232,12 +233,17 @@ async def test_the_page_is_closed_when_the_notice_does_not_end_in_time(plugin, m
     monkeypatch.setattr(plugin.session, "SESSION_END_TIMEOUT_S", 0.2)
     async with rig(plugin) as r:
         await _heard(r, "end session")
-        await wait_for(lambda: r.page.of("session_end"))
+        rid = await wait_for(lambda: _request_saying(r, "Session ended"))
+        await wait_for(lambda: any(f["request_id"] == rid and f["done"] for f in r.tts()))
+        # No audio_end came: the page is told nothing until the wait ran out.
+        assert r.page.of("session_end") == []
         assert not r.page.closed
         await wait_for(lambda: r.page.closed)
         assert r.messages == []
+        assert ("page", "audio_end") not in r.order
         assert _sequence(r.order, ("tts", "Session ended"), ("page", "session_end")) == [
             ("tts", "Session ended"), ("page", "session_end")]
+        assert r.order[-2] == ("page", "session_end")
         assert r.order[-1][0] == "closed"
 
 
