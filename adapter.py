@@ -36,7 +36,7 @@ DEFAULT_HOST, DEFAULT_PORT = "127.0.0.1", 8765
 # The approval.inputs keys whose words answer a plain-text approval prompt, the
 # same ones the gateway's run loop accepts.
 APPROVAL_INPUT_KEYS = ("approve", "deny", "always", "session")
-COMMAND_SPOKEN_CHARS = 80  # a longer command is cut here when the prompt is spoken
+COMMAND_SPOKEN_CHARS = 80  # a longer command is cut to this many characters, "..." included
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -61,7 +61,7 @@ def approval_sentence(command: str) -> str:
     and how to answer."""
     short = re.sub(r"\s+", " ", command).strip()
     if len(short) > COMMAND_SPOKEN_CHARS:
-        short = short[:COMMAND_SPOKEN_CHARS] + "..."
+        short = short[:COMMAND_SPOKEN_CHARS - 3] + "..."
     return f"Approval needed to run: {short}. Say yes or no."
 
 

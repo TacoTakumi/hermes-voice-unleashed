@@ -90,7 +90,9 @@ def test_a_long_command_is_cut_short_when_spoken(plugin):
     sentence = plugin.adapter.approval_sentence("x" * 200)
     assert sentence.endswith("Say yes or no.")
     command = sentence[len("Approval needed to run: "):-len(". Say yes or no.")]
-    assert command.endswith("...") and len(command) <= 83
+    assert command.endswith("...") and len(command) <= 81
+    whole = plugin.adapter.approval_sentence("y" * 80)
+    assert "y" * 80 + ". Say" in whole  # a command of 80 characters is not cut
     short = plugin.adapter.approval_sentence("ls  -la\n /tmp")
     assert short == "Approval needed to run: ls -la /tmp. Say yes or no."
 
