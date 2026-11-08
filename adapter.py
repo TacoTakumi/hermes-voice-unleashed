@@ -71,6 +71,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
     def __init__(self, config, **kwargs):
         super().__init__(config=config, platform=Platform(PLATFORM))
         extra = getattr(config, "extra", {}) or {}
+        # The owner is the only user, so they are the platform's slash admin without
+        # configuration: a cross-session command such as /resume --all needs a user
+        # listed in the gateway's DM slash policy, not just an ungated one.
+        if isinstance(getattr(config, "extra", None), dict) and not config.extra.get("allow_admin_from"):
+            config.extra["allow_admin_from"] = [OWNER]
         self.token = str(_setting(extra, "VMLIVE_TOKEN", "token"))
         self.vm_url = str(_setting(extra, "VMLIVE_VOICEMANAGER_URL", "voicemanager_url"))
         self.vm_token = str(_setting(extra, "VMLIVE_VOICEMANAGER_TOKEN", "voicemanager_token"))
