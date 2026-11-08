@@ -267,6 +267,25 @@ async def test_mic_sample_holds_without_the_latency_apis(page):
     _check_mic_samples(await _playback_with_sent(page), 12000)
 
 
+async def test_the_stop_after_a_gap_in_the_reply_lands_at_the_end_of_the_last_chunk(page):
+    """A chunk that comes after the reply went quiet plays after a gap. The
+    stop's mic_sample is the end of that chunk, so the span between the edges
+    covers the gap too."""
+    await _start(page)
+    await _send_reply(page, "r1", 4800, end=False)  # 0.2 s, then silence
+    await _wait_playback(page, 1)
+    await page.wait_for_timeout(800)
+    await page.evaluate("""() => {
+      const a = window.audio
+      a.onBinary(new Int16Array(window.tone(4800, 24000, 300)).buffer)
+      a.onJson({ type: 'audio_end', request_id: 'r1', reason: 'complete' })
+    }""")
+    start, stop = await _wait_playback(page, 2)
+    assert stop["reply_sample"] == 9600
+    span = _mic_sample(stop) - _mic_sample(start)
+    assert abs(span - (0.8 + 0.2) * MIC_RATE) <= 8000, span
+
+
 async def test_a_reply_finishes_when_audio_end_comes_after_the_audio(page):
     await _start(page)
     await _send_reply(page, "r1", 4800, end=False)  # 0.2 s

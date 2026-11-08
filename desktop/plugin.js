@@ -233,9 +233,10 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     replies = replies.filter(x => x !== r)
     if (intake === r) intake = null
     if (r.started) {
-      // The edge is the end of the last sample heard: the reply's end when it
-      // played out, now when it was cut.
-      const edge = played >= r.samples || !playCtx ? r.first + r.samples / r.rate : playCtx.currentTime
+      // The edge is the end of the last sample heard: the scheduled end of the
+      // last chunk when the reply played out (a late chunk leaves a gap, and
+      // the end lies after it), now when the reply was cut while it still played.
+      const edge = playCtx ? Math.min(r.next, playCtx.currentTime) : r.next
       const micSample = Math.max(r.startSample, micSampleAt(speakerTime(edge)))
       sendJson({ type: 'playback', event: 'stop', request_id: r.id, reply_sample: played, mic_sample: micSample })
     }
