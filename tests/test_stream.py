@@ -342,3 +342,22 @@ async def test_an_attached_session_gets_no_tool_frames(plugin):
     await session.on_tool_start("", "c1", "terminal", "ls")
     await session.on_tool_end("", "c1", "ok", 5)
     assert Page.sent == []
+
+
+# --- reasoning on the page -------------------------------------------------------------
+
+async def test_reasoning_reaches_the_page_but_not_tts(rig):
+    hooks, conn, page = rig
+    fire(hooks.on_stream_delta, delta="The user wants the weather. ", kind="reasoning", turn_id="t1",
+         iteration=1, surface=PLATFORM)
+    fire(hooks.on_stream_delta, chat_id="someone-else", delta="other chat", kind="reasoning", turn_id="t1",
+         iteration=1, surface=PLATFORM)
+    await wait_for(lambda: page.of("reasoning_delta"))
+    await asyncio.sleep(0.2)
+    assert page.of("reasoning_delta") == [{"type": "reasoning_delta", "text": "The user wants the weather. "}]
+    assert page.of("reply_delta") == [] and tts_frames(conn) == []
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await wait_for(lambda: page.of("turn_done"))
+    fire(hooks.on_stream_delta, delta="late", kind="reasoning", turn_id="t1", iteration=1, surface=PLATFORM)
+    await asyncio.sleep(0.2)
+    assert len(page.of("reasoning_delta")) == 1  # the reply is closed

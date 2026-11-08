@@ -68,6 +68,8 @@ def on_stream_delta(delta: str = "", kind: str = "text", turn_id: str = "", iter
                     surface: str = "", **_: Any) -> None:
     if kind == "text" and delta:
         _post(surface, "on_reply_delta", turn_id, iteration, delta)
+    elif kind == "reasoning" and delta:  # only when the user turned plugins.stream_reasoning_deltas on
+        _post(surface, "on_reasoning_delta", delta)
 
 
 def on_session_end(turn_id: str = "", interrupted: bool = False, platform: str = "", **_: Any) -> None:

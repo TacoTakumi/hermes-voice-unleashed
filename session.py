@@ -202,6 +202,11 @@ class VoiceSession:
         if self._takes(reply_id):
             await self._speak(delta)
 
+    async def on_reasoning_delta(self, reply_id: str, text: str) -> None:
+        """Reasoning of the running reply's turn: shown on the page, never spoken."""
+        if not self.attached and self._takes(reply_id):
+            await self.send_page({"type": "reasoning_delta", "text": text})
+
     async def on_tool_start(self, reply_id: str, call_id: str, name: str, summary: str) -> None:
         """A tool call of the running reply's turn started: show it on the page."""
         if not self.attached and self._takes(reply_id):
