@@ -66,11 +66,16 @@ class VoiceSession:
                  on_utterance: Optional[Callable[[str, str], Awaitable[None]]] = None,
                  attached: bool = False,
                  approval_words: Optional[Callable[[], Iterable[str]]] = None,
-                 approval_pending: Optional[Callable[[], Awaitable[bool]]] = None) -> None:
+                 approval_pending: Optional[Callable[[], Awaitable[bool]]] = None,
+                 on_new_session: Optional[Callable[[], Awaitable[None]]] = None) -> None:
         self.page = page
         self.client = client
         self.client_id = client_id
         self._on_utterance = on_utterance
+        # Called once the "New session" notice went out: the adapter moves the lane
+        # onto a fresh Hermes session and tells the page. Without one the session
+        # sends the page a bare session_new frame itself.
+        self._on_new_session = on_new_session
         # Spoken approvals: the lower-case words that answer an approval prompt, and
         # whether the chat waits for one right now.
         self._approval_words = approval_words
@@ -396,12 +401,16 @@ class VoiceSession:
             await self.page.close()
 
     async def _new_session(self) -> None:
-        """The user asked for a new session by voice: stop the reply, say so, and tell
-        the page with a ``session_new`` frame. The connection stays open: the page
-        reconnects with a fresh session itself."""
+        """The user asked for a new session by voice: stop the reply, say so, then
+        have the adapter move the lane onto a fresh session and tell the page (or, on
+        its own, send the page a ``session_new`` frame). The connection stays open
+        and takes the next utterance; nothing reconnects."""
         logger.info("voice page %s: new session by voice", self.client_id)
         await self._command_notice(SESSION_NEW_NOTICE, "new session")
-        await self.send_page({"type": "session_new"})
+        if self._on_new_session is not None:
+            await self._on_new_session()
+        else:
+            await self.send_page({"type": "session_new"})
         # The notice is no reply: the next utterance has nothing to cancel.
         self.tracker.reply_ended()
 

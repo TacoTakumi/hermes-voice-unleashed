@@ -403,3 +403,80 @@ async def test_a_client_attached_to_another_session_is_not_replaced_by_a_page_co
         page.task.cancel()
     client.task.cancel()
     await attach_ws.close()
+
+
+# --- a new session asked for by voice ------------------------------------------------------
+
+
+async def _spoken(ws, fake_vm, text):
+    """The page sends audio, so its session connects to VoiceManager, which then hears
+    ``text`` as a finished turn. Returns the fake's connection."""
+    await ws.send(b"\x00\x00" * 160)
+    (conn,) = await fake_vm.wait_connections(1)
+    await conn.send({"type": "turn_end", "text": text, "turn_id": 0})
+    return conn
+
+
+def _move_on_new(adapter, session_id):
+    """The gateway's /new moves the lane onto ``session_id`` before it answers."""
+    inner = adapter.handle_message
+
+    async def handle_message(event):
+        if event.text == "/new":
+            adapter._session_store.session_id = session_id
+        await inner(event)
+
+    adapter.handle_message = handle_message
+
+
+async def test_new_session_by_voice_runs_new_and_sends_the_frames_on_the_same_socket(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 3, "fresh": 0})
+    _with_db(adapter, db)
+    adapter.gateway_reply = "New session started."
+    _move_on_new(adapter, "fresh")
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        conn = await _spoken(ws, fake_vm, "new session")
+        await wait_for(lambda: len(page.of("history")) == 2)
+        await asyncio.sleep(0.1)
+        assert [m.text for m in adapter.messages] == ["/new"]
+        assert db.counted == ["abc"]
+        assert page.of("session_new") == [{"type": "session_new", "session_id": "fresh"}]
+        assert page.of("history")[-1] == {"type": "history", "session_id": "fresh", "lines": []}
+        assert db.asked == ["abc", "fresh"]
+        kinds = [f["type"] for f in page.frames]
+        assert kinds[-2:] == ["session_new", "history"]
+        assert kinds.count("ready") == 1  # the page did not reconnect
+        assert page.of("reply") == []  # the reply to /new stayed off the page
+        assert page.of("utterance") == []  # the command never went to Hermes
+        # The same socket and session take the next utterance.
+        await conn.send({"type": "turn_end", "text": "tell me a joke", "turn_id": 1})
+        await wait_for(lambda: len(adapter.messages) == 2)
+        assert adapter.messages[1].text == "tell me a joke"
+        assert adapter.messages[1].source.chat_id == "tablet"
+        assert [f["text"] for f in page.of("utterance")] == ["tell me a joke"]
+        assert ws.close_code is None
+        page.task.cancel()
+
+
+async def test_new_session_by_voice_on_an_empty_session_sends_no_new_but_the_frames(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 0})
+    _with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        await _spoken(ws, fake_vm, "new session")
+        await wait_for(lambda: len(page.of("history")) == 2)
+        await asyncio.sleep(0.1)
+        assert adapter.messages == []
+        assert db.counted == ["abc"]
+        assert page.of("session_new") == [{"type": "session_new", "session_id": "abc"}]
+        assert page.of("history")[-1] == {"type": "history", "session_id": "abc", "lines": []}
+        kinds = [f["type"] for f in page.frames]
+        assert kinds[-2:] == ["session_new", "history"]
+        assert kinds.count("ready") == 1
+        assert ws.close_code is None
+        page.task.cancel()

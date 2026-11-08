@@ -131,8 +131,10 @@ async def rig(plugin, refusal=None):
 
 def _record_order(session, order):
     """Each TTS chunk is recorded as the text its request has so far, so the notice
-    shows up as one event once its last word went out."""
+    shows up as one event once its last word went out. The new-session callback the
+    adapter gave the session is recorded as it is called."""
     send_tts, send_page = session._send_tts, session.send_page
+    on_new_session = session._on_new_session
     texts = {}
 
     async def recording_tts(chunk):
@@ -146,7 +148,13 @@ def _record_order(session, order):
         order.append(("page", payload["type"]))
         await send_page(payload)
 
+    async def recording_new_session():
+        order.append(("callback", "new_session"))
+        await on_new_session()
+
     session._send_tts, session.send_page = recording_tts, recording_page
+    if on_new_session is not None:
+        session._on_new_session = recording_new_session
 
 
 async def _heard(rig, text, refusal=None):
@@ -258,26 +266,55 @@ async def test_end_session_now_please_is_an_ordinary_utterance(plugin):
         assert not r.page.closed
 
 
-async def test_new_session_speaks_the_notice_sends_session_new_and_keeps_the_page_open(plugin):
+def _page_kinds(page):
+    return [f["type"] for k, f in page.log if k == "json"]
+
+
+async def test_new_session_speaks_the_notice_then_asks_the_adapter_and_keeps_the_page_open(plugin):
     async with rig(plugin) as r:
         await _heard(r, "New session!")
         await _notice_played(r, "New session")
         await wait_for(lambda: r.page.of("session_new"))
+        await wait_for(lambda: len(r.page.of("history")) == 2)
         await asyncio.sleep(0.1)
         assert r.messages == []  # the command never reached Hermes
         assert r.page.of("utterance") == []
-        assert r.page.of("session_new") == [{"type": "session_new"}]
         assert r.page.of("session_end") == []
-        assert _sequence(r.order, ("tts", "New session"), ("page", "session_new")) == [
-            ("tts", "New session"), ("page", "session_new")]
+        # The notice first, then the adapter is asked for the new session: it answers
+        # with the session_new frame and the history of the new (here unknown) session.
+        assert _sequence(r.order, ("tts", "New session"), ("callback", "new_session"),
+                         ("page", "session_new")) == [("tts", "New session"), ("callback", "new_session")]
+        assert r.page.of("session_new") == [{"type": "session_new", "session_id": None}]
+        assert r.page.of("history")[-1] == {"type": "history", "session_id": None, "lines": []}
+        kinds = _page_kinds(r.page)
+        assert kinds[kinds.index("session_new") + 1] == "history"
+        assert kinds.count("ready") == 1  # the page did not reconnect
         assert not r.page.closed
         assert not r.conn.closed.is_set()
-        # The session still takes the next utterance until the page reconnects.
+        # The same session takes the next utterance.
         await _heard(r, "tell me a joke")
         await wait_for(lambda: r.messages)
         assert r.messages[0].text == "tell me a joke"
         assert [f["text"] for f in r.page.of("utterance")] == ["tell me a joke"]
         assert not r.page.closed
+
+
+async def test_new_session_without_a_callback_sends_the_session_new_frame_itself(plugin):
+    async with rig(plugin) as r:
+        r.session._on_new_session = None
+        await _heard(r, "New session!")
+        await _notice_played(r, "New session")
+        await wait_for(lambda: r.page.of("session_new"))
+        await asyncio.sleep(0.1)
+        assert r.messages == []
+        assert r.page.of("session_new") == [{"type": "session_new"}]
+        assert len(r.page.of("history")) == 1  # only the one from the connect
+        assert _sequence(r.order, ("tts", "New session"), ("callback", "new_session"),
+                         ("page", "session_new")) == [("tts", "New session"), ("page", "session_new")]
+        assert not r.page.closed
+        await _heard(r, "tell me a joke")
+        await wait_for(lambda: r.messages)
+        assert r.messages[0].text == "tell me a joke"
 
 
 @pytest.mark.parametrize("refusal", [None, "turn_engine_unsupported"])
@@ -292,8 +329,8 @@ async def test_new_session_cancels_the_playing_reply_before_the_notice(plugin, r
         assert r.page.of("clear")
         assert len(r.messages) == 1
         assert r.messages[0].text == "tell me a story"
-        assert _sequence(r.order, ("tts", "New session"), ("page", "session_new")) == [
-            ("tts", "New session"), ("page", "session_new")]
+        assert _sequence(r.order, ("tts", "New session"), ("callback", "new_session")) == [
+            ("tts", "New session"), ("callback", "new_session")]
         fire(r.hooks.on_stream_delta, message_id, delta="there was a dragon", kind="text", turn_id="t1",
              iteration=1)
         await asyncio.sleep(0.1)

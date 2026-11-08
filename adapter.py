@@ -197,9 +197,22 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # chat maps to the same key every utterance is handled under.
             return has_blocking_approval(self._source_session_key(self._voice_source(client_id)))
 
+        async def on_new_session() -> None:
+            await self._new_session_by_voice(client_id)
+
         return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
                             on_utterance=on_utterance, approval_words=approval_words,
-                            approval_pending=approval_pending)
+                            approval_pending=approval_pending, on_new_session=on_new_session)
+
+    async def _new_session_by_voice(self, client_id: str) -> None:
+        """The page asked for a new session by voice: move its lane onto a fresh
+        session (the same rule as a connect with session=new), then tell the page which
+        session it is on now with a ``session_new`` frame and the new session's history,
+        which is empty. The socket stays: a reconnect would leave a gap in which a late
+        reply could be redelivered into the new session."""
+        await self._start_new_session(client_id)
+        await self._send_json(client_id, {"type": "session_new", "session_id": self.lane_session_id(client_id)})
+        await self._send_history(client_id)
 
     def _voice_source(self, chat_id: str, message_id: Optional[str] = None):
         """The source every message from the page's chat ``chat_id`` is handled under."""
