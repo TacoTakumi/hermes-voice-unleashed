@@ -22,9 +22,10 @@ from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run_busy import approval_input_words
+from hermes_state import SessionDB
 from tools.approval import has_blocking_approval
 
-from . import stream_hooks
+from . import sessions, stream_hooks
 from .server import JOIN_FAILED_CLOSE_CODE, VoiceServer
 from .session import VoiceSession, client_from_url
 
@@ -111,7 +112,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             return False
         try:
             self._server = VoiceServer(self.host, self.port, self.token, self._on_client,
-                                       on_attach=self._on_attach)
+                                       on_attach=self._on_attach, on_sessions=self._session_rows)
             await self._server.start()
         except OSError as exc:
             logger.error("voice page: cannot listen on %s:%s: %s", self.host, self.port, exc)
@@ -251,6 +252,34 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     def session_for(self, chat_id: str) -> Optional[VoiceSession]:
         return self._sessions.get(chat_id)
+
+    def _session_rows(self, client_id: str) -> list[dict[str, Any]]:
+        """The session list for the page's chat ``client_id``: the profile's sessions
+        from the runner's state DB, the one its lane is on marked as current.
+
+        The runner keeps the DB behind an async facade; the reader wants the plain
+        SessionDB under it. A runner without a DB (or no runner, as in a test)
+        gets the profile's state DB opened read-only for this one answer.
+        """
+        runner = getattr(self, "gateway_runner", None)
+        store = getattr(runner, "session_store", None) or getattr(self, "_session_store", None)
+        if store is None:
+            logger.warning("voice page: no session store yet, the session list is empty")
+            return []
+        lane_key = self._source_session_key(self._voice_source(client_id))
+        try:
+            db = getattr(runner, "_session_db", None)
+        except Exception:
+            logger.debug("voice page: the runner's session DB is not available", exc_info=True)
+            db = None
+        db = getattr(db, "_db", db)
+        if db is not None:
+            return sessions.session_rows(store, db, lane_key)
+        fallback = SessionDB(read_only=True)
+        try:
+            return sessions.session_rows(store, fallback, lane_key)
+        finally:
+            fallback.close()
 
     async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
         if session and not await self._join_session(connection, client_id, session):

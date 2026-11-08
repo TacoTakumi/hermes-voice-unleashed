@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -140,3 +141,143 @@ def test_gateway_tool_progress_is_off_by_default_for_the_voice_platform(plugin, 
     assert display_config.resolve_tool_progress({}, "voicemanager_live") == ("off", False)
     configured = {"display": {"platforms": {"voicemanager_live": {"tool_progress": "all"}}}}
     assert display_config.resolve_tool_progress(configured, "voicemanager_live")[0] == "all"
+
+
+# GET /sessions: the session list the page shows, answered from a callback the adapter supplies.
+
+ROWS = [{"id": "abc123", "title": None, "preview": "hello there", "last_active": 1_700_000_000.0,
+         "message_count": 2, "source": "voicemanager_live", "current": True}]
+
+
+@pytest.fixture
+async def sessions_server(plugin):
+    """A voice server whose sessions callback is a fake that records the lane it was asked for."""
+    calls = []
+
+    async def no_client(connection, client_id):
+        pass
+
+    def rows(client_id):
+        calls.append(client_id)
+        return ROWS
+
+    server = plugin.server.VoiceServer("127.0.0.1", 0, TOKEN, no_client, on_sessions=rows)
+    server.sessions_calls = calls
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+async def test_sessions_route_answers_the_callbacks_rows_for_the_lane(sessions_server):
+    url = f"http://127.0.0.1:{sessions_server.bound_port}/sessions"
+    async with httpx.AsyncClient() as http:
+        answer = await http.get(url, params={"token": TOKEN, "client": "tablet"})
+    assert answer.status_code == 200
+    assert answer.headers["content-type"] == "application/json"
+    assert answer.headers["cache-control"] == "no-store"
+    assert answer.json() == ROWS
+    assert sessions_server.sessions_calls == ["tablet"]
+
+
+async def test_sessions_route_defaults_to_the_phone_lane(sessions_server):
+    url = f"http://127.0.0.1:{sessions_server.bound_port}/sessions"
+    async with httpx.AsyncClient() as http:
+        answer = await http.get(url, params={"token": TOKEN})
+    assert answer.status_code == 200
+    assert sessions_server.sessions_calls == ["phone"]
+
+
+@pytest.mark.parametrize("token", [None, "", "wrong"])
+async def test_sessions_route_needs_the_token(sessions_server, token):
+    url = f"http://127.0.0.1:{sessions_server.bound_port}/sessions"
+    params = {"client": "tablet"}
+    if token is not None:
+        params["token"] = token
+    async with httpx.AsyncClient() as http:
+        answer = await http.get(url, params=params)
+    assert answer.status_code == 401
+    assert sessions_server.sessions_calls == []
+
+
+async def test_sessions_route_without_a_callback_is_not_found(plugin):
+    async def no_client(connection, client_id):
+        pass
+
+    server = plugin.server.VoiceServer("127.0.0.1", 0, TOKEN, no_client)
+    await server.start()
+    try:
+        url = f"http://127.0.0.1:{server.bound_port}/sessions"
+        async with httpx.AsyncClient() as http:
+            answer = await http.get(url, params={"token": TOKEN, "client": "tablet"})
+    finally:
+        await server.stop()
+    assert answer.status_code == 404
+
+
+def test_adapter_sessions_callback_reads_the_runners_store_and_db(plugin, monkeypatch):
+    """The adapter lists sessions from the runner's store and state DB for the lane's key.
+    The runner holds the DB behind an async facade; the plain DB is what the reader needs."""
+    adapter = plugin.adapter.VoiceLiveAdapter(_config())
+    store, db = object(), object()
+    adapter.gateway_runner = SimpleNamespace(session_store=store, _session_db=SimpleNamespace(_db=db))
+    seen = {}
+
+    def fake_rows(store_, db_, lane_key, limit=20):
+        seen.update(store=store_, db=db_, lane_key=lane_key)
+        return [{"id": "x"}]
+
+    monkeypatch.setattr(plugin.sessions, "session_rows", fake_rows)
+    assert adapter._session_rows("tablet") == [{"id": "x"}]
+    assert seen["store"] is store
+    assert seen["db"] is db
+    assert seen["lane_key"] == adapter._source_session_key(adapter._voice_source("tablet"))
+    assert seen["lane_key"] != adapter._source_session_key(adapter._voice_source("phone"))
+
+
+def test_adapter_sessions_callback_opens_the_state_db_read_only_without_a_runner_db(plugin, monkeypatch):
+    adapter = plugin.adapter.VoiceLiveAdapter(_config())
+    adapter.gateway_runner = SimpleNamespace(session_store=object())
+    opened = []
+
+    class FakeDB:
+        def __init__(self, db_path=None, read_only=False):
+            opened.append(read_only)
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    seen = {}
+
+    def fake_rows(store_, db_, lane_key, limit=20):
+        seen["db"] = db_
+        return []
+
+    monkeypatch.setattr(plugin.adapter, "SessionDB", FakeDB)
+    monkeypatch.setattr(plugin.sessions, "session_rows", fake_rows)
+    assert adapter._session_rows("tablet") == []
+    assert opened == [True]
+    assert isinstance(seen["db"], FakeDB) and seen["db"].closed
+
+
+async def test_adapter_wires_the_sessions_callback_into_the_server(plugin, monkeypatch):
+    adapter = plugin.adapter.VoiceLiveAdapter(_config())
+
+    class FakeServer:
+        def __init__(self, host, port, token, on_client, **kwargs):
+            self.kwargs = kwargs
+
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+    monkeypatch.setattr(plugin.adapter, "VoiceServer", FakeServer)
+    assert await adapter.connect()
+    try:
+        assert adapter._server.kwargs["on_sessions"] == adapter._session_rows
+    finally:
+        await adapter.disconnect()
