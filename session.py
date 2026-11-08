@@ -159,6 +159,7 @@ class VoiceSession:
     async def _next_turn(self) -> None:
         """The reply is over: in classic mode open the next listening turn."""
         self.tracker.reply_ended()
+        await self._send_turn_done()
         if not self.turn_engine:
             self._cleared_turn = False
             self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
@@ -329,6 +330,13 @@ class VoiceSession:
                 with contextlib.suppress(Exception):
                     await request.cancel()
         await self._send_clear(request.request_id if request else None)
+        await self._send_turn_done()
+
+    async def _send_turn_done(self) -> None:
+        """Tell the page that nothing more of the turn is coming, so it stops showing
+        Hermes at work. An attached client shows the chat's own busy state."""
+        if not self.attached:
+            await self.send_page({"type": "turn_done"})
 
     def _spawn(self, reader: Callable[[], Awaitable[None]]) -> None:
         # The reader's coroutine is made inside the task, so a task cancelled before it

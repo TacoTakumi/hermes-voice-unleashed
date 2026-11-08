@@ -110,6 +110,10 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   let replaced = false; // another page took this conversation over: do not reconnect
   let level = 0, speakingLevel = 0;
   let hermesTurn = null; // the <li> the current reply's text goes into
+  let busy = false; // a Hermes turn runs: from its utterance until turn_done
+  // How long reply audio must be silent before the page stops showing Speaking: chunks
+  // arrive paced, so the queue can run dry for a moment between two of them.
+  const QUIET_MS = 600;
 
   // --- what the page shows --------------------------------------------------------
   function show(state, who, detail) {
@@ -129,6 +133,14 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     if (!running) return;
     show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : "Say something.");
   }
+  // What the page shows when nobody is talking: Hermes speaking, Hermes still at work, or
+  // waiting for the user.
+  function status() {
+    if (!running) return;
+    if (reply && reply.audible) show("Speaking", "hermes", "Talk over it to stop it.");
+    else if (busy) show("Working", "hermes", muted ? "Hermes is still working." : "Hermes is still working. Speaking now stops it.");
+    else listening();
+  }
 
   // --- reply audio ------------------------------------------------------------------
   // One reply plays at a time. Its edges go back to the server as playback frames: the
@@ -139,7 +151,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   function replyBegin(id, rate) {
     replyClear(null);
     reply = { id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [],
-              ended: false, started: false, stopped: false, playing: 0 };
+              ended: false, started: false, stopped: false, playing: 0, audible: false, quiet: null };
   }
   function replyPcm(buf) {
     if (!reply || reply.stopped) return;
@@ -160,8 +172,10 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         if (reply !== r || r.stopped) return;
         r.started = true;
         send({ type: "playback", event: "start", request_id: r.id });
-        show("Speaking", "hermes", "Talk over it to stop it.");
+        heard(r);
       }, Math.max(0, (at - playCtx.currentTime) * 1000));
+    } else if (reply.started) {
+      heard(reply);
     }
     reply.next = at + audio.duration;
     reply.samples += pcm.length;
@@ -170,8 +184,21 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     const r = reply;
     // The reply finishes when its audio_end has come and no chunk is still playing,
     // in whichever order those two happen.
-    src.onended = () => { r.playing -= 1; if (r.ended && r.playing === 0) replyFinish(r, r.samples); };
+    src.onended = () => {
+      r.playing -= 1;
+      if (r.playing > 0) return;
+      if (r.ended) replyFinish(r, r.samples);
+      else r.quiet = setTimeout(() => { if (r.playing === 0) { r.audible = false; if (reply === r) status(); } }, QUIET_MS);
+    };
     speakingLevel = 1;
+  }
+  // Reply audio is playing again (or for the first time).
+  function heard(r) {
+    clearTimeout(r.quiet);
+    r.quiet = null;
+    if (r.audible || r.stopped) return;
+    r.audible = true;
+    if (reply === r) status();
   }
   function replyEnd(id) {
     if (!reply || reply.id !== id) return;
@@ -181,8 +208,10 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   function replyFinish(r, played) {
     if (r.stopped) return;
     r.stopped = true;
+    r.audible = false;
+    clearTimeout(r.quiet);
     if (r.started) send({ type: "playback", event: "stop", request_id: r.id, reply_sample: played });
-    if (reply === r) { reply = null; listening(); }
+    if (reply === r) { reply = null; status(); }
   }
   function replyClear(id) {
     if (!reply || (id && reply.id !== id)) return;
@@ -198,6 +227,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     switch (f.type) {
       case "ready":
         retry = 0;
+        busy = false;
         listening();
         break;
       case "error":
@@ -205,13 +235,18 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         break;
       case "transcript":
         transcriptEl.textContent = f.text || "";
-        if (f.text && !reply) show("Hearing you", "you");
+        if (f.text && !(reply && reply.audible)) show("Hearing you", "you");
         break;
       case "utterance":
         transcriptEl.textContent = "";
         addTurn("user", f.text);
         hermesTurn = null;
+        busy = true;
         show("Thinking", "hermes", "Hermes is working on it.");
+        break;
+      case "turn_done":
+        busy = false;
+        status();
         break;
       case "reply_delta":
         if (!hermesTurn) hermesTurn = addTurn("hermes", "");
@@ -258,6 +293,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     };
     ws.onclose = (ev) => {
       ws = null;
+      busy = false;
       replyClear(null);
       if (ev.code === 4001) handOver();
       if (!running || replaced) return;
@@ -381,7 +417,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     muted = !muted;
     toggle.setAttribute("aria-pressed", String(muted));
     toggle.textContent = muted ? "Unmute microphone" : "Mute microphone";
-    if (!reply) listening();
+    status();
   });
 
   // --- the meter: your level in teal, Hermes in amber ----------------------------------
@@ -393,7 +429,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     const g = meter.getContext("2d");
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    const hermesPlaying = reply && reply.started && !reply.stopped;
+    const hermesPlaying = reply && reply.audible;
     const v = hermesPlaying ? 0.35 + 0.5 * Math.abs(Math.sin(performance.now() / 140)) * speakingLevel : level;
     history.shift(); history.push(muted ? 0 : v);
     whoHistory.shift(); whoHistory.push(hermesPlaying ? 1 : 0);

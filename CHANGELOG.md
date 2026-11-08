@@ -30,6 +30,17 @@ entry names next to its pinned commit.
   client sends the reply's spoken text as `say` frames and ends it with
   `say_end`, each with a `reply` key; text for a reply that was cut off is
   dropped. An attach id longer than 256 characters is refused.
+- The voice page shows "Working" while a Hermes turn still runs and no reply
+  audio plays, for example between a spoken "let me check" and the answer. The
+  server sends a `turn_done` frame to the page when the turn and its reply
+  audio are over.
+
+### Fixed
+
+- The voice page showed "Speaking" and "Talk over it to stop it." after the
+  reply audio stopped while the turn still ran, so speaking then stopped the
+  turn. It now shows "Speaking", and moves the amber meter, only while reply
+  audio plays.
 
 ## [0.1.0] - 2026-11-07
 

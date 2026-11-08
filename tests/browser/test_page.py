@@ -148,6 +148,7 @@ async def test_reply_finishes_when_audio_end_comes_after_the_audio(stack):
     await wait_for(lambda: conn.json_frames("playback"), timeout=10)  # it started playing
     await asyncio.sleep(1.0)  # ... and finished long before the reply's text ends
     await session.on_turn_done(reply_id, "t1", False)
+    await wait_for(lambda: any(f.get("done") for f in conn.json_frames("tts_stream")))
     await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
     playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
                               else None, timeout=5)
@@ -156,6 +157,34 @@ async def test_reply_finishes_when_audio_end_comes_after_the_audio(stack):
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
                                  timeout=5000)
 
+
+
+async def test_the_page_shows_working_while_the_turn_runs_between_spoken_parts(stack):
+    """A reply that speaks, then goes quiet while Hermes runs tools, shows Working, not
+    Speaking or Listening, until the turn is over."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    state = "document.getElementById('state').textContent"
+    await page.wait_for_function(f"{state} === 'Listening'", timeout=10000)
+    await conn.send({"type": "turn_end", "text": "check the weather", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await page.wait_for_function(f"{state} === 'Thinking'", timeout=5000)
+    await session.on_reply_delta(reply_id, "t1", 1, "Let me check. ")
+    rid = (await wait_for(lambda: conn.json_frames("tts_stream")))[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x10\x00" * 4800)  # 0.2 s
+    await page.wait_for_function(f"{state} === 'Speaking'", timeout=5000)
+    await page.wait_for_function(f"{state} === 'Working'", timeout=5000)  # the audio ran out
+    await asyncio.sleep(0.5)
+    assert await page.text_content("#state") == "Working"
+    await session.on_reply_delta(reply_id, "t1", 2, "It is sunny.")
+    await session.on_turn_done(reply_id, "t1", False)
+    await wait_for(lambda: any(f.get("done") for f in conn.json_frames("tts_stream")))
+    await conn.send(b"\x10\x00" * 4800)
+    await page.wait_for_function(f"{state} === 'Speaking'", timeout=5000)
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    await page.wait_for_function(f"{state} === 'Listening'", timeout=5000)
 
 async def test_gateway_messages_never_replace_the_streamed_reply(stack):
     """Tool progress and other sent messages show as their own lines; the final send

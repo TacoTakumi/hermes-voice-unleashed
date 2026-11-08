@@ -128,6 +128,23 @@ async def test_reply_audio_reaches_the_page(rig):
     assert page.audio == b"\x10\x00" * 240
 
 
+
+async def test_the_page_gets_turn_done_after_the_reply_audio_ends(rig):
+    """The page shows Hermes at work until the turn and its reply audio are over."""
+    hooks, conn, page = rig
+    fire(hooks.on_stream_delta, delta="Hi. ", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
+    rid = (await wait_for(lambda: tts_frames(conn)))[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x10\x00" * 240)
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await wait_for(lambda: ended(conn))
+    await asyncio.sleep(0.2)
+    assert page.of("turn_done") == []  # the turn ended, but its reply is still playing
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    await wait_for(lambda: page.of("turn_done"))
+    kinds = [f["type"] for f in page.frames]
+    assert kinds.index("audio_end") < kinds.index("turn_done")
+
 async def test_other_platforms_and_reasoning_send_nothing(rig):
     hooks, conn, page = rig
     fire(hooks.on_stream_delta, platform="telegram", delta="not for us", kind="text", turn_id="x",
