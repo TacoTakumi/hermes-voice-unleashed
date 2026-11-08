@@ -68,17 +68,24 @@ async def _site(tmp_path, init_script=None):
     browser API. The server answers GET /sessions with three rows and records the query
     of every /ws request (``ws_requests``) and the client of every session list request
     (``list_requests``). The frames in ``before_ready`` go to the page on every connect
-    before the session starts, as the plugin sends its connect frames."""
+    before the session starts, as the plugin sends its connect frames. With
+    ``join_failed_message`` set, a connect gets a join_failed frame with that message and
+    the join-failed close instead of a session. A session whose page connection is gone
+    lands in ``ended``."""
     plugin = sys.modules["voicemanager_live"]
-    from voicemanager_live.server import VoiceServer
+    from voicemanager_live.server import JOIN_FAILED_CLOSE_CODE, VoiceServer
     from voicemanager_live.session import VoiceSession, client_from_url
 
     async with FakeVoiceManager() as fake:
-        site = SimpleNamespace(fake=fake, sessions=[], utterances=[], ws_requests=[], list_requests=[],
-                               rows=_session_rows(int(time.time())), before_ready=[])
+        site = SimpleNamespace(fake=fake, sessions=[], ended=[], utterances=[], ws_requests=[], list_requests=[],
+                               rows=_session_rows(int(time.time())), before_ready=[], join_failed_message=None)
 
         async def on_client(connection, client_id, **options):
             site.ws_requests.append(parse_qs(urlsplit(connection.request.path).query))
+            if site.join_failed_message is not None:
+                await connection.send(json.dumps({"type": "join_failed", "message": site.join_failed_message}))
+                await connection.close(code=JOIN_FAILED_CLOSE_CODE, reason="join failed")
+                return
             for frame in site.before_ready:
                 await connection.send(json.dumps(frame))
 
@@ -87,7 +94,10 @@ async def _site(tmp_path, init_script=None):
 
             session = VoiceSession(connection, client_from_url(fake.url), client_id, on_utterance=on_utterance)
             site.sessions.append(session)
-            await session.run()
+            try:
+                await session.run()
+            finally:
+                site.ended.append(session)
 
         def on_sessions(client_id):
             site.list_requests.append(client_id)
@@ -125,9 +135,10 @@ async def stack(tmp_path, request):
 
 
 @pytest.fixture
-async def site(tmp_path):
-    """The server and a page not yet loaded: the chooser tests pick their own URL."""
-    async with _site(tmp_path) as site:
+async def site(tmp_path, request):
+    """The server and a page not yet loaded: the chooser tests pick their own URL. An
+    indirect parameter is the init script of ``_site``."""
+    async with _site(tmp_path, getattr(request, "param", None)) as site:
         yield site
 
 
@@ -259,6 +270,121 @@ async def test_the_history_frame_shows_its_lines_once_per_connect(site):
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
     await asyncio.sleep(0.3)
     assert await _log_turns(page) == expected
+
+
+# The mic streams the page opened and the wake locks it took, kept where a test can read
+# them: the page keeps both to itself.
+MIC_AND_WAKE_LOCK = """
+window.micStreams = [];
+const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+navigator.mediaDevices.getUserMedia = async (constraints) => {
+  const stream = await realGetUserMedia(constraints);
+  window.micStreams.push(stream);
+  return stream;
+};
+window.wakeLocks = { requested: 0, released: 0 };
+Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: {
+  request: async () => {
+    window.wakeLocks.requested += 1;
+    return { release: async () => { window.wakeLocks.released += 1; } };
+  },
+} });
+"""
+
+# Installed once the page is Listening: every state the header shows from then on.
+STATES_SEEN = """() => {
+  window.statesSeen = [];
+  const state = document.getElementById('state');
+  new MutationObserver(() => { window.statesSeen.push(state.textContent); })
+    .observe(state, { childList: true, characterData: true, subtree: true });
+}"""
+
+MIC_TRACK_STATES = "window.micStreams.flatMap(s => s.getAudioTracks().map(t => t.readyState))"
+
+
+async def _listening_from_the_chooser(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&client=phone")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    assert site.list_requests == ["phone"]
+    assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 0}
+    await page.evaluate(STATES_SEEN)
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_session_end_frame_stops_the_page_and_shows_the_chooser_again(site):
+    """The user ended the session by voice. The page lets go of the mic and the wake lock,
+    closes its socket for good and offers the sessions again, freshly listed."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    await site.sessions[0].send_page({"type": "session_end"})
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    await wait_for(lambda: len(site.ended) == 1, timeout=10)
+    await wait_for(lambda: len(site.list_requests) == 2, timeout=5)
+    await asyncio.sleep(1.0)  # long enough for a first reconnect try
+    assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
+    assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
+    assert await page.text_content("#state") == "Sessions"
+    assert site.list_requests == ["phone", "phone"]
+    assert len(site.ws_requests) == 1  # no reconnect
+    states = await page.evaluate("window.statesSeen")
+    assert "Reconnecting" not in states and "In use on another device" not in states, states
+    await _chooser_rows(page)
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_session_new_frame_reconnects_with_session_new(site):
+    """The user asked for a new session by voice. The page closes its socket itself and
+    opens a new one asking for a new session; the mic stays on and the hand-over path
+    (another page took over) stays quiet."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    await site.sessions[0].send_page({"type": "session_new"})
+    await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
+    await wait_for(lambda: len(site.ended) == 1, timeout=10)
+    await site.fake.wait_connections(2, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    assert site.ws_requests[1]["session"] == ["new"]
+    assert site.ws_requests[1]["client"] == ["phone"]
+    assert site.ended[0] is site.sessions[0]
+    assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 0}
+    assert await page.text_content("#toggle") == "Mute microphone"
+    assert await page.is_hidden("#chooser")
+    states = await page.evaluate("window.statesSeen")
+    assert "In use on another device" not in states and "Reconnecting" not in states, states
+    assert site.list_requests == ["phone"]
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_join_failed_frame_shows_the_chooser_with_the_message(site):
+    """The session the page asked for could not be joined: the server says so and closes
+    with its own code. The page shows the chooser with the message and does not reconnect."""
+    page = site.page
+    site.join_failed_message = "could not join session sid-titled-111: no such session"
+    await page.goto(f"{site.url}/?token={TOKEN}&client=phone&session=sid-titled-111")
+    await page.evaluate(STATES_SEEN)
+    await page.click("#toggle")
+    await wait_for(lambda: len(site.ws_requests) == 1, timeout=10)
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    await wait_for(lambda: len(site.list_requests) == 1, timeout=5)
+    await asyncio.sleep(1.0)  # long enough for a first reconnect try
+    assert "could not join session sid-titled-111: no such session" in await page.text_content("#detail")
+    assert await page.text_content("#state") == "Sessions"
+    assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
+    assert site.ws_requests[0]["session"] == ["sid-titled-111"]
+    assert len(site.ws_requests) == 1  # no reconnect
+    assert site.sessions == []
+    assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
+    states = await page.evaluate("window.statesSeen")
+    assert "Reconnecting" not in states and "In use on another device" not in states, states
+    await _chooser_rows(page)
 
 
 async def test_mic_reaches_voicemanager_as_16k_mono_pcm(stack):

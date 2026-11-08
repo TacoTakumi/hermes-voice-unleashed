@@ -196,6 +196,9 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // lane is on. A page opened with ?session=<id> asks for that one and skips the chooser.
   let sessionChoice = params.get("session") || null;
   const MIC_RATE = 16000;
+  // The server's close codes: another page took the conversation over; the session the
+  // page asked for could not be joined.
+  const REPLACED_CLOSE = 4001, JOIN_FAILED_CLOSE = 4002;
 
   const $ = (id) => document.getElementById(id);
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
@@ -600,6 +603,22 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       case "replaced":
         handOver();
         break;
+      case "session_end":
+        // The user ended the session by voice. The server closes the connection once
+        // its notice has played; the page is done with it now.
+        leave();
+        break;
+      case "session_new":
+        // The user asked for a new session by voice. The connection stays open until
+        // the page closes it; the next one asks for a new session, the mic stays on.
+        disconnect();
+        sessionChoice = "new";
+        connect();
+        break;
+      case "join_failed":
+        // The session the page asked for could not be joined; the server closes next.
+        leave(f.message || "The session could not be joined.");
+        break;
     }
   }
 
@@ -628,12 +647,27 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       busy = false;
       turnAbort();
       replyClear(null);
-      if (ev.code === 4001) handOver();
+      if (ev.code === REPLACED_CLOSE) handOver();
+      // The join_failed frame came before this close and already did the work; this
+      // covers a close without it.
+      if (ev.code === JOIN_FAILED_CLOSE) { leave("The session could not be joined."); return; }
       if (!running || replaced) return;
       const wait = Math.min(10000, 500 * 2 ** retry++);
       show("Reconnecting", "alert", `Trying again in ${Math.round(wait / 1000) || 1} s.`);
       setTimeout(() => { if (running) connect(); }, wait);
     };
+  }
+  // Close the socket on purpose. Its handlers come off first: the close of a socket the
+  // page gave up must not reconnect, and nothing the server still sends on it counts.
+  function disconnect() {
+    const sock = ws;
+    ws = null;
+    busy = false;
+    turnAbort();
+    replyClear(null);
+    if (!sock) return;
+    sock.onopen = sock.onmessage = sock.onclose = null;
+    sock.close();
   }
 
   // --- microphone ------------------------------------------------------------------
@@ -731,6 +765,34 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     draw();
   }
 
+  // The reverse of start: the socket, the mic, its contexts and the wake lock go; the
+  // button offers a start again. The drawing loop ends on its own once running is off.
+  function stop() {
+    running = false;
+    disconnect();
+    retry = 0;
+    muted = false;
+    if (micStream) for (const track of micStream.getTracks()) track.stop();
+    micStream = micNode = null;
+    for (const ctx of [micCtx, playCtx]) if (ctx) ctx.close().catch(() => {});
+    micCtx = playCtx = null;
+    if (wakeLock) Promise.resolve(wakeLock.release()).catch(() => {});
+    wakeLock = null;
+    level = speakingLevel = 0;
+    transcriptEl.textContent = "";
+    toggle.textContent = "Start talking";
+    toggle.setAttribute("aria-pressed", "false");
+  }
+  // The page is done with its session: stop, then offer the sessions again, with
+  // `detail` as the line under the heading when there is something to say.
+  function leave(detail) {
+    stop();
+    reasoningClear();
+    toolsEl.textContent = "";
+    activityEl.hidden = true;
+    showChooser(detail);
+  }
+
   // Another page (this conversation on another device or tab) took over. Stay off until
   // the user takes it back here; that page is then the one that steps aside.
   function handOver() {
@@ -794,11 +856,11 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     li.appendChild(button);
     return li;
   }
-  async function showChooser() {
+  async function showChooser(detail) {
     sessionsEl.textContent = "";
     chooserEl.hidden = false;
     logEl.hidden = meter.hidden = footerEl.hidden = true;
-    show("Sessions", "none", "Tap one to go on with it, or start a new one.");
+    show("Sessions", "none", detail || "Tap one to go on with it, or start a new one.");
     let rows;
     try {
       const res = await fetch(`/sessions?token=${encodeURIComponent(token)}&client=${encodeURIComponent(clientId)}`);
