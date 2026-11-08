@@ -202,6 +202,16 @@ class VoiceSession:
         if self._takes(reply_id):
             await self._speak(delta)
 
+    async def on_tool_start(self, reply_id: str, call_id: str, name: str, summary: str) -> None:
+        """A tool call of the running reply's turn started: show it on the page."""
+        if not self.attached and self._takes(reply_id):
+            await self.send_page({"type": "tool_start", "id": call_id, "name": name, "summary": summary})
+
+    async def on_tool_end(self, reply_id: str, call_id: str, status: str, duration_ms: int) -> None:
+        if not self.attached and self._takes(reply_id):
+            await self.send_page({"type": "tool_end", "id": call_id, "status": status,
+                                  "duration_ms": duration_ms})
+
     async def on_turn_done(self, reply_id: str, turn_id: str, interrupted: bool) -> None:
         """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
         request so VoiceManager speaks the rest."""

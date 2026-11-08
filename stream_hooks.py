@@ -74,6 +74,41 @@ def on_session_end(turn_id: str = "", interrupted: bool = False, platform: str =
     _post(platform, "on_turn_done", turn_id, bool(interrupted))
 
 
+SUMMARY_MAX = 40  # characters of a tool call's argument summary on the page
+# The argument that says most about a call, for the tools that have one.
+_MAIN_ARGS = ("command", "query", "path", "file_path", "url", "pattern", "name", "code")
+
+
+def tool_summary(args: Any) -> str:
+    """A short one-line form of a tool call's arguments for the page."""
+    value: Any = ""
+    if isinstance(args, dict):
+        value = next((args[k] for k in _MAIN_ARGS if isinstance(args.get(k), str) and args[k].strip()), "")
+        if not value:
+            value = next((v for v in args.values() if isinstance(v, str) and v.strip()), "")
+    elif isinstance(args, str):
+        value = args
+    text = " ".join(str(value).split())
+    return text if len(text) <= SUMMARY_MAX else text[:SUMMARY_MAX - 3].rstrip() + "..."
+
+
+def pre_tool_call(tool_name: str = "", args: Any = None, tool_call_id: str = "", **_: Any) -> None:
+    """Show the call on the page. Never vetoes it: this returns None, and it only posts."""
+    try:
+        _post(None, "on_tool_start", tool_call_id, tool_name, tool_summary(args))
+    except Exception:
+        logger.debug("tool start for the page failed", exc_info=True)
+    return None
+
+
+def post_tool_call(tool_call_id: str = "", status: Optional[str] = None, duration_ms: int = 0,
+                   **_: Any) -> None:
+    try:
+        _post(None, "on_tool_end", tool_call_id, "error" if status == "error" else "ok", int(duration_ms or 0))
+    except Exception:
+        logger.debug("tool end for the page failed", exc_info=True)
+
+
 # Joined into the user message of each turn of a session a UI client has voice attached to.
 SAY_INSTRUCTION = (
     "This chat also has a voice channel. Start your reply with a short spoken summary inside "
@@ -98,6 +133,8 @@ def pre_llm_call(session_id: str = "", **_: Any) -> Optional[str]:
 HOOKS = {
     "on_stream_delta": on_stream_delta,
     "on_session_end": on_session_end,
+    "pre_tool_call": pre_tool_call,
+    "post_tool_call": post_tool_call,
     "pre_llm_call": pre_llm_call,
 }
 

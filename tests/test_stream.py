@@ -282,3 +282,63 @@ async def test_tts_gets_whole_words_so_voicemanager_joins_them_right(rig):
     assert all(t[-1].isspace() for t in texts[:-2])  # every chunk before the end stops at a word boundary
     assert not any(t.strip() and all(not c.isalnum() for c in t.strip()) for t in texts)  # no punctuation alone
     await wait_for(lambda: "".join(f["text"] for f in page.of("reply_delta")) == "".join(tokens))
+
+
+# --- tool calls on the page ------------------------------------------------------------
+
+LONG_COMMAND = "pytest -q tests/test_stream.py   -k 'tool and not slow' --maxfail=1"
+
+
+async def test_tool_calls_reach_the_page_as_start_and_end_frames(rig):
+    hooks, conn, page = rig
+    results = []
+
+    def pre(**payload):
+        results.append(hooks.HOOKS["pre_tool_call"](**payload))
+
+    fire(pre, tool_name="terminal", args={"command": LONG_COMMAND}, tool_call_id="c1", turn_id="t1",
+         session_id="s1")
+    deliver(hooks, "post_tool_call", tool_name="terminal", args={"command": LONG_COMMAND}, result="ok",
+            tool_call_id="c1", turn_id="t1", session_id="s1", duration_ms=1234, status="ok")
+    deliver(hooks, "pre_tool_call", tool_name="web_search", args={"query": "weather"}, tool_call_id="c2",
+            turn_id="t1", session_id="s1")
+    deliver(hooks, "post_tool_call", tool_name="web_search", args={"query": "weather"}, result="",
+            tool_call_id="c2", turn_id="t1", session_id="s1", duration_ms=50, status="error",
+            error_message="no network")
+    await wait_for(lambda: len(page.of("tool_end")) == 2)
+    assert results == [None]  # the blocking hook never vetoes
+    start, second = page.of("tool_start")
+    assert start["id"] == "c1" and start["name"] == "terminal"
+    assert len(start["summary"]) <= 40 and start["summary"].startswith("pytest -q tests/test_stream.py -k")
+    assert second == {"type": "tool_start", "id": "c2", "name": "web_search", "summary": "weather"}
+    assert page.of("tool_end") == [
+        {"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 1234},
+        {"type": "tool_end", "id": "c2", "status": "error", "duration_ms": 50}]
+
+
+async def test_tool_calls_of_another_chat_or_a_closed_reply_send_nothing(rig):
+    hooks, conn, page = rig
+    deliver(hooks, "pre_tool_call", chat_id="someone-else", tool_name="terminal", args={"command": "ls"},
+            tool_call_id="c1", turn_id="t1", session_id="s1")
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await wait_for(lambda: page.of("turn_done"))
+    deliver(hooks, "pre_tool_call", tool_name="terminal", args={"command": "ls"}, tool_call_id="c2",
+            turn_id="t1", session_id="s1")
+    await asyncio.sleep(0.2)
+    assert page.of("tool_start") == []
+
+
+async def test_an_attached_session_gets_no_tool_frames(plugin):
+    from voicemanager_live.session import VoiceSession
+
+    class Page:
+        sent = []
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    session = VoiceSession(Page(), client=None, attached=True)
+    session._open_reply()
+    await session.on_tool_start("", "c1", "terminal", "ls")
+    await session.on_tool_end("", "c1", "ok", 5)
+    assert Page.sent == []
