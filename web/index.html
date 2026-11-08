@@ -41,6 +41,8 @@ header { padding: 28px var(--gutter) 8px; }
 body[data-who="you"] #state { color: var(--you); }
 body[data-who="hermes"] #state { color: var(--hermes); }
 body[data-who="alert"] #state { color: var(--alert); }
+#elapsed { margin: 8px 0 0; color: var(--hermes); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+#elapsed[hidden] { display: none; }
 #detail { margin: 10px 0 0; color: var(--muted); font-size: 16px; min-height: 1.5em; }
 #meter { display: block; width: 100%; height: 72px; margin-top: 18px; }
 #transcript {
@@ -108,6 +110,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 <body data-who="none">
 <header>
   <h1 id="state">Tap to start</h1>
+  <p id="elapsed" hidden></p>
   <p id="detail">Hermes listens while this page is open.</p>
   <canvas id="meter" aria-hidden="true"></canvas>
   <p id="transcript" aria-live="polite"></p>
@@ -134,7 +137,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   const $ = (id) => document.getElementById(id);
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
   const logEl = $("log"), toggle = $("toggle"), meter = $("meter");
-  const activityEl = $("activity"), toolsEl = $("tools"), foldEl = $("fold");
+  const activityEl = $("activity"), toolsEl = $("tools"), foldEl = $("fold"), elapsedEl = $("elapsed");
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   let ws = null, micCtx = null, micStream = null, micNode = null, playCtx = null;
@@ -150,6 +153,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   // --- what the page shows --------------------------------------------------------
   function show(state, who, detail) {
     stateEl.textContent = state;
+    showElapsed();
     document.body.dataset.who = who;
     if (detail !== undefined) detailEl.textContent = detail;
   }
@@ -181,6 +185,15 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     const s = Math.max(0, Math.floor(ms / 1000));
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
+  // While Hermes works on a turn: the time since its utterance and its tool calls so far.
+  function showElapsed() {
+    const working = busy && turnStartedAt !== null && ["Thinking", "Working"].includes(stateEl.textContent);
+    elapsedEl.hidden = !working;
+    if (!working) return;
+    const n = turnTools.length;
+    elapsedEl.textContent = clock(Date.now() - turnStartedAt) + (n ? `, ${n} ${n === 1 ? "tool" : "tools"}` : "");
+  }
+  setInterval(showElapsed, 500);
   function turnBegin() {
     turnStartedAt = Date.now();
     turnTools = [];
@@ -227,6 +240,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     if (f.id) toolLines.set(f.id, li);
     if (turnStartedAt === null) turnStartedAt = Date.now();
     turnTools.push(li);
+    showElapsed();
     activityEl.hidden = false;
     toolsEl.scrollTop = toolsEl.scrollHeight;
   }
@@ -358,6 +372,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       case "turn_done":
         busy = false;
         turnFold();
+        showElapsed();
         status();
         break;
       case "reply_delta":

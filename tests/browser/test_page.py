@@ -298,3 +298,27 @@ async def test_a_finished_turn_folds_its_tool_lines_into_a_summary_line(stack):
     await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 3")
     order = await page.eval_on_selector_all("#tools > li", "els => els.map(e => e.className)")
     assert order[0].startswith("group") and order[-1] == "tool running"
+
+
+async def test_working_and_thinking_show_the_elapsed_time_and_tool_count(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    assert await page.is_hidden("#elapsed")
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    for call in ("c1", "c2"):
+        await session.send_page({"type": "tool_start", "id": call, "name": "terminal", "summary": call})
+    await page.wait_for_function("(document.getElementById('elapsed').textContent || '').includes('2 tools')")
+    first = await page.text_content("#elapsed")
+    await asyncio.sleep(2.2)  # the label ticks twice a second: more than a whole second passes
+    second = await page.text_content("#elapsed")
+
+    def secs(text):
+        m, s = re.search(r"(\d+):(\d\d)", text).groups()
+        return int(m) * 60 + int(s)
+
+    assert secs(second) > secs(first)
+    assert await page.text_content("#state") == "Thinking"
+    await session.send_page({"type": "turn_done"})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'")
+    assert await page.is_hidden("#elapsed")
