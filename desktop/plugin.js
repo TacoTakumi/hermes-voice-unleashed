@@ -122,39 +122,50 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
   let micCtx = null
   let micNode = null
   let playCtx = null
-  // One reply plays at a time. Its edges go back as playback frames: the turn
-  // engine needs to know where on the mic stream the reply was heard.
-  let reply = null
+  // Replies play one after another. One turn can bring several (one per
+  // assistant segment, and one per typed message), and speech is made faster
+  // than it plays, so a reply can begin while the one before is still heard:
+  // it is queued behind it. Binary frames carry no request id, so reply audio
+  // belongs to the reply begun last (intake). Each reply's edges go back as
+  // playback frames: the turn engine needs to know where on the mic stream
+  // the reply was heard.
+  let replies = [] // queued in play order; replies[0] is the one heard
+  let intake = null
+  let speaking = false
 
   function replyBegin(id, rate) {
-    replyClear(null)
     if (!playCtx) return
-    reply = {
-      id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [],
-      ended: false, started: false, stopped: false, playing: 0
+    // A reply that has not had its audio_end takes no more audio: what comes
+    // now is the new reply's. What it has queued still plays.
+    if (intake) replyEnd(intake)
+    const tail = replies[replies.length - 1]
+    const r = {
+      id, rate, next: Math.max(playCtx.currentTime + 0.06, tail ? tail.next : 0), first: null, samples: 0,
+      sources: [], ended: false, due: false, started: false, stopped: false, playing: 0
     }
+    replies.push(r)
+    intake = r
   }
 
   function replyPcm(buf) {
-    if (!reply || reply.stopped || !playCtx) return
+    const r = intake
+    if (!r || !playCtx) return
     const pcm = new Int16Array(buf)
     if (!pcm.length) return
-    const audio = playCtx.createBuffer(1, pcm.length, reply.rate)
+    const audio = playCtx.createBuffer(1, pcm.length, r.rate)
     const ch = audio.getChannelData(0)
     for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768
     const src = playCtx.createBufferSource()
     src.buffer = audio
     src.connect(playCtx.destination)
-    const at = Math.max(reply.next, playCtx.currentTime + 0.02)
+    const at = Math.max(r.next, playCtx.currentTime + 0.02)
     src.start(at)
-    const r = reply
     if (r.first === null) {
       r.first = at
       setTimeout(() => {
-        if (reply !== r || r.stopped) return
-        r.started = true
-        sendJson({ type: 'playback', event: 'start', request_id: r.id })
-        onSpeaking(true)
+        if (r.stopped) return
+        r.due = true
+        replyAudible()
       }, Math.max(0, (at - playCtx.currentTime) * 1000))
     }
     r.next = at + audio.duration
@@ -169,38 +180,67 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     }
   }
 
-  function replyEnd(id) {
-    if (!reply || reply.id !== id) return
-    reply.ended = true
-    if (reply.playing === 0) replyFinish(reply, reply.samples)
+  // The reply at the head of the queue whose first chunk is due is now heard.
+  // A reply behind it waits for its stop frame, so the start and stop frames of
+  // two replies never overlap.
+  function replyAudible() {
+    const r = replies[0]
+    if (!r || !r.due || r.started) return
+    r.started = true
+    sendJson({ type: 'playback', event: 'start', request_id: r.id })
+    syncSpeaking()
+  }
+
+  function replyEnd(r) {
+    if (!r || r.ended) return
+    r.ended = true
+    if (intake === r) intake = null
+    if (r.playing === 0) replyFinish(r, r.samples)
   }
 
   function replyFinish(r, played) {
     if (r.stopped) return
     r.stopped = true
-    if (r.started) {
-      sendJson({ type: 'playback', event: 'stop', request_id: r.id, reply_sample: played })
-      onSpeaking(false)
-    }
-    if (reply === r) reply = null
+    replies = replies.filter(x => x !== r)
+    if (intake === r) intake = null
+    if (r.started) sendJson({ type: 'playback', event: 'stop', request_id: r.id, reply_sample: played })
+    replyAudible()
+    syncSpeaking()
   }
 
-  // Stop every scheduled chunk of the reply at once (a barge-in, or the socket
-  // went away). A null id clears whatever reply is playing.
+  // Speaking from the first reply heard until the last one stops: across the
+  // short gap between two queued replies it stays on while the next reply has
+  // audio scheduled.
+  function syncSpeaking() {
+    const on = replies.some(r => r.started) || (speaking && replies.some(r => r.first !== null))
+    if (on === speaking) return
+    speaking = on
+    onSpeaking(on)
+  }
+
+  // Stop every scheduled chunk at once (a barge-in, or the socket went away).
+  // A clear stops the queued replies too, not only the one it names: a
+  // barge-in carries the id of the reply being cut, and the user talked over
+  // the speech, so what was queued behind it is not wanted either. A null id
+  // clears whatever is playing; an id that is not queued changes nothing.
   function replyClear(id) {
-    if (!reply || (id && reply.id !== id)) return
-    const r = reply
-    const played = r.first === null || !playCtx ? 0
-      : Math.max(0, Math.min(r.samples, Math.round((playCtx.currentTime - r.first) * r.rate)))
-    for (const s of r.sources) {
-      try {
-        s.onended = null
-        s.stop()
-      } catch {
-        // already stopped
+    if (id && !replies.some(r => r.id === id)) return
+    const all = replies
+    replies = []
+    intake = null
+    for (const r of all) {
+      const played = r.first === null || !playCtx ? 0
+        : Math.max(0, Math.min(r.samples, Math.round((playCtx.currentTime - r.first) * r.rate)))
+      for (const s of r.sources) {
+        try {
+          s.onended = null
+          s.stop()
+        } catch {
+          // already stopped
+        }
       }
+      replyFinish(r, played)
     }
-    replyFinish(r, played)
   }
 
   function release() {
@@ -274,7 +314,7 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
           replyBegin(frame.request_id, frame.sample_rate || 24000)
           break
         case 'audio_end':
-          replyEnd(frame.request_id)
+          replyEnd(replies.findLast(r => r.id === frame.request_id))
           break
         case 'clear':
           replyClear(frame.request_id || null)

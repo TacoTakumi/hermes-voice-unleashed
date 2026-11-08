@@ -11,7 +11,8 @@
 // the plugin source, so new SDK imports in the plugin do not break the harness.
 //
 // The harness records every AudioContext and every buffer source the plugin
-// makes, and what the plugin sends: binary frames and JSON frames.
+// makes, and what the plugin sends: binary frames and JSON frames, with the
+// time each JSON frame was sent.
 (async () => {
   try {
     window.violations = []
@@ -72,11 +73,15 @@
 
     window.bins = []
     window.jsons = []
+    window.jsonTimes = [] // when each JSON frame was sent, on the page clock
     window.speaking = []
     window.makeAudio = () => {
       window.audio = plugin.createVoiceAudio({
         sendBinary: buf => window.bins.push(buf),
-        sendJson: frame => window.jsons.push(frame),
+        sendJson: frame => {
+          window.jsons.push(frame)
+          window.jsonTimes.push(performance.now())
+        },
         onSpeaking: on => window.speaking.push(on)
       })
       return true

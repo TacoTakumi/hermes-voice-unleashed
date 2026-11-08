@@ -260,6 +260,66 @@ async def test_clear_without_a_request_id_stops_the_running_reply(page):
     await page.wait_for_function("() => window.sources.every(s => s.endedAt !== null)", timeout=1000)
 
 
+async def test_a_reply_that_starts_while_one_plays_is_queued_behind_it(page):
+    """One turn can bring several replies, and speech comes faster than it
+    plays: the second reply's audio_start arrives while the first is heard."""
+    await _start(page)
+    await _send_reply(page, "r1", 24000)  # 1 s
+    await _wait_playback(page, 1)
+    await _send_reply(page, "r2", 12000)  # 0.5 s
+    playback = await _wait_playback(page, 4, timeout=5000)
+    assert playback == [
+        {"type": "playback", "event": "start", "request_id": "r1"},
+        {"type": "playback", "event": "stop", "request_id": "r1", "reply_sample": 24000},
+        {"type": "playback", "event": "start", "request_id": "r2"},
+        {"type": "playback", "event": "stop", "request_id": "r2", "reply_sample": 12000},
+    ]
+    times = await page.evaluate(
+        "window.jsons.map((f, i) => [f, window.jsonTimes[i]]).filter(([f]) => f.type === 'playback').map(([, t]) => t)")
+    start1, stop1, start2, stop2 = times
+    assert stop1 - start1 > 900, f"the first reply was heard for {stop1 - start1:.0f} ms of 1000"
+    assert start2 >= stop1
+    assert stop2 - start2 > 400, f"the second reply was heard for {stop2 - start2:.0f} ms of 500"
+    assert await page.evaluate("window.sources.every(s => s.endedAt !== null)")
+    assert await page.evaluate("window.speaking") == [True, False]
+
+
+@pytest.mark.parametrize("cleared", ["r1", "r2", None])
+async def test_clear_stops_the_playing_reply_and_the_ones_queued_behind_it(page, cleared):
+    await _start(page)
+    await _send_reply(page, "r1", 24000)  # 1 s
+    await _wait_playback(page, 1)
+    await _send_reply(page, "r2", 24000, end=False)
+    await page.wait_for_timeout(200)
+    result = await page.evaluate(
+        """(id) => new Promise(resolve => {
+          const t0 = performance.now()
+          window.audio.onJson({ type: 'clear', request_id: id })
+          const wait = () => {
+            if (window.sources.every(s => s.endedAt !== null)) {
+              resolve(Math.max(...window.sources.map(s => s.endedAt)) - t0)
+            } else if (performance.now() - t0 > 2000) {
+              resolve(null)
+            } else {
+              setTimeout(wait, 2)
+            }
+          }
+          wait()
+        })""",
+        cleared)
+    assert result is not None, "scheduled sources still playing 2 s after clear"
+    assert result < 100, f"playback stopped {result:.0f} ms after clear"
+    playback = await _playback(page)
+    assert [(f["event"], f["request_id"]) for f in playback] == [("start", "r1"), ("stop", "r1")]
+    assert 0 < playback[1]["reply_sample"] < 24000
+    assert await page.evaluate("window.speaking") == [True, False]
+    # More audio of the cleared reply is dropped, and nothing queued plays later.
+    await page.evaluate("window.audio.onBinary(window.tone(4800, 24000, 300))")
+    assert await page.evaluate("window.sources.length") == 10
+    await page.wait_for_timeout(1200)
+    assert len(await _playback(page)) == 2
+
+
 async def test_stop_releases_the_mic_and_the_audio_contexts(page):
     await _start(page)
     await page.wait_for_function(f"() => window.binBytes() >= {10 * FRAME_BYTES}", timeout=10000)
