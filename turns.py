@@ -33,6 +33,26 @@ def heard_words(text: str) -> list[str]:
     return [w.lower() for w in _WORD.findall(text or "")]
 
 
+def normalized_phrase(text: str) -> str:
+    """``text`` as one lower-case phrase: punctuation stripped, spaces collapsed."""
+    return " ".join(heard_words(text))
+
+
+# Spoken commands: a whole utterance that the session acts on itself instead of
+# sending it to Hermes. The phrase maps to the command it stands for.
+END_SESSION = "end"
+SPOKEN_COMMANDS = {
+    "end session": END_SESSION,
+    "end the session": END_SESSION,
+    "end this session": END_SESSION,
+}
+
+
+def spoken_command(text: str) -> Optional[str]:
+    """The command ``text`` is, when the whole utterance is one of the phrases."""
+    return SPOKEN_COMMANDS.get(normalized_phrase(text))
+
+
 class TurnTracker:
     def __init__(self, dispatch: Dispatch, cancel: Cancel, turn_engine: Optional[str] = None) -> None:
         self._dispatch = dispatch

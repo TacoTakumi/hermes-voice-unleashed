@@ -145,6 +145,19 @@ async def test_an_utterance_goes_to_the_client_only(attached, adapter):
     assert adapter.messages == []
 
 
+async def test_end_session_on_an_attached_session_is_an_utterance_for_the_client(attached, adapter):
+    """The spoken commands are the page's: an attached client gets every transcript."""
+    client, conn = attached
+    await conn.send({"type": "turn_end", "text": "end session", "turn_id": 0})
+    await wait_for(lambda: len(client.of("utterance")) == 2)
+    assert client.of("utterance")[1] == {"type": "utterance", "text": "end session", "epoch": 3}
+    await asyncio.sleep(0.2)
+    assert client.of("session_end") == []
+    assert tts_frames(conn) == []
+    assert not client.task.done()  # the connection is still open
+    assert adapter.is_attached(SESSION_ID)
+
+
 async def test_say_frames_reach_tts_in_whole_words_and_say_end_closes_the_reply(attached):
     client, conn = attached
     await client.say("Hel", "lo th", "ere. How a")

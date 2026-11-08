@@ -30,7 +30,7 @@ from typing import Any, Awaitable, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
 from . import vm_client
-from .turns import TurnTracker, heard_words
+from .turns import END_SESSION, TurnTracker, heard_words, spoken_command
 from .vm_client import TurnEngineError, VoiceManagerClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,10 @@ TURN_ENGINE = "tyger"
 # last text deltas by a few milliseconds.
 REPLY_QUIET_S = 0.3
 TURN_START_TIMEOUT_S = 5.0
+# How long the session waits for VoiceManager to finish playing the "Session ended"
+# notice before it closes the page anyway.
+SESSION_END_TIMEOUT_S = 10.0
+SESSION_ENDED_NOTICE = "Session ended"
 CLOSED_KEYS_KEPT = 64  # reply keys of ended or cut-off replies an attached session remembers
 _LAST_SPACE = re.compile(r".*\s", re.S)  # everything up to and including the last whitespace
 
@@ -87,6 +91,10 @@ class VoiceSession:
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
         self._turn_ended_at: Optional[float] = None  # loop time of the last dispatch, for the log
+        # The spoken notice that ends the session: its TTS request id, and the event set
+        # when its audio has ended.
+        self._notice_request: Optional[str] = None
+        self._notice_ended: Optional[asyncio.Event] = None
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -301,6 +309,9 @@ class VoiceSession:
         rid = frame.get("request_id")
         self._dropped.discard(rid)
         await self.send_page({"type": "audio_end", "request_id": rid, "reason": frame.get("reason")})
+        if rid is not None and rid == self._notice_request:
+            self._notice_ended.set()
+            return
         request = self.reply_request
         if request is None or rid != request.request_id or request.cancelled:
             return
@@ -322,6 +333,11 @@ class VoiceSession:
             await self._send_clear(frame.get("request_id"))
 
     async def _dispatch(self, text: str) -> None:
+        if not self.attached and spoken_command(text) == END_SESSION:
+            # A page's spoken command is the session's to act on; an attached client
+            # gets every utterance and decides itself.
+            await self._end_session()
+            return
         self._turn_ended_at = asyncio.get_running_loop().time()
         words = heard_words(text)
         if len(words) == 1 and await self._answers_approval(words[0]):
@@ -356,6 +372,26 @@ class VoiceSession:
         await self._speak(text)
         rest, self._unsent = self._unsent, ""
         await self._send_tts(rest)
+
+    async def _end_session(self) -> None:
+        """The user ended the session by voice: stop the reply, say so, tell the page
+        with a ``session_end`` frame, and close the page once the notice has played
+        (or the wait for its end ran out)."""
+        logger.info("voice page %s: session ended by voice", self.client_id)
+        if self.reply_open or self.reply_request is not None:
+            await self.cancel_reply("session ended")
+        self._notice_ended = asyncio.Event()
+        await self.speak_notice(SESSION_ENDED_NOTICE)
+        request, self.reply_request = self.reply_request, None
+        if request is not None:
+            self._notice_request = request.request_id
+            await request.done()
+        await self.send_page({"type": "session_end"})
+        if request is not None:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._notice_ended.wait(), SESSION_END_TIMEOUT_S)
+        with contextlib.suppress(Exception):
+            await self.page.close()
 
     def _next_epoch(self) -> dict[str, Any]:
         """Start a new epoch: say frames the client sent before it gets this one are
