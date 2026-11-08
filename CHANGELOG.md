@@ -40,6 +40,13 @@ entry names next to its pinned commit.
   server sends `tool_start` and `tool_end` frames from Hermes's tool hooks, and
   the gateway's own tool progress messages are off for this platform by
   default.
+- A reasoning line on the voice page shows the newest sentence of the model's
+  reasoning while it thinks, the whole text on a tap, and "Reasoned for m:ss"
+  when the turn ends. It needs `plugins.stream_reasoning_deltas: true`; the
+  server forwards the reasoning as `reasoning_delta` frames and never speaks it.
+- While the page shows Thinking or Working, a line under it shows the time since
+  you spoke and the number of tool calls so far. At the end of a turn its tool
+  lines fold into one line, such as "3 tools, 0:42", that opens on a tap.
 
 ### Fixed
 

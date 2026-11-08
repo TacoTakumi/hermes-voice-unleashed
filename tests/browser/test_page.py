@@ -322,3 +322,26 @@ async def test_working_and_thinking_show_the_elapsed_time_and_tool_count(stack):
     await session.send_page({"type": "turn_done"})
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'")
     assert await page.is_hidden("#elapsed")
+
+
+async def test_the_reasoning_line_folds_and_opens(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "why is the sky blue"})
+    assert await page.is_hidden("#reasoning")
+    for text in ("The user asks about the sky. ", "Rayleigh scattering explains it. ", "Keep it short"):
+        await session.send_page({"type": "reasoning_delta", "text": text})
+    await page.wait_for_function("document.getElementById('reason-line').textContent === 'Keep it short'")
+    assert await page.is_visible("#reasoning") and await page.is_hidden("#reason-full")
+    await page.click("#reason-fold")
+    full = await page.text_content("#reason-full")
+    assert await page.is_visible("#reason-full")
+    assert full == "The user asks about the sky. Rayleigh scattering explains it. Keep it short"
+    await page.click("#reason-fold")
+    assert await page.is_hidden("#reason-full")
+    await session.send_page({"type": "turn_done"})
+    await page.wait_for_function("document.getElementById('reason-line').textContent.startsWith('Reasoned for ')")
+    assert re.fullmatch(r"Reasoned for \d+:\d\d", await page.text_content("#reason-line"))
+    await session.send_page({"type": "utterance", "text": "thanks"})
+    await page.wait_for_function("document.getElementById('reasoning').hidden")

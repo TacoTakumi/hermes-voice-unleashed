@@ -52,6 +52,10 @@ body[data-who="alert"] #state { color: var(--alert); }
   color: var(--you);
   min-height: 1.35em;
 }
+#reasoning { margin-top: 12px; }
+#reasoning[hidden] { display: none; }
+#reason-fold { display: block; width: 100%; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic; }
+#reason-full { margin: 4px 0 0; max-height: 12em; overflow-y: auto; color: var(--muted); font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 #activity { margin-top: 12px; }
 #activity[hidden] { display: none; }
 button.fold {
@@ -114,6 +118,10 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   <p id="detail">Hermes listens while this page is open.</p>
   <canvas id="meter" aria-hidden="true"></canvas>
   <p id="transcript" aria-live="polite"></p>
+  <section id="reasoning" hidden aria-label="What Hermes is thinking">
+    <button id="reason-fold" class="fold" type="button" aria-expanded="false" aria-controls="reason-full"><span id="reason-line"></span></button>
+    <p id="reason-full" hidden></p>
+  </section>
   <section id="activity" hidden aria-label="What Hermes is doing">
     <button id="fold" class="fold" type="button" aria-expanded="true" aria-controls="tools">Hide tools</button>
     <ol id="tools"></ol>
@@ -137,6 +145,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   const $ = (id) => document.getElementById(id);
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
   const logEl = $("log"), toggle = $("toggle"), meter = $("meter");
+  const reasoningEl = $("reasoning"), reasonFoldEl = $("reason-fold"), reasonLineEl = $("reason-line");
+  const reasonFullEl = $("reason-full");
   const activityEl = $("activity"), toolsEl = $("tools"), foldEl = $("fold"), elapsedEl = $("elapsed");
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -177,6 +187,39 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     else if (busy) show("Working", "hermes", muted ? "Hermes is still working." : "Hermes is still working. Speaking now stops it.");
     else listening();
   }
+
+  // --- the reasoning line: the newest sentence, the whole text on a tap ------------------
+  let reasonText = "", reasonFirstAt = null, reasonLastAt = null;
+  function newestSentence(text) {
+    const parts = text.split(/(?<=[.!?])\s+/).map((t) => t.trim()).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : "";
+  }
+  function reasoningClear() {
+    reasonText = "";
+    reasonFirstAt = reasonLastAt = null;
+    reasonLineEl.textContent = reasonFullEl.textContent = "";
+    reasonFullEl.hidden = true;
+    reasonFoldEl.setAttribute("aria-expanded", "false");
+    reasoningEl.hidden = true;
+  }
+  function reasoningDelta(text) {
+    if (!text) return;
+    reasonLastAt = Date.now();
+    if (reasonFirstAt === null) reasonFirstAt = reasonLastAt;
+    reasonText += text;
+    reasonFullEl.textContent = reasonText.trim();
+    reasonLineEl.textContent = newestSentence(reasonText);
+    reasoningEl.hidden = false;
+    if (!reasonFullEl.hidden) reasonFullEl.scrollTop = reasonFullEl.scrollHeight;
+  }
+  function reasoningDone() {
+    if (reasonFirstAt !== null) reasonLineEl.textContent = "Reasoned for " + clock(reasonLastAt - reasonFirstAt);
+  }
+  reasonFoldEl.addEventListener("click", () => {
+    const open = reasonFullEl.hidden;
+    reasonFullEl.hidden = !open;
+    reasonFoldEl.setAttribute("aria-expanded", String(open));
+  });
 
   // --- the activity panel: one line per tool call ---------------------------------------
   const toolLines = new Map(); // call id -> its <li>
@@ -361,7 +404,11 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
         hermesTurn = null;
         busy = true;
         turnBegin();
+        reasoningClear();
         show("Thinking", "hermes", "Hermes is working on it.");
+        break;
+      case "reasoning_delta":
+        reasoningDelta(f.text);
         break;
       case "tool_start":
         toolStart(f);
@@ -372,6 +419,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
       case "turn_done":
         busy = false;
         turnFold();
+        reasoningDone();
         showElapsed();
         status();
         break;

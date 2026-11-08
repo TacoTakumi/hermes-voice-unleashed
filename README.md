@@ -104,6 +104,18 @@ auxiliary:
 `auxiliary.voice_chat.model` and `provider` can also send voice turns to a
 faster model than the profile's main one.
 
+The page shows the model's reasoning in a line under the transcript: the newest
+sentence while it thinks, the whole text when you tap it, and "Reasoned for
+m:ss" when the turn ends. Hermes passes reasoning to plugins only when you turn
+it on, and the voice turn must keep its reasoning (above):
+
+```yaml
+plugins:
+  stream_reasoning_deltas: true
+```
+
+Without it the line stays hidden.
+
 ### Tool calls on the page
 
 The page shows each tool call in its activity panel, so the plugin turns
