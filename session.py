@@ -26,7 +26,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
 from . import vm_client
@@ -59,11 +59,17 @@ class VoiceSession:
 
     def __init__(self, page, client: VoiceManagerClient, client_id: str = "phone",
                  on_utterance: Optional[Callable[[str, str], Awaitable[None]]] = None,
-                 attached: bool = False) -> None:
+                 attached: bool = False,
+                 approval_words: Optional[Callable[[], Iterable[str]]] = None,
+                 approval_pending: Optional[Callable[[], Awaitable[bool]]] = None) -> None:
         self.page = page
         self.client = client
         self.client_id = client_id
         self._on_utterance = on_utterance
+        # Spoken approvals: the lower-case words that answer an approval prompt, and
+        # whether the chat waits for one right now.
+        self._approval_words = approval_words
+        self._approval_pending = approval_pending
         self.attached = attached  # the reply's text comes from the client's say frames
         self.reply_key: Optional[str] = None  # attached: the client's key for the running reply
         self._closed_keys: dict[str, None] = {}  # attached: keys that take no more text, oldest first
@@ -171,8 +177,9 @@ class VoiceSession:
         """Whether hook text for ``reply_id`` belongs to the running reply.
 
         An empty id (a turn context without a message id) falls back to the
-        running reply."""
-        return self.reply_open and (not reply_id or reply_id == self.reply_id)
+        running reply. A reply without an id of its own (a page that reconnected
+        while a turn was blocked on an approval) takes any id."""
+        return self.reply_open and (not reply_id or self.reply_id is None or reply_id == self.reply_id)
 
     async def _speak(self, text: str) -> None:
         """Show ``text`` on the page now; send it to TTS in whole words.
@@ -316,10 +323,35 @@ class VoiceSession:
 
     async def _dispatch(self, text: str) -> None:
         self._turn_ended_at = asyncio.get_running_loop().time()
+        words = heard_words(text)
+        if len(words) == 1 and await self._answers_approval(words[0]):
+            # The gateway consumes a bare approval word for the blocked turn, which then
+            # resumes under its original message id. The cancel that a new utterance
+            # causes closed the reply, so it opens again under that id to take the
+            # resumed turn's text. The word goes out under a message id of its own.
+            self._reopen_reply()
+            await self.send_page({"type": "utterance", "text": words[0], **self._next_epoch()})
+            if self._on_utterance is not None:
+                await self._on_utterance(words[0], uuid.uuid4().hex)
+            return
         self._open_reply()
         await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
         if self._on_utterance is not None:
             await self._on_utterance(text, self.reply_id)
+
+    async def _answers_approval(self, word: str) -> bool:
+        """Whether the bare ``word`` answers an approval the chat waits for."""
+        if self._approval_words is None or self._approval_pending is None:
+            return False
+        return word in self._approval_words() and await self._approval_pending()
+
+    async def speak_notice(self, text: str) -> None:
+        """Speak ``text`` now, through the running reply's TTS request or a new one.
+
+        All of it goes to TTS at once, so nothing waits for more text."""
+        await self._speak(text)
+        rest, self._unsent = self._unsent, ""
+        await self._send_tts(rest)
 
     def _next_epoch(self) -> dict[str, Any]:
         """Start a new epoch: say frames the client sent before it gets this one are
@@ -336,6 +368,12 @@ class VoiceSession:
         self._cancel_finishing()
         self._retire(self.reply_key)
         self.reply_id = uuid.uuid4().hex
+        self.reply_open, self.reply_request, self._unsent = True, None, ""
+
+    def _reopen_reply(self) -> None:
+        """The running reply takes text again under its own id and key. Its old TTS
+        request is gone: the cancel before this dropped it and cleared the page."""
+        self._cancel_finishing()
         self.reply_open, self.reply_request, self._unsent = True, None, ""
 
     def _retire(self, key: Optional[str]) -> None:
