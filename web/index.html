@@ -468,7 +468,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     if (reply.playing === 0) replyFinish(reply, reply.samples, reply.next);
   }
   // `edge` is the play context time the last played sample ended: the end of the last
-  // chunk when the reply played out, now when it was cut.
+  // chunk when the reply played out (or was cleared after that), now when it was cut
+  // while still playing.
   function replyFinish(r, played, edge) {
     if (r.stopped) return;
     r.stopped = true;
@@ -487,7 +488,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     const played = r.first === null ? 0
       : Math.max(0, Math.min(r.samples, Math.round((playCtx.currentTime - r.first) * r.rate)));
     for (const s of r.sources) { try { s.onended = null; s.stop(); } catch (e) { /* already stopped */ } }
-    replyFinish(r, played, playCtx.currentTime);
+    // The scheduled end of the last chunk: replyFinish clamps it to now while audio still plays.
+    replyFinish(r, played, r.next);
   }
 
   // --- server frames ------------------------------------------------------------------

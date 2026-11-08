@@ -237,6 +237,28 @@ async def test_playback_frames_carry_the_mic_sample_of_a_reply_cleared_part_way(
     assert abs(span - stop["reply_sample"] * 16000 / 24000) <= 8000, (start, stop)
 
 
+async def test_playback_frames_of_a_quiet_reply_cleared_after_it_played_out_stop_at_its_last_sample(stack):
+    """A reply whose audio has played out, with no audio_end yet (the turn went quiet), is
+    cleared by a barge: the stop edge is the end of the last sample heard, not the clear
+    time, so the mic span matches the sound and not the silence after it."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    rid = await _reply_request(conn, page, sessions, utterances, "hello")
+    for _ in range(5):
+        await conn.send(b"\x10\x00" * 2400)  # 5 x 0.1 s at 24 kHz
+    start, _ = await _start_frame(conn)
+    await asyncio.sleep(1.5)  # well past the 0.5 s of sound: the page is quiet
+    await conn.send({"type": "barge", "request_id": rid, "onset_mic_sample": 0, "mic_sample": 0})
+    playback = await wait_for(lambda: conn.json_frames("playback") if len(conn.json_frames("playback")) >= 2
+                              else None, timeout=10)
+    start, stop = playback[:2]
+    assert (start["event"], stop["event"]) == ("start", "stop")
+    assert _is_count(start["mic_sample"]) and _is_count(stop["mic_sample"])
+    assert stop["reply_sample"] == 12000
+    assert stop["mic_sample"] >= start["mic_sample"]
+    assert abs((stop["mic_sample"] - start["mic_sample"]) - 0.5 * 16000) <= 8000, (start, stop)
+
+
 async def test_playback_frames_of_a_muted_mic_map_to_the_end_of_the_sent_stream(stack):
     """While the mic is muted no mic audio goes out, so both edges of a reply sit at the
     count of samples sent before the mute: the end of the stream the server has."""
