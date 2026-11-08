@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Say cutter harness</title>
+<script>
+// Loads desktop/plugin.js as an ES module outside the app. The app rewrites the
+// plugin's bare imports at load time; here an import map points each of them
+// at a stub module. The stub's export names are read from the plugin source,
+// so new SDK imports in the plugin do not break the harness.
+(async () => {
+  try {
+    const url = '/desktop/plugin.js'
+    const source = await (await fetch(url)).text()
+    const names = {}
+    for (const m of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+      const list = (names[m[2]] ||= new Set())
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split(/\s+as\s+/)[0].trim()
+        if (name) list.add(name)
+      }
+    }
+    for (const m of source.matchAll(/import\s+[^'"{]*from\s*['"]([^'"]+)['"]/g)) names[m[1]] ||= new Set()
+    // One stub value for every import: callable, and every property is the stub again.
+    const stub =
+      'const stub = new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => "" : stub),' +
+      ' apply: () => stub, construct: () => stub });\n'
+    const imports = {}
+    for (const [specifier, list] of Object.entries(names)) {
+      if (specifier.startsWith('.') || specifier.startsWith('/')) continue
+      const code = stub + 'export default stub;\n' + [...list].map(n => `export const ${n} = stub;`).join('\n')
+      imports[specifier] = 'data:text/javascript,' + encodeURIComponent(code)
+    }
+    const map = document.createElement('script')
+    map.type = 'importmap'
+    map.textContent = JSON.stringify({ imports })
+    document.head.append(map)
+
+    const plugin = await import(url)
+    window.createSayCutter = plugin.createSayCutter
+    window.pluginDefault = plugin.default
+    // Push each delta, then end. Returns what each call gave back.
+    window.runCutter = deltas => {
+      const cutter = plugin.createSayCutter()
+      const pushes = deltas.map(d => cutter.push(d))
+      const end = cutter.end()
+      return { pushes, end, after: cutter.push('<say>more</say>'), endAgain: cutter.end() }
+    }
+    window.harnessReady = true
+  } catch (err) {
+    window.harnessError = String(err && err.stack ? err.stack : err)
+  }
+})()
+</script>
+</head>
+<body></body>
+</html>

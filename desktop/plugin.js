@@ -5,6 +5,63 @@
 import { atom, Button, host, icons, Input, ListRow, Tip, useValue } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
+// The say cutter. The model starts a reply with a spoken summary inside
+// <say>...</say>. Fed the reply's streamed text deltas, the cutter gives back
+// only the text of the first say block, as it arrives. Tags can be split
+// across deltas, so the cutter holds back a tail that could still become a tag
+// and lets it go as soon as it cannot. One cutter per reply.
+const SAY_OPEN = '<say>'
+const SAY_CLOSE = '</say>'
+
+// The length of the longest tail of text that is the start of tag.
+function partialTagLength(text, tag) {
+  for (let n = Math.min(text.length, tag.length - 1); n > 0; n--) {
+    if (text.endsWith(tag.slice(0, n))) return n
+  }
+  return 0
+}
+
+export function createSayCutter() {
+  let stage = 'before' // 'before' the block, 'inside' it, or 'done'
+  let held = ''
+
+  return {
+    // Takes a delta; returns the say text to send now, '' if none.
+    push(delta) {
+      if (stage === 'done') return ''
+      held += delta
+      if (stage === 'before') {
+        const at = held.indexOf(SAY_OPEN)
+        if (at < 0) {
+          held = held.slice(held.length - partialTagLength(held, SAY_OPEN))
+          return ''
+        }
+        held = held.slice(at + SAY_OPEN.length)
+        stage = 'inside'
+      }
+      const at = held.indexOf(SAY_CLOSE)
+      if (at >= 0) {
+        const text = held.slice(0, at)
+        held = ''
+        stage = 'done'
+        return text
+      }
+      const keep = partialTagLength(held, SAY_CLOSE)
+      const text = held.slice(0, held.length - keep)
+      held = held.slice(held.length - keep)
+      return text
+    },
+    // Call when the reply is complete. Returns held say text that is not a
+    // partial closing tag, and closes the cutter.
+    end() {
+      const text = stage === 'inside' && !SAY_CLOSE.startsWith(held) ? held : ''
+      stage = 'done'
+      held = ''
+      return text
+    }
+  }
+}
+
 const ID = 'voicemanager-live'
 const DEFAULTS = { address: '', token: '' }
 
