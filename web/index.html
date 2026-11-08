@@ -344,10 +344,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     turnTools.push(li);
     showElapsed();
     activityEl.hidden = false;
-    toolsToEnd();
+    toolsToEnd(); // also scrolls a header that scrolls itself, never the window
     toolsPinSoon();
-    // A header that scrolls itself (a phone held sideways) brings the new line into view.
-    li.scrollIntoView({ block: "nearest", behavior: "auto" });
   }
   const FAILED_WORDS = { error: "failed", timeout: "timed out", blocked: "blocked", cancelled: "cancelled" };
   function toolEnd(f) {

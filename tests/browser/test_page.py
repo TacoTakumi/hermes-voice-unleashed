@@ -538,3 +538,20 @@ async def test_reasoning_and_tools_never_overlap_on_a_landscape_phone(stack):
     assert all(b[1] - b[0] > 10 for b in order), boxes  # none squeezed to nothing
     assert boxes["scrolls"], boxes
     assert await _newest_tool_in_view(page)
+
+
+async def test_a_new_tool_line_never_scrolls_the_window(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 900, "height": 560})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "wide"})
+    await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 60})
+    await page.wait_for_selector("#reasoning:not([hidden])")
+    await page.click("#reason-fold")
+    await page.evaluate("window.scrollTo(0, 0)")
+    for i in range(4):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 4")
+    await asyncio.sleep(0.3)
+    assert await page.evaluate("window.scrollY") == 0
