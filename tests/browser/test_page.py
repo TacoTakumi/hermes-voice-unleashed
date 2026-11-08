@@ -448,3 +448,35 @@ async def test_a_replaced_page_ends_its_turn_on_reconnect(stack):
         await page.wait_for_function(
             "document.getElementById('state').textContent === 'In use on another device'", timeout=5000)
         await _turn_was_ended(page)
+
+
+async def _newest_tool_in_view(page):
+    return await page.evaluate("""() => {
+        const li = [...document.querySelectorAll('#tools .tool')].pop().getBoundingClientRect();
+        const h = document.querySelector('header').getBoundingClientRect();
+        return li.height > 0 && li.top >= h.top - 1 && li.bottom <= h.bottom + 1
+            && li.top >= 0 && li.bottom <= window.innerHeight;
+    }""")
+
+
+async def test_the_newest_tool_line_stays_in_view_on_a_short_screen(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 390, "height": 664})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "busy"})
+    for i in range(6):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 6")
+    await asyncio.sleep(0.2)
+    assert await _newest_tool_in_view(page)
+    await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 40})
+    await page.wait_for_selector("#reasoning:not([hidden])")
+    await page.click("#reason-fold")
+    await session.send_page({"type": "tool_start", "id": "c6", "name": "terminal", "summary": "step 6"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 7")
+    await asyncio.sleep(0.2)
+    assert await _newest_tool_in_view(page)
+    box = await page.evaluate("""() => ({ log: document.querySelector('main').getBoundingClientRect().height,
+        button: document.getElementById('toggle').getBoundingClientRect().bottom <= window.innerHeight })""")
+    assert box["log"] >= 120 and box["button"], box
