@@ -226,6 +226,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     reasonFullEl.textContent = reasonText.trim();
     reasonLineEl.textContent = newestSentence(reasonText);
     reasoningEl.hidden = false;
+    toolsPinSoon();
     if (!reasonFullEl.hidden) reasonFullEl.scrollTop = reasonFullEl.scrollHeight;
   }
   function reasoningDone() {
@@ -235,10 +236,36 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     const open = reasonFullEl.hidden;
     reasonFullEl.hidden = !open;
     reasonFoldEl.setAttribute("aria-expanded", String(open));
+    toolsPinSoon();
   });
 
   // --- the activity panel: one line per tool call ---------------------------------------
   const toolLines = new Map(); // call id -> its <li>
+  // The tool list follows its newest line unless the user scrolled it up to read. Only a
+  // scroll right after the user's own gesture counts: the browser also moves scrollTop
+  // when the list grows or shrinks, and the page moves it when a line is added.
+  let toolsAtEnd = true, toolsGestureUntil = 0;
+  function toolsToEnd() {
+    toolsEl.scrollTop = toolsEl.scrollHeight;
+    toolsAtEnd = true;
+  }
+  for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+    toolsEl.addEventListener(kind, () => { toolsGestureUntil = Date.now() + 1000; }, { passive: true });
+  }
+  toolsEl.addEventListener("scroll", () => {
+    if (Date.now() > toolsGestureUntil) return;
+    toolsAtEnd = toolsEl.scrollTop + toolsEl.clientHeight >= toolsEl.scrollHeight - 4;
+  });
+  // Back to the end on the next frame, after the layout settled. Lines and reasoning can
+  // arrive in one frame and leave the list as high as before, so a ResizeObserver alone
+  // misses a list that grew and shrank again.
+  let toolsPinQueued = false;
+  function toolsPinSoon() {
+    if (toolsPinQueued) return;
+    toolsPinQueued = true;
+    requestAnimationFrame(() => { toolsPinQueued = false; if (toolsAtEnd) toolsToEnd(); });
+  }
+  new ResizeObserver(toolsPinSoon).observe(toolsEl);
   let turnStartedAt = null, turnTools = []; // the running turn: when it began, its tool lines
   function clock(ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -301,7 +328,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     turnTools.push(li);
     showElapsed();
     activityEl.hidden = false;
-    toolsEl.scrollTop = toolsEl.scrollHeight;
+    toolsToEnd();
+    toolsPinSoon();
     // A header that scrolls itself (a phone held sideways) brings the new line into view.
     li.scrollIntoView({ block: "nearest", behavior: "auto" });
   }
@@ -330,7 +358,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     toolsEl.hidden = !open;
     foldEl.setAttribute("aria-expanded", String(open));
     foldEl.textContent = open ? "Hide tools" : "Show tools";
-    if (open) toolsEl.scrollTop = toolsEl.scrollHeight;
+    if (open) toolsToEnd();
   });
 
   // --- reply audio ------------------------------------------------------------------

@@ -480,3 +480,35 @@ async def test_the_newest_tool_line_stays_in_view_on_a_short_screen(stack):
     box = await page.evaluate("""() => ({ log: document.querySelector('main').getBoundingClientRect().height,
         button: document.getElementById('toggle').getBoundingClientRect().bottom <= window.innerHeight })""")
     assert box["log"] >= 120 and box["button"], box
+
+
+async def test_the_newest_tool_line_stays_in_view_when_the_list_shrinks(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    for width, height in ((390, 664), (360, 640)):
+        await page.set_viewport_size({"width": width, "height": height})
+        await session.send_page({"type": "utterance", "text": f"busy at {width}"})
+        for i in range(6):
+            await session.send_page({"type": "tool_start", "id": f"{width}-{i}", "name": "terminal",
+                                     "summary": f"step {i}"})
+        await page.wait_for_function(
+            "([...document.querySelectorAll('#tools .tool')].pop() || {textContent: ''}).textContent"
+            ".includes('step 5')")
+        await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 40})
+        await page.wait_for_selector("#reasoning:not([hidden])")
+        await asyncio.sleep(0.2)
+        assert await _newest_tool_in_view(page), (width, "line")
+        await page.click("#reason-fold")
+        await asyncio.sleep(0.2)
+        assert await _newest_tool_in_view(page), (width, "text open")
+        await page.click("#reason-fold")
+        await session.send_page({"type": "turn_done"})
+    # A user who scrolled the list up to read is not pulled back down.
+    await page.click("#tools .group button")
+    await page.hover("#tools")
+    await page.mouse.wheel(0, -2000)
+    await page.wait_for_function("document.getElementById('tools').scrollTop === 0")
+    await page.set_viewport_size({"width": 390, "height": 600})
+    await asyncio.sleep(0.2)
+    assert await page.evaluate("document.getElementById('tools').scrollTop") == 0
