@@ -259,9 +259,14 @@ class VoiceSession:
         self._dropped.discard(rid)
         await self.send_page({"type": "audio_end", "request_id": rid, "reason": frame.get("reason")})
         request = self.reply_request
-        if request is None or rid != request.request_id or not request.done_sent or request.cancelled:
+        if request is None or rid != request.request_id or request.cancelled:
             return
         self.reply_request = None
+        if not request.done_sent:
+            # VoiceManager ended the request on its own: it got no text for its flush
+            # timeout while the turn ran tools. The rest of the reply's text goes into a
+            # new request, and the end of the turn sees that none is open.
+            return
         await self._next_turn()
 
     async def _on_barge(self, frame: dict) -> None:

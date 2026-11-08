@@ -145,6 +145,44 @@ async def test_the_page_gets_turn_done_after_the_reply_audio_ends(rig):
     kinds = [f["type"] for f in page.frames]
     assert kinds.index("audio_end") < kinds.index("turn_done")
 
+
+async def _flushed_early(hooks, conn):
+    """Speak a first part, then have VoiceManager end the request on its own, as its
+    flush timeout does when tools run for longer than it waits for text."""
+    fire(hooks.on_stream_delta, delta="Let me check. ", kind="text", turn_id="t1", iteration=1,
+         surface=PLATFORM)
+    rid = (await wait_for(lambda: tts_frames(conn)))[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x10\x00" * 240)
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    return rid
+
+
+async def test_text_after_a_flush_timeout_goes_into_a_new_request(rig):
+    hooks, conn, page = rig
+    first = await _flushed_early(hooks, conn)
+    await wait_for(lambda: page.of("audio_end"))
+    fire(hooks.on_stream_delta, delta="It is sunny.", kind="text", turn_id="t1", iteration=2,
+         surface=PLATFORM)
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    frames = await wait_for(lambda: ended(conn))
+    later = [f for f in frames if f["request_id"] != first]
+    assert "".join(f["text"] for f in later) == "It is sunny."
+    assert later[-1]["done"] is True and not any(f["done"] for f in frames if f["request_id"] == first)
+    assert page.of("turn_done") == []
+    await conn.send({"type": "audio_end", "request_id": later[0]["request_id"], "reason": "complete"})
+    await wait_for(lambda: page.of("turn_done"))
+
+
+async def test_a_turn_with_nothing_more_after_a_flush_timeout_still_ends(rig):
+    hooks, conn, page = rig
+    await _flushed_early(hooks, conn)
+    await wait_for(lambda: page.of("audio_end"))
+    assert page.of("turn_done") == []  # the turn still runs
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await wait_for(lambda: page.of("turn_done"))
+    assert not any(f["done"] for f in tts_frames(conn))  # nothing sent to the ended request
+
 async def test_other_platforms_and_reasoning_send_nothing(rig):
     hooks, conn, page = rig
     fire(hooks.on_stream_delta, platform="telegram", delta="not for us", kind="text", turn_id="x",
