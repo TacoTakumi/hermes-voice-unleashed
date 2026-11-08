@@ -225,6 +225,9 @@ def register(ctx):
         env_enablement_fn=_env_enablement,
         allowed_users_env="VMLIVE_ALLOWED_USERS",
         emoji="🎙",
+        # The page's activity panel shows each tool call from the tool hooks; the
+        # gateway's progress messages would land in the conversation log as well.
+        display_overrides={"tool_progress": "off"},
         platform_hint=(
             "You are talking with the user by voice. Your reply is spoken aloud as you write it. "
             "Answer in short, plain spoken sentences. Do not use markdown, tables, code blocks "

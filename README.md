@@ -104,6 +104,21 @@ auxiliary:
 `auxiliary.voice_chat.model` and `provider` can also send voice turns to a
 faster model than the profile's main one.
 
+### Tool calls on the page
+
+The page shows each tool call in its activity panel, so the plugin turns
+Hermes's own tool progress messages off for this platform. A `tool_progress`
+setting in your `config.yaml` wins over that, and `display.tool_progress: all`
+puts every progress message in the conversation log as well. Turn it off for
+this platform only:
+
+```yaml
+display:
+  platforms:
+    voicemanager_live:
+      tool_progress: off
+```
+
 ## Open the page
 
 ```
@@ -135,7 +150,8 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
 ## Things to know
 
 - The plugin registers Hermes hooks (`on_stream_delta`, `on_session_end`) to
-  read reply text as it is written. A registered stream
+  read reply text as it is written, and `pre_tool_call` and `post_tool_call` to
+  show tool calls on the page. A registered stream
   hook makes Hermes use streaming requests for every conversation, not only
   voice ones. Replies on other platforms do not change.
 - The page and its WebSocket check the access token on every request. The token

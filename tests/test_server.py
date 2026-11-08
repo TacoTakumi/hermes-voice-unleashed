@@ -115,3 +115,28 @@ def test_register_adds_one_platform(plugin):
     assert entry["allowed_users_env"] == "VMLIVE_ALLOWED_USERS"
     assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta", "post_tool_call", "pre_llm_call",
                                  "pre_tool_call"]
+
+
+def test_gateway_tool_progress_is_off_by_default_for_the_voice_platform(plugin, monkeypatch):
+    """The activity panel shows tool calls; the gateway's progress messages would show them twice."""
+    from dataclasses import fields
+
+    from gateway import display_config
+    from gateway.platform_registry import PlatformEntry, platform_registry
+
+    class Ctx:
+        def register_platform(self, **kwargs):
+            self.entry = kwargs
+
+        def register_hook(self, name, callback):
+            pass
+
+    ctx = Ctx()
+    plugin.register(ctx)
+    assert ctx.entry["display_overrides"] == {"tool_progress": "off"}
+    known = {f.name for f in fields(PlatformEntry)}
+    entry = PlatformEntry(**{k: v for k, v in ctx.entry.items() if k in known})
+    monkeypatch.setattr(platform_registry, "get", lambda name: entry if name == "voicemanager_live" else None)
+    assert display_config.resolve_tool_progress({}, "voicemanager_live") == ("off", False)
+    configured = {"display": {"platforms": {"voicemanager_live": {"tool_progress": "all"}}}}
+    assert display_config.resolve_tool_progress(configured, "voicemanager_live")[0] == "all"
