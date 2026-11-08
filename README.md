@@ -177,6 +177,17 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   every call.
 - The page and its WebSocket check the access token on every request. The token
   is in the page URL, so treat the URL like a password.
+- A client of the plugin's `/ws` (the page, the Desktop half, or your own)
+  reports each reply's playback edges as `playback` frames with `event`
+  `start` or `stop`, the `request_id`, and `mic_sample`: the number of 16 kHz
+  mic samples the client had sent on that connection when the edge reached
+  the speaker. Compute it from the device clocks: the speaker time of the edge
+  minus the capture time of the last mic frame sent, times 16000, added to the
+  count of samples sent. Count only the samples you send (none while muted),
+  and never send a stop with a smaller `mic_sample` than its start. A frame
+  without a valid `mic_sample` still works: the plugin uses its own count of
+  the mic samples it forwarded, which places the edge early by the device
+  latencies.
 - Approvals by voice are limited. When a command needs your approval, the prompt
   shows as text on the page and is not spoken. VoiceManager sends plain words,
   so an approval word said on its own ("yes", "approve", "ok", "no", "deny")

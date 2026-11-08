@@ -52,6 +52,12 @@ entry names next to its pinned commit.
 - While the page shows Thinking or Working, a line under it shows the time since
   you spoke and the number of tool calls so far. At the end of a turn its tool
   lines fold into one line, such as "3 tools, 0:42", that opens on a tap.
+- The voice page and the Desktop half send `mic_sample` in their `playback`
+  frames: where on the mic stream a reply's start and stop reached the
+  speaker, read from the audio output clock and the microphone's capture
+  latency. The plugin passes it to VoiceManager and falls back to its own
+  count of forwarded mic samples when a client sends none. The README says
+  how another client of `/ws` computes it.
 
 ### Fixed
 
@@ -75,6 +81,12 @@ entry names next to its pinned commit.
 - The folded reasoning line showed the start of a long run when the model
   reasoned in lists or paragraphs with no sentence punctuation. It now also
   splits on line breaks.
+- A reply's playback edges were placed early on the mic timeline: the page
+  reported the start when its clock reached the scheduled time, before the
+  sound left the speaker, and the plugin stamped the edge with the mic samples
+  it had forwarded so far, behind the capture. On a phone or a Bluetooth
+  headset VoiceManager's echo hold and agent channel missed part of the reply,
+  so echo could reach the speech recognizer or a barge-in could be missed.
 
 ## [0.1.0] - 2026-11-07
 
