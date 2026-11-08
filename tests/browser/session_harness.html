@@ -8,7 +8,8 @@
 // rewritten to blob: stub modules and the plugin itself is imported from a
 // blob: URL. Here the '@hermes/plugin-sdk' stub hands the plugin a host the
 // test controls: the focused chat's two ids as atoms, request() and notify()
-// that record their calls, and gateway events the test fires. The
+// that record their calls (the test can hold prompt.submit's answer and pick
+// it), and gateway events the test fires. The
 // 'react/jsx-runtime' stub builds plain { type, props } elements, so the test
 // can render the composer toggle and click it without React.
 (async () => {
@@ -36,6 +37,14 @@
 
     window.requests = []
     window.notices = []
+    // prompt.submit answers 'streaming' at once, unless the test holds the
+    // answers: then each waits until window.answerSubmit(result) settles it.
+    window.holdSubmits = false
+    const heldSubmits = []
+    window.answerSubmit = result => {
+      heldSubmits.shift()(result)
+      return true
+    }
     window.listeners = new Map()
     const onEvent = (type, listener) => {
       const set = window.listeners.get(type) || new Set()
@@ -50,6 +59,7 @@
       },
       request: async (method, params) => {
         window.requests.push({ method, params })
+        if (method === 'prompt.submit' && window.holdSubmits) return new Promise(resolve => heldSubmits.push(resolve))
         return { status: 'streaming' }
       },
       notify: notice => window.notices.push(notice),

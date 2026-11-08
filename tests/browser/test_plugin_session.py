@@ -289,16 +289,30 @@ async def test_a_replayed_delta_is_not_spoken_twice(page, voice):
     assert "".join(f.get("text", "") for f in conn.says()) == "Hello you."
 
 
-@pytest.mark.parametrize("cut", ["clear", "utterance"])
-async def test_after_a_cut_the_in_flight_reply_sends_nothing_more(page, voice, cut):
+async def _cut_by_utterance(page, conn, text, epoch=None):
+    """An utterance while a turn streams; returns once its prompt.submit is held."""
+    count = await page.evaluate("window.submits().length")
+    frame = {"type": "utterance", "text": text}
+    if epoch is not None:
+        frame["epoch"] = epoch
+    await conn.send(frame)
+    await wait_for(lambda: page.evaluate(f"window.submits().length > {count}"))
+
+
+@pytest.mark.parametrize("cut", ["clear", "queued"])
+async def test_a_clear_or_a_queued_utterance_silences_the_rest_of_the_turn(page, voice, cut):
+    # A clear alone redirects nothing, and an utterance Hermes queues is
+    # answered by a turn of its own: the turn that was cut stays silent.
     await _boot(page, voice)
     conn = await _on(page, voice)
+    await page.evaluate("window.holdSubmits = true")
     await _stream(page, "rt-1", "t1", ["<say>First part. "], complete=False)
     await wait_for(lambda: conn.says())
     if cut == "clear":
         await conn.send({"type": "clear", "request_id": "q1"})
     else:
-        await conn.send({"type": "utterance", "text": "stop"})
+        await _cut_by_utterance(page, conn, "stop")
+        await page.evaluate("window.answerSubmit({ status: 'queued' })")
     await _quiet()
     await _fire(page, "message.delta", "rt-1", {"text": "Second part.</say>", "turn_id": "t1", "segment": 0,
                                                 "offset": 17})
@@ -312,6 +326,64 @@ async def test_after_a_cut_the_in_flight_reply_sends_nothing_more(page, voice, c
     await _stream(page, "rt-1", "t2", ["<say>Fresh.</say>"])
     await wait_for(lambda: any(f["type"] == "say_end" for f in conn.jsons))
     assert [f.get("text") for f in conn.says()[1:]] == ["Fresh.", None]
+
+
+async def test_a_redirected_utterance_speaks_the_new_answer_of_the_same_turn(page, voice):
+    # Hermes answers a prompt sent while a reply streams by redirecting that
+    # turn: the model request is cancelled and the answer streams on in the
+    # same turn and segment, with no event between the two, its offsets going
+    # on from the old answer's and its first text after a paragraph break.
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await page.evaluate("window.holdSubmits = true")
+    offset = 0
+
+    async def delta(text):
+        nonlocal offset
+        await _fire(page, "message.delta", "rt-1", {"text": text, "turn_id": "t1", "segment": 0, "offset": offset})
+        offset += len(text)
+
+    await _fire(page, "message.start", "rt-1", {"turn_id": "t1"})
+    await delta("<say>First part. ")
+    await wait_for(lambda: conn.says())
+    await _cut_by_utterance(page, conn, "tell me about the weather", epoch=2)
+    # The old answer goes on until Hermes has taken the utterance in.
+    await delta("Second part.</say> Old screen text")
+    await page.evaluate("window.answerSubmit({ status: 'redirected' })")
+    await _quiet()
+    # A replay of the old answer is not the new one.
+    await _fire(page, "message.delta", "rt-1", {"text": "<say>First part. ", "turn_id": "t1", "segment": 0,
+                                                "offset": 0})
+    await delta("\n\n<say>It is sunny.</say>")
+    await delta(" The full forecast.")
+    await _fire(page, "message.complete", "rt-1", {"status": "complete"})
+    await wait_for(lambda: any(f["type"] == "say_end" for f in conn.jsons))
+    await _quiet()
+    says = conn.says()
+    assert [(f["type"], f.get("text"), f.get("epoch")) for f in says] == [
+        ("say", "First part. ", 0), ("say", "It is sunny.", 2), ("say_end", None, 2)]
+    assert says[1]["reply"] == says[2]["reply"] != says[0]["reply"]
+
+
+async def test_a_steered_utterance_speaks_the_turns_next_segment(page, voice):
+    # During a tool call Hermes steers the turn: the answer is the text after
+    # the tools, the turn's next segment.
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await page.evaluate("window.holdSubmits = true")
+    await _stream(page, "rt-1", "t1", ["<say>Looking.</say> Checking the files."], complete=False)
+    await _fire(page, "message.interim", "rt-1", {"text": "<say>Looking.</say> Checking the files.",
+                                                  "already_streamed": True, "turn_id": "t1", "segment": 0})
+    await wait_for(lambda: any(f["type"] == "say_end" for f in conn.jsons))
+    await _cut_by_utterance(page, conn, "only the tests", epoch=1)
+    await page.evaluate("window.answerSubmit({ status: 'redirected' })")
+    await _quiet()
+    await _stream(page, "rt-1", "t1", ["\n\n<say>Only the tests.</say> Done."], segment=1, start=False)
+    await wait_for(lambda: [f["type"] for f in conn.jsons].count("say_end") == 2)
+    says = conn.says()
+    assert [(f["type"], f.get("text"), f.get("epoch")) for f in says] == [
+        ("say", "Looking.", 0), ("say_end", None, 0), ("say", "Only the tests.", 1), ("say_end", None, 1)]
+    assert says[2]["reply"] == says[3]["reply"] != says[0]["reply"]
 
 
 async def test_say_frames_carry_the_epoch_of_the_last_utterance_or_clear(page, voice):

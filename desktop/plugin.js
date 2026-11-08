@@ -346,6 +346,7 @@ function keySet() {
   const keys = new Set()
   return {
     has: key => keys.has(key),
+    delete: key => keys.delete(key),
     add(key) {
       keys.delete(key)
       keys.add(key)
@@ -365,8 +366,19 @@ const errorText = err => (err && (err.message || err.name)) || String(err)
 //
 // A reply's key is its turn id and segment: each assistant message of a turn
 // (the text before and after tool calls) is its own reply to the server. When
-// the server clears playback or hears a new utterance, the turn in flight is
-// cut off: nothing more of it is sent, not even its say_end.
+// the server clears playback or hears a new utterance, the reply in flight is
+// cut off: nothing more of it is sent, not even its say_end, and the rest of
+// its turn is held back.
+//
+// An utterance sent while a turn runs is usually taken into that turn: Hermes
+// redirects it (the model request is cancelled and the answer streams on in
+// the same turn and segment, with no event in between) or steers it (the
+// answer is the text after the running tools). prompt.submit's answer says
+// which, and only it marks the change: whatever the turn streams before it is
+// the old answer. Once prompt.submit answers 'redirected' or 'steered', the
+// turn speaks again under keys of their own, each with a fresh say cutter that
+// starts where its segment had got to; any other answer means a turn of its
+// own answers the utterance, and the cut turn stays silent.
 //
 // Each utterance and clear frame names the server's epoch, and every say and
 // say_end carries the last epoch heard. Frames already on the way when the
@@ -402,7 +414,8 @@ function createLiveVoice(ctx, prefs) {
     }
     const s = {
       runtime, stored, address, token, ws: null, stream: null, audio: null, capturing: false,
-      errored: false, turn: null, reply: null, dead: keySet(), done: keySet(), epoch: 0
+      errored: false, turn: null, reply: null, dead: keySet(), done: keySet(), epoch: 0,
+      cuts: 0, resumed: null, seen: { base: '', end: 0 }
     }
     live = s
     state.set({ status: 'connecting' })
@@ -472,11 +485,12 @@ function createLiveVoice(ctx, prefs) {
         s.errored = true
         host.notify({ kind: 'error', message: `Voice: ${frame.message || 'the voice server reported an error.'}` })
         break
-      case 'utterance':
-        cut(s)
+      case 'utterance': {
+        const turn = cut(s)
         takeEpoch(s, frame)
-        submit(s, frame.text)
+        submit(s, frame.text, turn)
         break
+      }
       case 'clear':
         cut(s)
         takeEpoch(s, frame)
@@ -490,11 +504,29 @@ function createLiveVoice(ctx, prefs) {
     }
   }
 
-  function submit(s, text) {
+  // turn is the turn the utterance cut, if one was in flight.
+  function submit(s, text, turn) {
     if (typeof text !== 'string' || !text.trim()) return
-    host.request('prompt.submit', { session_id: s.runtime, text, voice_turn: true }).catch(err => {
-      if (live === s) host.notify({ kind: 'error', message: `Voice: what you said did not reach the chat: ${errorText(err)}` })
-    })
+    const cuts = s.cuts
+    host.request('prompt.submit', { session_id: s.runtime, text, voice_turn: true }).then(
+      result => {
+        const status = result && result.status
+        if (turn && live === s && s.cuts === cuts && (status === 'redirected' || status === 'steered')) {
+          resume(s, turn, cuts)
+        }
+      },
+      err => {
+        if (live === s) host.notify({ kind: 'error', message: `Voice: what you said did not reach the chat: ${errorText(err)}` })
+      }
+    )
+  }
+
+  // Hermes took the utterance into the cut turn: the rest of that turn answers
+  // it. Only the latest cut resumes a turn; an earlier utterance's answer was
+  // itself cut.
+  function resume(s, turn, cuts) {
+    s.dead.delete(turn)
+    s.resumed = { turn, cuts }
   }
 
   // A server without epochs sends none: the last one stays.
@@ -502,14 +534,18 @@ function createLiveVoice(ctx, prefs) {
     if (Number.isInteger(frame.epoch) && frame.epoch >= 0) s.epoch = frame.epoch
   }
 
-  // The turn in flight takes no more say text.
+  // The reply in flight takes no more say text, and its turn is held back.
+  // Returns the turn cut, or null.
   function cut(s) {
+    s.cuts++
+    const turn = (s.reply && s.reply.turn) || s.turn
     if (s.reply) {
       s.dead.add(s.reply.turn)
       s.done.add(s.reply.key)
       s.reply = null
     }
     if (s.turn) s.dead.add(s.turn)
+    return turn || null
   }
 
   // The reply in flight is over: the rest of its say text, then say_end.
@@ -527,19 +563,25 @@ function createLiveVoice(ctx, prefs) {
   function replyDelta(s, payload) {
     const text = typeof payload.text === 'string' ? payload.text : ''
     const turn = typeof payload.turn_id === 'string' && payload.turn_id ? payload.turn_id : (s.turn ||= localTurn())
-    if (s.dead.has(turn)) return
     const segment = Number.isInteger(payload.segment) && payload.segment >= 0 ? payload.segment : 0
-    const key = `${turn}:${segment}`
+    const base = `${turn}:${segment}`
+    const stamped = Number.isInteger(payload.offset) && payload.offset >= 0
+    // How far this segment had got before this delta, held back text included.
+    const seen = s.seen.base === base ? s.seen.end : 0
+    if (stamped) s.seen = { base, end: Math.max(seen, payload.offset + text.length) }
+    if (s.dead.has(turn)) return
+    const key = s.resumed && s.resumed.turn === turn ? `${base}:${s.resumed.cuts}` : base
     if (s.done.has(key)) return
     if (!s.reply || s.reply.key !== key) {
       finishReply(s)
-      s.reply = { key, turn, cutter: createSayCutter(), end: 0 }
+      s.reply = { key, turn, cutter: createSayCutter(), end: seen }
     }
     const r = s.reply
     let fresh = text
     // A stamped delta can come twice (a replay after a reconnect): take only
-    // the part past what this reply has had.
-    if (Number.isInteger(payload.offset) && payload.offset >= 0) {
+    // the part past what this reply has had. A reply that starts mid-segment
+    // (the answer after a redirect) has had what came before it.
+    if (stamped) {
       const end = payload.offset + text.length
       if (end <= r.end) return
       fresh = text.slice(Math.max(0, r.end - payload.offset))
