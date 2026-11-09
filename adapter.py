@@ -552,9 +552,14 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 await self._send_history(client_id)
             return
         session_id = await self._send_history(client_id, connection)
+        if new_session_failed:
+            # The history frame named the old session; the page is told why. Sent here,
+            # before the guards below, so that nothing is awaited between the last guard
+            # and the session's registration.
+            await self._send_to(connection, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
         if self._clients.get(client_id) is not connection:
-            # Replaced while the history was read: the lane did not move, so the live
-            # page's own history frame stands, and this connect is no voice device.
+            # Replaced while the history was read or sent: the lane did not move, so the
+            # live page's own history frame stands, and this connect is no voice device.
             logger.debug("voice page %s: replaced during its history read", client_id)
             return
         # The page is the newest voice device of its session: a UI client attached
@@ -563,9 +568,6 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if self._clients.get(client_id) is not connection:
             logger.debug("voice page %s: replaced during its voice takeover", client_id)
             return
-        if new_session_failed:
-            # The history frame named the old session; the page is told why.
-            await self._send_to(connection, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
         session = self._new_session(connection, client_id)
         self._sessions[client_id] = session
         try:

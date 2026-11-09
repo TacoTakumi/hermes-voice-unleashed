@@ -579,6 +579,52 @@ async def test_a_second_page_gets_no_extra_history_when_the_replaced_connect_had
     assert adapter.messages == []
 
 
+def _hold_first_reply_send(adapter):
+    """The adapter's first reply frame send to a page sits until ``release`` is set, as a
+    paused socket would hold it; ``started`` is set when it came in. Later sends go on."""
+    inner = adapter._send_to
+    started, release = asyncio.Event(), asyncio.Event()
+    held = []
+
+    async def send_to(connection, payload):
+        if payload.get("type") == "reply" and not held:
+            held.append(payload)
+            started.set()
+            await release.wait()
+        return await inner(connection, payload)
+
+    adapter._send_to = send_to
+    return started, release
+
+
+async def test_a_page_replaced_while_its_failed_new_reply_is_sent_registers_no_session(adapter, fake_vm, plugin):
+    """A session=new connect whose /new failed sends the page a reply frame after the
+    history. A second page takes the chat id while that send waits: the first connect
+    registers no session, so the live page keeps its own and only one VoiceManager
+    connection is open."""
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB({"abc": 3}))
+    adapter.gateway_reply = "Confirm /new: /approve, /always or /cancel"  # the lane stays
+    started, release = _hold_first_reply_send(adapter)
+    first_ws = await connect(_url(adapter, "client=phone&session=new"))
+    first = Page(first_ws)
+    await asyncio.wait_for(started.wait(), 3)
+    async with connect(_url(adapter, "client=phone")) as ws:
+        second = Page(ws)
+        await wait_for(lambda: second.of("ready"))
+        assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
+        live = adapter.session_for("phone")
+        assert live is not None
+        release.set()
+        await asyncio.sleep(0.5)  # the first page's connect runs to its end
+        assert adapter.session_for("phone") is live
+        assert len(fake_vm.connections) == 1
+        assert second.of("replaced") == []
+        assert ws.close_code is None
+        second.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/new"]
+
+
 async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_client_alone(
         adapter, fake_vm, plugin):
     """A UI client attached to the session while the first page's /resume was held, then a
