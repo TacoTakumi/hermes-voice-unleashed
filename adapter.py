@@ -14,6 +14,7 @@ import datetime
 import json
 import logging
 import re
+import sqlite3
 import uuid
 from typing import Any, Optional
 
@@ -48,6 +49,29 @@ LINEAGE_HOPS = 32
 # The model_config keys under which a /new, /branch or delegate child names the parent
 # it was made from. Such a child is not the continuation of its parent's conversation.
 FORK_MARKERS = ("_reset_from", "_branched_from", "_delegate_from")
+# What sqlite says when a read-only open finds no database file.
+_MISSING_DB_FILE = "unable to open database file"
+
+
+class _EmptyStateDB:
+    """A state DB with nothing in it: what the readers get when the profile has no
+    state.db file yet. It answers the reads the session list, the history frame, the
+    message count and the lineage walk make."""
+
+    def get_session(self, session_id: str) -> None:
+        return None
+
+    def get_messages(self, session_id: str, *args: Any, **kwargs: Any) -> list:
+        return []
+
+    def message_count(self, session_id: Optional[str] = None) -> int:
+        return 0
+
+    def list_sessions_rich(self, *args: Any, **kwargs: Any) -> list:
+        return []
+
+    def close(self) -> None:
+        pass
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -386,7 +410,17 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if db is not None:
             yield db
             return
-        fallback = SessionDB(read_only=True)
+        try:
+            fallback = SessionDB(read_only=True)
+        except sqlite3.OperationalError as exc:
+            # A profile that has not stored a session yet has no state DB file, which
+            # is normal on first use: a read-only open cannot create it, so the
+            # readers see an empty DB instead.
+            if _MISSING_DB_FILE not in str(exc):
+                raise
+            logger.debug("voice page: no state DB yet, reading it as empty")
+            yield _EmptyStateDB()
+            return
         try:
             yield fallback
         finally:
@@ -449,9 +483,14 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         session_id = self.lane_session_id(client_id)
         if session_id is None:
             return
-        try:
+
+        def count_messages() -> int:
             with self._session_db() as db:
-                count = int(db.message_count(session_id))
+                return int(db.message_count(session_id))
+
+        try:
+            # SQLite reads block; keep them off the event loop.
+            count = await asyncio.to_thread(count_messages)
         except Exception:
             # The user asked for a new session; without a count, /new is the safe side.
             logger.warning("voice page %s: cannot count the messages of session %s, sending /new",
