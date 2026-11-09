@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,7 @@ from websockets.asyncio.client import connect
 
 from gateway.config import PlatformConfig
 from gateway.slash_access import policy_for_source
+from tools import slash_confirm
 
 from fake_vm import FakeVoiceManager, wait_for
 
@@ -71,14 +73,15 @@ async def fake_vm():
 async def adapter(plugin, fake_vm):
     """An adapter whose gateway is a recording handle_message: it notes each event, how many
     VoiceManager connections existed when it ran, and answers a command at once through
-    send(), as the gateway's slash dispatch does."""
+    send(), as the gateway's slash dispatch does. A ``gateway_reply`` of None is a command
+    answered some other way (a confirmation the adapter took), so no text is sent."""
     adapter = plugin.adapter.VoiceLiveAdapter(_config(voicemanager_url=fake_vm.url))
     messages, vm_connections_at_dispatch = [], []
 
     async def handle_message(event):
         messages.append(event)
         vm_connections_at_dispatch.append(len(fake_vm.connections))
-        if event.text.startswith("/"):
+        if event.text.startswith("/") and adapter.gateway_reply is not None:
             await adapter.send(event.source.chat_id, adapter.gateway_reply)
 
     adapter.handle_message = handle_message
@@ -644,3 +647,131 @@ def test_the_lineage_walk_stops_at_its_cap(plugin):
     db = FakeDB(parents=parents)
     assert not plugin.adapter._same_conversation(db, "s0", f"s{cap}")
     assert len(db.looked_up) == cap
+
+
+# --- the gateway's confirmation of /new ------------------------------------------------------
+
+
+class ConfirmingGateway:
+    """The gateway's destructive-slash gate, as far as /new needs it: the command registers a
+    confirmation in ``tools.slash_confirm`` and offers it to the adapter; the lane moves onto
+    ``session_id`` only when the confirmation is resolved with "once" or "always". When the
+    adapter does not take the confirmation, the prompt text is the command's reply."""
+
+    PROMPT = "Confirm /new: this starts a new session. /approve, /always or /cancel"
+
+    def __init__(self, adapter, session_id):
+        self.adapter, self.session_id = adapter, session_id
+        self.choices, self.results, self.confirm_id = [], [], "7"
+        inner = adapter.handle_message
+
+        async def handle_message(event):
+            if event.text == "/new":
+                await self.confirm(event.source.chat_id)
+            await inner(event)
+
+        adapter.handle_message = handle_message
+
+    def key(self, chat_id):
+        return self.adapter._source_session_key(self.adapter._voice_source(chat_id))
+
+    async def confirm(self, chat_id):
+        async def handler(choice):
+            self.choices.append(choice)
+            if choice in ("once", "always"):
+                self.adapter._session_store.session_id = self.session_id
+                return "New session started."
+            return "Cancelled."
+
+        slash_confirm.register(self.key(chat_id), self.confirm_id, "new", handler)
+        result = await self.adapter.send_slash_confirm(chat_id, "/new", self.PROMPT, self.key(chat_id),
+                                                       self.confirm_id)
+        self.results.append(result)
+        if not result.success:
+            await self.adapter.send(chat_id, self.PROMPT)
+
+
+@pytest.fixture
+def confirming(adapter):
+    """The adapter's gateway asks for confirmation before /new; the lane moves to "fresh"."""
+    gateway = ConfirmingGateway(adapter, "fresh")
+    adapter.gateway_reply = None  # the confirmation step is the whole answer to /new
+    yield gateway
+    slash_confirm.clear(gateway.key("tablet"))
+
+
+async def test_a_connect_with_session_new_passes_the_gateways_confirmation_of_new(adapter, fake_vm, confirming):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 3, "fresh": 0})
+    _with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet&session=new")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/new"]
+    assert confirming.choices == ["once"]
+    assert [r.success for r in confirming.results] == [True]
+    assert adapter._session_store.session_id == "fresh"
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": "fresh", "lines": []}
+    assert db.asked == ["fresh"]
+    assert page.of("reply") == []  # neither the prompt nor the command's reply reached the page
+    assert slash_confirm.get_pending(confirming.key("tablet")) is None
+
+
+async def test_new_session_by_voice_passes_the_gateways_confirmation_of_new(adapter, fake_vm, confirming):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 3, "fresh": 0})
+    _with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        await _spoken(ws, fake_vm, "new session")
+        await wait_for(lambda: len(page.of("history")) == 2)
+        await asyncio.sleep(0.1)
+        assert [m.text for m in adapter.messages] == ["/new"]
+        assert confirming.choices == ["once"]
+        assert page.of("session_new") == [{"type": "session_new", "session_id": "fresh"}]
+        assert page.of("history")[-1] == {"type": "history", "session_id": "fresh", "lines": []}
+        assert db.asked == ["abc", "fresh"]
+        assert page.of("reply") == []
+        assert ws.close_code is None
+        page.task.cancel()
+
+
+async def test_a_confirm_that_is_not_for_a_plugin_command_is_not_supported(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    key = adapter._source_session_key(adapter._voice_source("tablet"))
+    choices = []
+
+    async def handler(choice):
+        choices.append(choice)
+
+    slash_confirm.register(key, "9", "new", handler)
+    try:
+        result = await adapter.send_slash_confirm("tablet", "/new", "Confirm /new", key, "9")
+        assert not result.success
+        assert result.error == "Not supported"
+        assert choices == []
+        assert slash_confirm.get_pending(key)["confirm_id"] == "9"  # left for the text prompt
+    finally:
+        slash_confirm.clear(key)
+
+
+async def test_a_new_that_did_not_move_the_lane_is_logged_and_the_page_still_connects(adapter, fake_vm, caplog):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 3})
+    _with_db(adapter, db)
+    adapter.gateway_reply = "Confirm /new: /approve, /always or /cancel"  # the gateway's text prompt
+    caplog.set_level(logging.WARNING)
+    async with connect(_url(adapter, "client=tablet&session=new")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/new"]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "/new" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "tablet" in warnings[0].getMessage()
+    assert "abc" in warnings[0].getMessage()
+    _one_history_frame_before_ready(page)
+    assert page.of("reply") == []

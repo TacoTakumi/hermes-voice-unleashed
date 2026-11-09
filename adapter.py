@@ -23,6 +23,7 @@ from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, Send
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run_busy import approval_input_words
 from hermes_state import SessionDB
+from tools import slash_confirm
 from tools.approval import has_blocking_approval
 
 from . import sessions, stream_hooks
@@ -428,6 +429,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             count = 1
         if count > 0:
             await self.send_command(client_id, "/new")
+            if self.lane_session_id(client_id) == session_id:
+                logger.warning("voice page %s: the lane is still on session %s after /new",
+                               client_id, session_id)
 
     async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
         # session=new asks for a fresh session, not a join; the history is of
@@ -477,6 +481,22 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if await self._send_json(chat_id, {"type": "reply", "text": content}):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")
+
+    async def send_slash_confirm(self, chat_id: str, title: str, message: str, session_key: str,
+                                 confirm_id: str, metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        """The gateway asks before a destructive command such as /new. A command the plugin
+        itself sent on the lane (its reply is pending) was asked for by the user, by tapping
+        New or saying it, so it is confirmed at once and the command's reply becomes the
+        pending reply: the gateway sends no text of its own once the confirmation is taken.
+        Any other confirmation is left to the gateway's text prompt."""
+        pending = self._pending_replies.get(chat_id)
+        if pending is None or pending.done():
+            return await super().send_slash_confirm(chat_id, title, message, session_key, confirm_id, metadata)
+        logger.info("voice page %s: %s confirmed, the page asked for it", chat_id, title)
+        reply = await slash_confirm.resolve(session_key, confirm_id, "once")
+        if not pending.done():
+            pending.set_result(reply or "")
+        return SendResult(success=True, message_id=None)
 
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
         """Show and speak an approval prompt.
