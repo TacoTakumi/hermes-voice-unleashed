@@ -110,6 +110,7 @@ async def _site(tmp_path, init_script=None):
         server = VoiceServer("127.0.0.1", 0, TOKEN, on_client, on_sessions=on_sessions)
         await server.start()
         site.url = f"http://127.0.0.1:{server.bound_port}"
+        site.server = server  # a test may stop it early; a second stop is a no-op
         wav = tmp_path / "tone.wav"
         _tone_wav(wav)
         async with playwright_api.async_playwright() as pw:
@@ -1583,6 +1584,29 @@ async def test_the_reconnecting_screen_keeps_the_error_message(stack):
     await fake.wait_connections(2, timeout=10)
     await page.wait_for_function("""() => document.getElementById('state').textContent === 'Listening'
         && document.getElementById('detail').textContent === 'Say something.'""", timeout=10000)
+
+
+async def test_a_stop_forgets_the_error_message(site):
+    # The reason the last session gave for its close belongs to that session. After Back
+    # to the chooser, a new session whose first socket fails before any frame must not
+    # show it on its Reconnecting screen.
+    fake, page = site.fake, site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await page.click("#new")
+    conn = await _listening(fake, page)
+    await conn.ws.close()
+    await page.wait_for_function("""() => document.getElementById('state').textContent === 'Reconnecting'
+        && document.getElementById('detail').textContent.includes('VoiceManager closed the connection')""",
+                                 timeout=5000)
+    await page.go_back()
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    await _chooser_rows(page)
+    await site.server.stop()  # the next connect fails before any frame arrives
+    await page.click("#new")
+    await page.wait_for_function("document.getElementById('state').textContent === 'Reconnecting'", timeout=5000)
+    detail = await page.text_content("#detail")
+    assert "Trying again" in detail, detail
+    assert "VoiceManager closed the connection" not in detail, detail
 
 
 async def test_a_replaced_page_ends_its_turn_on_the_moved_screen(stack):

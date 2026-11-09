@@ -920,6 +920,7 @@ header > * { flex-shrink: 0; }
     endDrain = 0;
     disconnect();
     retry = 0;
+    lastError = null;  // the reason belongs to the session that gave it
     muted = false;
     micOff();
     if (playCtx) { playCtx.onstatechange = null; playCtx.close().catch(() => {}); }
