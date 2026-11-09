@@ -161,6 +161,8 @@ def approval_sentence(command: str) -> str:
     if len(lines) > 1:
         first = re.sub(r"<<-?\s*(['\"]?)\w+\1\s*$", "", first)
     short = re.sub(r"\s+", " ", first).strip()
+    if not short:  # nothing to read out
+        return "Approval needed. Say yes or no."
     if len(short) > COMMAND_SPOKEN_CHARS:
         short = short[:COMMAND_SPOKEN_CHARS - 3] + "..."
     if len(lines) > 1:

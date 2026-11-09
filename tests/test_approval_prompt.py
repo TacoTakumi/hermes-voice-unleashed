@@ -104,6 +104,11 @@ def test_a_long_command_is_cut_short_when_spoken(plugin):
     assert short == "Approval needed to run: ls -la /tmp. Say yes or no."
 
 
+@pytest.mark.parametrize("command", ["", "   ", "\n\n"])
+def test_an_empty_command_is_spoken_without_a_command_part(plugin, command):
+    assert plugin.adapter.approval_sentence(command) == "Approval needed. Say yes or no."
+
+
 def test_a_multi_line_command_is_spoken_as_its_first_line_and_a_line_count(plugin):
     sentence = plugin.adapter.approval_sentence(SCRIPT)
     assert sentence == "Approval needed to run: python3 -, and 13 more lines. Say yes or no."
