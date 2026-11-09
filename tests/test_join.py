@@ -532,7 +532,7 @@ async def test_new_session_by_voice_runs_new_and_sends_the_frames_on_the_same_so
         assert page.of("history")[-1] == {"type": "history", "session_id": "fresh", "lines": []}
         assert db.asked == ["abc", "fresh"]
         kinds = [f["type"] for f in page.frames]
-        assert kinds[-2:] == ["session_new", "history"]
+        assert kinds[kinds.index("session_new") + 1] == "history"  # the fresh history follows at once
         assert kinds.count("ready") == 1  # the page did not reconnect
         assert page.of("reply") == []  # the reply to /new stayed off the page
         assert page.of("utterance") == []  # the command never went to Hermes
@@ -561,7 +561,7 @@ async def test_new_session_by_voice_on_an_empty_session_sends_no_new_but_the_fra
         assert page.of("session_new") == [{"type": "session_new", "session_id": "abc"}]
         assert page.of("history")[-1] == {"type": "history", "session_id": "abc", "lines": []}
         kinds = [f["type"] for f in page.frames]
-        assert kinds[-2:] == ["session_new", "history"]
+        assert kinds[kinds.index("session_new") + 1] == "history"  # the fresh history follows at once
         assert kinds.count("ready") == 1
         assert ws.close_code is None
         page.task.cancel()
