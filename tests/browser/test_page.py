@@ -1102,10 +1102,7 @@ async def test_a_finished_turn_folds_its_tool_lines_into_a_summary_line(stack):
     assert order[0].startswith("group") and order[-1] == "tool running"
 
 
-async def test_a_tool_line_still_running_when_the_turn_ends_reads_stopped(stack):
-    fake, page, sessions, utterances = stack
-    await _listening(fake, page)
-    session = sessions[0]
+async def _turn_ended_with_a_tool_running(session, page):
     await session.send_page({"type": "utterance", "text": "run something"})
     await session.send_page({"type": "tool_start", "id": "c1", "name": "terminal", "summary": "make"})
     await page.wait_for_selector("#tools .tool.running")
@@ -1114,11 +1111,45 @@ async def test_a_tool_line_still_running_when_the_turn_ends_reads_stopped(stack)
     assert await page.locator("#tools .tool.running").count() == 0
     assert await page.locator("#tools .tool.failed").count() == 1
     assert await page.text_content("#tools .tool .status") == "stopped"
-    # A tool_end that arrives after the turn ended changes nothing.
-    await session.send_page({"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 1234})
+
+
+async def test_a_tool_line_still_running_when_the_turn_ends_reads_stopped(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    await _turn_ended_with_a_tool_running(sessions[0], page)
+    # Nothing more comes for the call: the line stays stopped.
     await asyncio.sleep(0.2)
     assert await page.text_content("#tools .tool .status") == "stopped"
     assert await page.locator("#tools .tool.failed").count() == 1
+    assert await page.locator("#tools .group").count() == 1
+
+
+async def test_a_tool_end_after_the_turn_ended_turns_the_stopped_line_done(stack):
+    # A tool that waits for a spoken approval: the turn ends while the tool waits, the
+    # approved tool then runs and ends under the same call id.
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await _turn_ended_with_a_tool_running(session, page)
+    await session.send_page({"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 1234})
+    await page.wait_for_selector("#tools .tool.done", state="attached")  # folded, so hidden
+    assert await page.text_content("#tools .tool .status") == "1.2 s"
+    assert await page.locator("#tools .tool.failed").count() == 0
+    assert await page.locator("#tools .tool.running").count() == 0
+    assert await page.locator("#tools .group").count() == 1
+
+
+async def test_a_failed_tool_end_after_the_turn_ended_turns_the_stopped_line_failed(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await _turn_ended_with_a_tool_running(session, page)
+    await session.send_page({"type": "tool_end", "id": "c1", "status": "error", "duration_ms": 1234})
+    await page.wait_for_function(
+        "document.querySelector('#tools .tool .status').textContent === 'failed 1.2 s'")
+    assert await page.locator("#tools .tool.failed").count() == 1
+    assert await page.locator("#tools .tool.running").count() == 0
+    assert await page.locator("#tools .group").count() == 1
 
 
 async def test_working_and_thinking_show_the_elapsed_time_and_tool_count(stack):

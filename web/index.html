@@ -386,16 +386,15 @@ header > * { flex-shrink: 0; }
     turnStartedAt = Date.now();
     turnTools = [];
   }
-  // No tool_end comes for a line of a finished turn. Mark what still runs as stopped and
-  // forget its call, so a tool_end that arrives after the turn changes nothing. Every
-  // open call is a line of the running turn, so the whole map goes.
+  // A line that still runs when its turn ends reads stopped. Its call stays known: a tool
+  // that waits for a spoken approval ends its turn while it waits, then runs and sends
+  // its tool_end under the same call id, and that tool_end must still find the line.
   function toolsStop() {
     for (const li of turnTools) {
       if (!li.classList.contains("running")) continue;
       li.className = "tool failed";
       li.querySelector(".status").textContent = "stopped";
     }
-    toolLines.clear();
   }
   // The turn is over: its tool lines fold into one line that opens them again.
   function turnFold() {
@@ -453,6 +452,8 @@ header > * { flex-shrink: 0; }
     headerPinSoon();
   }
   const FAILED_WORDS = { error: "failed", timeout: "timed out", blocked: "blocked", cancelled: "cancelled" };
+  // The line takes the result whatever it read before, running or stopped; the call is
+  // then forgotten.
   function toolEnd(f) {
     const li = toolLines.get(f.id);
     if (!li) return;
