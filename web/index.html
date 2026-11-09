@@ -335,8 +335,20 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     turnStartedAt = Date.now();
     turnTools = [];
   }
+  // No tool_end comes for a line of a finished turn. Mark what still runs as stopped and
+  // forget its call, so a tool_end that arrives after the turn changes nothing. Every
+  // open call is a line of the running turn, so the whole map goes.
+  function toolsStop() {
+    for (const li of turnTools) {
+      if (!li.classList.contains("running")) continue;
+      li.className = "tool failed";
+      li.querySelector(".status").textContent = "stopped";
+    }
+    toolLines.clear();
+  }
   // The turn is over: its tool lines fold into one line that opens them again.
   function turnFold() {
+    toolsStop();
     const lines = turnTools;
     if (lines.length) {
       const li = document.createElement("li");
@@ -398,13 +410,8 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     li.querySelector(".status").textContent = (failed ? failed + " " : "") + seconds(f.duration_ms || 0);
   }
   // The connection to this turn is gone: no tool_end, turn_done or reasoning will come
-  // for it. Mark what still ran as stopped and close the turn on the page.
+  // for it. Close the turn on the page, which marks what still ran as stopped.
   function turnAbort() {
-    for (const li of toolLines.values()) {
-      li.className = "tool failed";
-      li.querySelector(".status").textContent = "stopped";
-    }
-    toolLines.clear();
     turnFold();
     reasoningDone();
   }
