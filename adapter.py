@@ -309,7 +309,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             await self._send_json(client_id, {"type": "reply", "text": SESSION_NEW_NOTICE})
             session = self.session_for(client_id)
             if session is not None:
-                await session.speak_notice(NEW_SESSION_FAILED_NOTICE)
+                await session.notice(NEW_SESSION_FAILED_NOTICE)
             await self._send_json(client_id, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
             return
         await self._send_json(client_id, {"type": "session_new", "session_id": self.lane_session_id(client_id)})

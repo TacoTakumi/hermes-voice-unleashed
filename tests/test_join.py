@@ -766,6 +766,14 @@ async def test_new_session_by_voice_that_did_not_move_the_lane_tells_the_page_an
                                     {"type": "reply", "text": notice}]
         kinds = [f["type"] for f in page.frames]
         assert len(kinds) - 1 - kinds[::-1].index("reply") > len(kinds) - 1 - kinds[::-1].index("reply_delta")
+        # The notice is a TTS request of its own, ended at once, and leaves no reply
+        # request open for the next turn.
+        groups = {}
+        for f in conn.json_frames("tts_stream"):
+            groups.setdefault(f["request_id"], []).append(f)
+        spoken = [g for g in groups.values() if notice in "".join(f["text"] for f in g)]
+        assert len(spoken) == 1 and spoken[0][-1]["done"]
+        assert adapter.session_for("tablet").reply_request is None
         assert page.of("utterance") == []
         assert [f["type"] for f in page.frames].count("ready") == 1  # the page did not reconnect
         # The same socket and session take the next utterance.

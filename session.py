@@ -545,6 +545,12 @@ class VoiceSession:
         # segments. (Ending the session needs no next turn: its page closes.)
         await self._next_turn()
 
+    async def notice(self, text: str) -> None:
+        """Speak ``text`` as a notice of its own, outside any reply: the adapter's word
+        on a command it ran for the page. Its TTS request is ended at once and its audio
+        end is no reply's end, so nothing is left open for the next turn."""
+        await self._command_notice(text, "notice")
+
     async def _command_notice(self, text: str, reason: str) -> Optional[vm_client.TTSRequest]:
         """Stop a running reply and speak ``text`` as a TTS request of its own, ended at
         once. Its id is remembered so its audio end is not taken for a reply's end.
