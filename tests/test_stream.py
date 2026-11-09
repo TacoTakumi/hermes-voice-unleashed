@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 from websockets.asyncio.client import connect
@@ -455,4 +456,21 @@ async def test_a_reply_frame_sent_while_the_turn_runs_says_so(rig):
     await wait_for(lambda: len(page.of("reply")) == 2)
     assert page.of("reply")[-1] == {"type": "reply", "text": "Switching to the fallback provider.",
                                     "turn_running": True}
+    # The turn's own reply names the utterance it answers. When the turn failed, its
+    # error text comes this way and no turn_done follows: it must end the turn.
+    await adapter.send("voice", "The provider gave an error.", reply_to=_session(hooks).reply_id)
+    await wait_for(lambda: len(page.of("reply")) == 3)
+    assert page.of("reply")[-1] == {"type": "reply", "text": "The provider gave an error."}
 
+
+async def test_a_turn_error_from_the_gateway_ends_the_turn_state(rig):
+    hooks, conn, page = rig
+    adapter, session = hooks._adapters[-1], _session(hooks)
+    fire(hooks.pre_llm_call, session_id="s1")
+    await wait_for(lambda: session.turn_running)
+    event = SimpleNamespace(source=adapter._voice_source("voice"), message_id=session.reply_id)
+    await adapter._notify_turn_error(event, RuntimeError("the handler raised"))
+    assert not session.turn_running
+    await adapter.send("voice", "Sorry, that turn failed.")
+    await wait_for(lambda: page.of("reply"))
+    assert "turn_running" not in page.of("reply")[-1]

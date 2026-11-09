@@ -316,6 +316,10 @@ class VoiceSession:
         """The turn's model call is about to start: nothing to show, the turn runs."""
         self._in_turn(reply_id)
 
+    def turn_failed(self) -> None:
+        """The open reply's turn raised: it runs no more, and no end-of-turn hook comes."""
+        self._turn_started = False
+
     def _takes(self, reply_id: str) -> bool:
         """Whether hook text for ``reply_id`` belongs to the running reply.
 

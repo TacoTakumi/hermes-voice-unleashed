@@ -625,14 +625,26 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         # replies carry; the session already spoke what it should.
         frame: dict[str, Any] = {"type": "reply", "text": strip_say_tags(content)}
         session = self.session_for(chat_id)
-        if session is not None and session.turn_running:
-            # Text the gateway sends during a turn, a status line before the answer for
-            # one: the page must not take it for the whole answer of a turn that never
-            # ran. The turn's own turn_done frame ends it.
+        if reply_to is None and session is not None and session.turn_running:
+            # Text the gateway sends during a turn on its own account, a status line
+            # before the answer for one: the page must not take it for the whole answer
+            # of a turn that never ran. The turn's own turn_done frame ends it. The
+            # turn's reply itself (its answer, or its error text when the turn failed
+            # and no turn_done follows) comes with reply_to and is not marked.
             frame["turn_running"] = True
         if await self._send_json(chat_id, frame):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")
+
+    async def _notify_turn_error(self, event, e):
+        """The gateway reports a turn that raised. No end-of-turn hook follows it, so
+        the session's turn is over here: the error notice then reaches the page as the
+        turn's whole answer."""
+        with contextlib.suppress(Exception):
+            session = self.session_for(event.source.chat_id)
+            if session is not None:
+                session.turn_failed()
+        return await super()._notify_turn_error(event, e)
 
     async def send_slash_confirm(self, chat_id: str, title: str, message: str, session_key: str,
                                  confirm_id: str, metadata: Optional[dict[str, Any]] = None) -> SendResult:
