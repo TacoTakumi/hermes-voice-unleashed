@@ -227,6 +227,34 @@ entry names next to its pinned commit.
 - Back or Forward to another session while the end-of-session notice was
   still playing joined it, then the end's wait tore the new session down
   once the notice would have ended. The wait is cancelled on a stop.
+- A reply cut while it played reported `reply_sample` as the time since its
+  first chunk, so a gap between chunks (a quiet stretch while tools ran, a
+  slow network) counted as played audio. The voice page and the Desktop half
+  now count the samples of the chunks that ended plus the elapsed part of
+  the one playing.
+- The spoken approval prompt read a script aloud when the command had
+  several lines. It now speaks the first line and the count of the others:
+  "Approval needed to run: python3 -, and 13 more lines. Say yes or no."
+  The page still shows the full command.
+- A start of the voice page that failed after the microphone was granted
+  (the audio worklet did not load) left the microphone on and its audio
+  context open. Both are released, and the capture context is resumed once
+  made.
+- A gateway reply that came with no turn (a busy notice, a refusal before
+  the agent ran) left the voice page on "Thinking" until the next utterance.
+  A reply frame for a turn that streamed no text now ends the turn on the
+  page.
+- The reason the voice session stopped was overwritten at once by the
+  "Reconnecting" screen. The screen now repeats it until the next connection
+  is ready.
+- When the gateway's final reply text reached the voice page before the last
+  streamed words, the answer showed twice and the late words started a third
+  line. The final text now replaces the streamed line and the late words it
+  already holds add nothing.
+- The Desktop half counted microphone frames that its socket dropped while
+  closed into `mic_sample`. It now counts only the frames that went out.
+- The voice page read the microphone's capture latency on every 20 ms frame.
+  It reads it once when the microphone starts.
 
 ## [0.1.0] - 2026-11-07
 
