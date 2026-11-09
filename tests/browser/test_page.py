@@ -1477,3 +1477,76 @@ async def test_folded_tool_lines_take_no_room_and_open_at_their_summary(stack):
     await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 11")
     await asyncio.sleep(0.2)
     assert await _newest_tool_in_view(page)
+
+
+async def _fling_the_tool_list(page, stops):
+    """Scroll the tool list like a finger fling: a touch, then one scroll step every 150 ms.
+
+    Each stop is a share of the list's scroll range (0 is the top, 1 the end). Ten stops
+    spread the scroll over 1.35 s, longer than the second a touch alone counts for."""
+    return await page.evaluate("""async (stops) => {
+        const list = document.getElementById('tools');
+        const range = list.scrollHeight - list.clientHeight;
+        list.dispatchEvent(new TouchEvent('touchstart', { bubbles: true }));
+        for (const stop of stops) {
+            list.scrollTop = stop === 1 ? list.scrollHeight : Math.round(stop * range);
+            await new Promise(r => setTimeout(r, 150));
+        }
+        return range;
+    }""", stops)
+
+
+async def _a_busy_turn_fills_the_tool_list(fake, page, sessions, count=14):
+    """A phone-sized page with a running turn of enough tool lines for the list to scroll.
+
+    The list is capped at a share of the window height, so a shorter window shrinks it: the
+    page then moves a list that follows its end and leaves one the user scrolled away."""
+    await page.set_viewport_size({"width": 390, "height": 664})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "many steps"})
+    for i in range(count):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function(f"document.querySelectorAll('#tools .tool').length === {count}")
+    await asyncio.sleep(0.2)
+    return session
+
+
+async def _tool_list_box(page):
+    return await page.evaluate("""() => { const l = document.getElementById('tools');
+        return { atEnd: l.scrollTop + l.clientHeight >= l.scrollHeight - 4, top: l.scrollTop,
+                 height: l.clientHeight, scroll: l.scrollHeight }; }""")
+
+
+async def test_a_fling_that_ends_at_the_end_of_the_tool_list_pins_it_again(stack):
+    fake, page, sessions, utterances = stack
+    session = await _a_busy_turn_fills_the_tool_list(fake, page, sessions)
+    # Up to the top inside the first second, then back to the end after it.
+    range_ = await _fling_the_tool_list(page, [0.6, 0.3, 0, 0.1, 0, 0.1, 0.2, 0.5, 0.8, 1])
+    assert range_ > 0
+    await asyncio.sleep(0.5)
+    before = await _tool_list_box(page)
+    await page.set_viewport_size({"width": 390, "height": 600})
+    await asyncio.sleep(0.2)
+    after = await _tool_list_box(page)
+    assert after["height"] < before["height"], (before, after)
+    assert after["atEnd"], (before, after)
+    await session.send_page({"type": "tool_start", "id": "n1", "name": "read_file", "summary": "next"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 15")
+    await asyncio.sleep(0.2)
+    assert (await _tool_list_box(page))["atEnd"]
+
+
+async def test_a_fling_that_ends_at_the_top_of_the_tool_list_leaves_it_there(stack):
+    fake, page, sessions, utterances = stack
+    await _a_busy_turn_fills_the_tool_list(fake, page, sessions)
+    # At the end when the first second is over, then up to the top after it.
+    range_ = await _fling_the_tool_list(page, [0.5, 0, 0.5, 1, 0.5, 0.8, 1, 0.5, 0.2, 0])
+    assert range_ > 0
+    await asyncio.sleep(0.5)
+    before = await _tool_list_box(page)
+    await page.set_viewport_size({"width": 390, "height": 600})
+    await asyncio.sleep(0.2)
+    after = await _tool_list_box(page)
+    assert after["height"] < before["height"], (before, after)
+    assert after["top"] == 0, (before, after)

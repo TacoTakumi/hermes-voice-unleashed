@@ -296,7 +296,10 @@ header > * { flex-shrink: 0; }
   const toolLines = new Map(); // call id -> its <li>
   // The tool list follows its newest line unless the user scrolled it up to read. Only a
   // scroll right after the user's own gesture counts: the browser also moves scrollTop
-  // when the list grows or shrinks, and the page moves it when a line is added.
+  // when the list grows or shrinks, and the page moves it when a line is added. A fling
+  // keeps scrolling well after the finger left, so each scroll inside the window keeps
+  // the window open a little longer and the scroll counts until it stops. (scrollend
+  // would say when it stops, but not every Safari has it.)
   let toolsAtEnd = true, toolsGestureUntil = 0;
   function toolsToEnd() {
     toolsEl.scrollTop = toolsEl.scrollHeight;
@@ -306,7 +309,9 @@ header > * { flex-shrink: 0; }
     toolsEl.addEventListener(kind, () => { toolsGestureUntil = Date.now() + 1000; }, { passive: true });
   }
   toolsEl.addEventListener("scroll", () => {
-    if (Date.now() > toolsGestureUntil) return;
+    const now = Date.now();
+    if (now > toolsGestureUntil) return;
+    toolsGestureUntil = Math.max(toolsGestureUntil, now + 300);
     toolsAtEnd = toolsEl.scrollTop + toolsEl.clientHeight >= toolsEl.scrollHeight - 4;
   });
   // Back to the end on the next frame, after the layout settled. Lines and reasoning can
