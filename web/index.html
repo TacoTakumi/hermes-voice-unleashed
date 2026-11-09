@@ -792,6 +792,8 @@ header > * { flex-shrink: 0; }
       micCtx = new AudioContext();
       source = micCtx.createMediaStreamSource(micStream);
     }
+    // Not awaited: a context made outside a tap (a rejoin) can hang or reject here.
+    micCtx.resume().catch(() => {});
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
     await micCtx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
@@ -830,6 +832,7 @@ header > * { flex-shrink: 0; }
       unlocked();
     } catch (e) {
       show("No microphone", "alert", "Allow the microphone for this page, then try again.");
+      micOff();  // a start that failed after the mic opened must not leave it on
       if (playCtx) playCtx.close().catch(() => {});
       playCtx = null;
       unmuteEl.hidden = true;

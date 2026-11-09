@@ -411,12 +411,19 @@ async def test_a_load_with_a_session_in_the_url_rejoins_it_without_a_tap(site):
 
 # Playback stays locked: the context reports suspended until its second resume, as a
 # browser that waits for a tap does. The real context runs (the harness allows autoplay),
-# so the page's audio path is not touched; only what the page reads is.
+# so the page's audio path is not touched; only what the page reads is. resumeCalls
+# counts the resumes of the reply context, the first one the page makes; the mic
+# context gets its own resume, which is not the unmute button's business.
 PLAYBACK_LOCKED = MIC_AND_WAKE_LOCK + """
 window.resumeCalls = 0;
-const realResume = AudioContext.prototype.resume;
-AudioContext.prototype.resume = function () {
-  window.resumeCalls += 1;
+window.lockedContexts = [];
+const RealContext = window.AudioContext;
+window.AudioContext = class extends RealContext {
+  constructor(...args) { super(...args); window.lockedContexts.push(this); }
+};
+const realResume = RealContext.prototype.resume;
+RealContext.prototype.resume = function () {
+  if (this === window.lockedContexts[0]) window.resumeCalls += 1;
   this.resumes = (this.resumes || 0) + 1;
   return realResume.call(this);
 };
@@ -445,6 +452,69 @@ async def test_a_rejoin_with_playback_locked_shows_one_unmute_button_that_resume
     assert await page.evaluate("window.resumeCalls") == 2
     assert await page.text_content("#state") == "Listening"
     assert len(site.ws_requests) == 1
+
+
+# The mic streams and the audio contexts the page made, kept where a test can read them.
+STREAMS_AND_CONTEXTS = """
+window.__streams = [];
+const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+navigator.mediaDevices.getUserMedia = async (constraints) => {
+  const stream = await realGetUserMedia(constraints);
+  window.__streams.push(stream);
+  return stream;
+};
+window.__contexts = [];
+const RealAudioContext = window.AudioContext;
+window.AudioContext = class extends RealAudioContext {
+  constructor(...args) { super(...args); window.__contexts.push(this); }
+};
+"""
+
+# With the streams and contexts: the mic worklet does not load, so a start fails after
+# the mic and its context are open.
+WORKLET_FAILS = STREAMS_AND_CONTEXTS + """
+AudioWorklet.prototype.addModule = function () { return Promise.reject(new Error('no worklet')); };
+"""
+
+# With the streams and contexts: the contexts that were resumed at least once.
+RESUMES_COUNTED = STREAMS_AND_CONTEXTS + """
+window.__resumed = [];
+const realResume = AudioContext.prototype.resume;
+AudioContext.prototype.resume = function () {
+  if (!window.__resumed.includes(this)) window.__resumed.push(this);
+  return realResume.call(this);
+};
+"""
+
+STREAM_TRACK_STATES = "window.__streams.flatMap(s => s.getTracks().map(t => t.readyState))"
+
+
+@pytest.mark.parametrize("site", [WORKLET_FAILS], indirect=True)
+async def test_a_failed_start_lets_go_of_the_mic_and_closes_both_contexts(site):
+    """A start that fails after the mic opened must not leave the mic on: the page shows
+    No microphone, stops the mic tracks and closes the capture context as well as the
+    reply context."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await page.click("#new")
+    await page.wait_for_function("document.getElementById('state').textContent === 'No microphone'", timeout=10000)
+    assert await page.evaluate("window.__streams.length") >= 1
+    assert await page.evaluate("window.__contexts.length") >= 2  # the reply context and the mic context
+    await page.wait_for_function(f"{STREAM_TRACK_STATES}.every(s => s === 'ended')", timeout=2000)
+    await page.wait_for_function("window.__contexts.every(c => c.state === 'closed')", timeout=2000)
+    assert await page.is_enabled("#toggle")
+
+
+@pytest.mark.parametrize("site", [RESUMES_COUNTED], indirect=True)
+async def test_a_start_resumes_the_mic_context_as_well_as_the_reply_context(site):
+    """A context made outside a tap may stay suspended, the mic one included: a start
+    resumes both of them."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await page.click("#new")
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert await page.evaluate("window.__contexts.length") == 2
+    assert await page.evaluate("new Set(window.__resumed).size") == 2
 
 
 @pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
