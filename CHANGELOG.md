@@ -32,6 +32,16 @@ entry names next to its pinned commit.
   goes to Hermes as an ordinary message.
 - An approval prompt for an empty command is spoken as "Approval needed. Say
   yes or no."
+- A Desktop or Webapp chat that turns voice on while the voice page is still
+  connecting to the same session keeps voice. Before, both ended up without it.
+- A status line from Hermes before the answer starts, a provider fallback
+  notice for example, no longer ends the turn on the page: it stays on
+  Thinking and keeps its tool lines open until the turn is over. The server
+  marks such a `reply` frame with `turn_running`.
+- An answer is no longer shown twice when its last text arrives after the
+  final message and ends in whitespace, or when
+  `display.interim_assistant_messages` is off and the answer follows a tool
+  call.
 
 ## [0.2.0]
 
