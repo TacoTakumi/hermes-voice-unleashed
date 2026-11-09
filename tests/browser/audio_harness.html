@@ -80,8 +80,11 @@
     window.makeAudio = () => {
       window.audio = plugin.createVoiceAudio({
         sendBinary: buf => {
+          // window.dropMic plays a closed socket: the frame is not sent and not counted
+          if (window.dropMic) return false
           window.bins.push(buf)
           window.micSamples += buf.byteLength / 2
+          return true
         },
         sendJson: frame => {
           window.jsons.push(frame)

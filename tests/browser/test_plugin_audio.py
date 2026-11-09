@@ -253,6 +253,21 @@ async def test_a_cleared_reply_reports_mic_sample_for_the_part_heard(page):
     _check_mic_samples(frames, stop["reply_sample"])
 
 
+async def test_mic_sample_counts_only_the_frames_that_went_out(page):
+    """A frame the sender drops (socket not open) does not advance mic_sample,
+    so the start edge still lands near the harness's count of sent samples."""
+    await _start(page)
+    await page.wait_for_function("() => window.bins.length >= 10", timeout=15000)
+    await page.evaluate("window.dropMic = true")
+    await page.wait_for_timeout(1000)
+    before = await page.evaluate("window.bins.length")
+    await page.evaluate("window.dropMic = false")
+    await page.wait_for_function(f"() => window.bins.length >= {before + 10}", timeout=15000)
+    await _send_reply(page, "r1", 12000)
+    await _wait_playback(page, 2)
+    _check_mic_samples(await _playback_with_sent(page), 12000)
+
+
 async def test_mic_sample_holds_without_the_latency_apis(page):
     """With no output timestamp, no output latency and no track latency the
     edges are mapped through the context clock alone."""

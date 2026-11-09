@@ -342,7 +342,9 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     const node = new AudioWorkletNode(ctx, 'mic-16k')
     node.port.onmessage = event => {
       if (mine !== run) return
-      sendBinary(event.data.pcm)
+      // mic_sample counts the samples the server got: a frame the sender
+      // dropped (false) is not counted. A sender that returns nothing sent it.
+      if (sendBinary(event.data.pcm) === false) return
       micSent += event.data.pcm.byteLength / 2
       micAnchor = { count: micSent, time: performance.now() - captureLatencyMs }
     }
@@ -490,7 +492,9 @@ function createLiveVoice(ctx, prefs) {
     s.stream = stream
     s.audio = createVoiceAudio({
       sendBinary: buf => {
-        if (isOpen(s)) s.ws.send(buf)
+        if (!isOpen(s)) return false
+        s.ws.send(buf)
+        return true
       },
       sendJson: frame => sendJson(s, frame)
     })
