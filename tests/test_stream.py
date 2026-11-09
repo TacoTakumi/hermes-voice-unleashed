@@ -474,3 +474,17 @@ async def test_a_turn_error_from_the_gateway_ends_the_turn_state(rig):
     await adapter.send("voice", "Sorry, that turn failed.")
     await wait_for(lambda: page.of("reply"))
     assert "turn_running" not in page.of("reply")[-1]
+
+
+async def test_an_event_of_another_reply_does_not_start_the_turn(rig):
+    hooks, conn, page = rig
+    session = _session(hooks)
+    assert session.reply_id and session.reply_open
+    await session.on_turn_start("another-reply")
+    await session.on_reply_delta("another-reply", "t0", 1, "Late text. ")
+    await session.on_reasoning_delta("another-reply", "Late thought.")
+    await session.on_tool_start("another-reply", "c0", "terminal", "ls")
+    await session.on_stream_end("another-reply")
+    assert not session.turn_running
+    assert page.of("reply_delta") == [] and page.of("tool_start") == []
+
