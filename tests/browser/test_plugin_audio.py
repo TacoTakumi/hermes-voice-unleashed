@@ -282,6 +282,73 @@ async def test_mic_sample_holds_without_the_latency_apis(page):
     _check_mic_samples(await _playback_with_sent(page), 12000)
 
 
+def _start_offsets(frames_with_sent, *request_ids):
+    """For each reply, how far its start frame's mic_sample lies past the mic
+    samples the harness had sent when the frame went out."""
+    starts = {f["request_id"]: (f, sent) for f, sent in frames_with_sent if f["event"] == "start"}
+    return [_mic_sample(starts[rid][0]) - starts[rid][1] for rid in request_ids]
+
+
+async def test_a_longer_output_latency_moves_the_edges_later_on_the_mic_stream(page):
+    """Without an output timestamp the edges are mapped through the context
+    clock plus the output latency: a sound scheduled now is heard that much
+    later, so its mic_sample lies that much further along the mic stream. The
+    second reply plays with 300 ms more output latency than the first: its
+    start sits about 4800 mic samples further past the count than the first's."""
+    await page.evaluate("""() => {
+      AudioContext.prototype.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 })
+      Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => window.outLat, configurable: true })
+      window.outLat = 0
+    }""")
+    await _start(page)
+    await _send_reply(page, "r1", 12000)
+    await _wait_playback(page, 2)
+    await page.evaluate("window.outLat = 0.3")
+    await _send_reply(page, "r2", 12000)
+    await _wait_playback(page, 4)
+    offset1, offset2 = _start_offsets(await _playback_with_sent(page), "r1", "r2")
+    assert abs((offset2 - offset1) - 4800) <= 2400, (offset1, offset2)
+
+
+async def test_a_longer_capture_latency_moves_the_edges_later_on_the_mic_stream(page):
+    """The mic's sound reaches the page the capture latency after it entered
+    the mic, so each sent frame is anchored that much earlier on the page clock
+    and a sound heard now maps that much further along the mic stream. The
+    output side is held constant (no output timestamp, no output latency). The
+    audio is restarted with a 300 ms track latency, since the latency is read
+    once in start(): the second reply's start sits about 4800 mic samples
+    further past the count than the first's."""
+    await page.evaluate("""() => {
+      AudioContext.prototype.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 })
+      Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => undefined, configurable: true })
+      MediaStreamTrack.prototype.getSettings = function () { return { latency: window.trackLat } }
+      window.trackLat = 0
+    }""")
+    await _start(page)
+    await _send_reply(page, "r1", 12000)
+    await _wait_playback(page, 2)
+    # The plugin counts mic samples from 0 at each start(), while the harness
+    # count runs on across the restart. stop() disconnects the capture node, so
+    # no frame goes out between stop() and start(): the harness count read just
+    # before the second start is exactly what it held when the plugin's count
+    # went back to 0, and r2's offset is measured against the harness count
+    # minus that base. stop() ended the old tracks, so the mic is opened again.
+    base = await page.evaluate("""async () => {
+      await window.audio.stop()
+      await window.openMic()
+      window.trackLat = 0.3
+      const base = window.micSamples
+      await window.audio.start(window.stream)
+      return base
+    }""")
+    await page.wait_for_function(f"() => window.micSamples > {base}", timeout=5000)  # capture runs again
+    await _send_reply(page, "r2", 12000)
+    await _wait_playback(page, 4)
+    frames = [(f, sent - (base if f["request_id"] == "r2" else 0)) for f, sent in await _playback_with_sent(page)]
+    offset1, offset2 = _start_offsets(frames, "r1", "r2")
+    assert abs((offset2 - offset1) - 4800) <= 2400, (offset1, offset2)
+
+
 async def test_the_stop_edge_is_clamped_to_the_start_edge(page):
     """VoiceManager refuses a stop whose mic_sample is before its start's, so the
     stop edge never maps below the start edge. After the start frame the output
@@ -423,6 +490,9 @@ async def test_a_reply_that_starts_while_one_plays_is_queued_behind_it(page):
     assert stop1 - start1 > 900, f"the first reply was heard for {stop1 - start1:.0f} ms of 1000"
     assert start2 >= stop1
     assert stop2 - start2 > 400, f"the second reply was heard for {stop2 - start2:.0f} ms of 500"
+    # On the mic stream too the second reply begins where the first stopped, or later.
+    r1_stop, r2_start = _mic_sample(playback[1]), _mic_sample(playback[2])
+    assert r2_start >= r1_stop, (r1_stop, r2_start)
     assert await page.evaluate("window.sources.every(s => s.endedAt !== null)")
     assert await page.evaluate("window.speaking") == [True, False]
 
