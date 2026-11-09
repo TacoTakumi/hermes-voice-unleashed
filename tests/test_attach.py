@@ -402,6 +402,66 @@ async def test_a_late_say_after_a_classic_barge_in_opens_no_reply(ready, adapter
     assert "".join(f["text"] for f in frames) == "Typed reply."
 
 
+@pytest.mark.parametrize("fake_vm", ["turn_engine_unsupported"], indirect=True)
+async def test_a_classic_talk_over_closes_the_attached_reply_it_clears(ready, adapter):
+    """The client cuts its reply on the clear; the session closes it too, so a late say
+    of that key reaches no TTS request and the next key opens a reply of its own."""
+    client, conn = ready
+    session = adapter._attached[SESSION_ID]
+    await conn.send({"type": "transcription", "segment_index": 0, "text": "tell me a story",
+                     "endpoint": True, "is_final": False, "turn_id": 1})
+    await wait_for(lambda: client.of("utterance"))
+    await client.say("Once upon ", reply="m1")
+    await wait_for(lambda: tts_frames(conn))
+    assert session.reply_open and session.reply_key == "m1"
+    await conn.send({"type": "transcription", "segment_index": 1, "text": "wait",
+                     "endpoint": False, "is_final": False, "turn_id": 1})
+    await wait_for(lambda: client.of("clear"))
+    assert not session.reply_open
+    assert session.reply_key is None
+    assert session._finishing is None and session._flushing is None
+    await client.say("a time. ", reply="m1")
+    await asyncio.sleep(0.2)
+    (first,) = by_request(conn)
+    assert [f["text"] for f in first] == ["Once upon "]
+    await client.say("Typed reply.", reply="m2")
+    await client.say_end("m2")
+    await wait_for(lambda: len(by_request(conn)) == 2 and by_request(conn)[1][-1]["done"])
+    assert "".join(f["text"] for f in by_request(conn)[1]) == "Typed reply."
+    assert "time" not in "".join(f["text"] for f in client.of("reply_delta"))
+
+
+async def test_a_barge_on_a_finished_reply_tail_closes_the_open_reply(ready, adapter):
+    """The user talks over the tail of a reply that was done while the client's next
+    reply is open: the clear names the barged request, and the open reply is closed
+    with its TTS request cancelled."""
+    client, conn = ready
+    session = adapter._attached[SESSION_ID]
+    await client.say("Done.", reply="m1")
+    await client.say_end("m1")
+    (first,) = await wait_for(lambda: requests_ended(conn, 1))
+    tail = first[0]["request_id"]
+    await conn.send({"type": "audio_end", "request_id": tail, "reason": "complete"})
+    await client.say("Two ", reply="m2")
+    await wait_for(lambda: len(by_request(conn)) == 2)
+    assert session.reply_open and session.reply_key == "m2"
+    await conn.send({"type": "barge", "request_id": tail, "onset_mic_sample": 10, "mic_sample": 20})
+    (clear,) = await wait_for(lambda: client.of("clear"))
+    assert clear["request_id"] == tail
+    assert not session.reply_open
+    assert session.reply_key is None
+    second = by_request(conn)[1][0]["request_id"]
+    assert [f["request_id"] for f in conn.json_frames("tts_cancel")] == [second]
+    await client.say("more. ", reply="m2")
+    await asyncio.sleep(0.2)
+    assert [f["text"] for f in by_request(conn)[1]] == ["Two "]
+    await client.say("Three.", reply="m3")
+    await client.say_end("m3")
+    await wait_for(lambda: len(by_request(conn)) == 3 and by_request(conn)[2][-1]["done"])
+    assert "".join(f["text"] for f in by_request(conn)[2]) == "Three."
+    assert not any(f["done"] for f in by_request(conn)[1])  # the cut-off request is never ended
+
+
 def test_the_finished_keys_kept_are_bounded(plugin):
     session_module = plugin.session
     session = session_module.VoiceSession(None, None, attached=True)

@@ -260,6 +260,8 @@ class VoiceSession:
                     and heard_words(self.tracker.text)):
                 # Classic mode: the user speaks while the last reply's tail may still play.
                 self._cleared_turn = True
+                if self.attached and self.reply_open:
+                    await self._close_reply("talk-over")  # the client cuts its reply on the clear
                 await self._send_clear(None)
             await self.send_page({"type": "transcript", "text": self.tracker.text,
                                   "final": bool(frame.get("is_final"))})
@@ -460,6 +462,10 @@ class VoiceSession:
             await self.cancel_reply("barge", send_cancel=False)
             self.tracker.reply_ended()
         else:  # the reply's text was done but its tail was still playing
+            if self.attached and self.reply_open:
+                # The client cuts the reply it has open on the clear: close it here too.
+                await self._close_reply("barge")
+                self.tracker.reply_ended()
             await self._send_clear(frame.get("request_id"))
 
     async def _dispatch(self, text: str) -> None:
@@ -602,6 +608,13 @@ class VoiceSession:
         The Hermes turn itself stops when the user's next utterance arrives: the
         gateway interrupts a running turn for a new voice message (its default
         busy_input_mode)."""
+        request = await self._close_reply(reason, send_cancel)
+        await self._send_clear(request.request_id if request else None)
+        await self._send_turn_done()
+
+    async def _close_reply(self, reason: str, send_cancel: bool = True) -> Optional[vm_client.TTSRequest]:
+        """Close the running reply: no more of its text, its TTS request dropped and
+        cancelled. Returns that request, if it had one. The page is not told here."""
         logger.info("voice page %s: reply cancelled (%s)", self.client_id, reason)
         self._cancel_finishing()
         self.reply_open = False
@@ -612,8 +625,7 @@ class VoiceSession:
             if send_cancel and not request.cancelled:
                 with contextlib.suppress(Exception):
                     await request.cancel()
-        await self._send_clear(request.request_id if request else None)
-        await self._send_turn_done()
+        return request
 
     async def _send_turn_done(self) -> None:
         """Tell the page that nothing more of the turn is coming, so it stops showing
