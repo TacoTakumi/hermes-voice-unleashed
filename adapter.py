@@ -522,19 +522,24 @@ class VoiceLiveAdapter(BasePlatformAdapter):
     async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
         # session=new asks for a fresh session, not a join; the history is of
         # whatever session the lane is on once the connect steps are done.
+        lane_before = self.lane_session_id(client_id)
         new_session_failed = False
         if session == "new":
             new_session_failed = not await self._start_new_session(client_id)
         elif session and not await self._join_session(connection, client_id, session):
             return
+        if self._clients.get(client_id) is not connection:
+            # Another page took the chat id while this one waited on its connect steps:
+            # this connection was closed as replaced and is no voice device any more.
+            # When its step moved the lane, the live page is on another session now
+            # and is told with a fresh history frame; otherwise nothing more is sent.
+            logger.debug("voice page %s: replaced during its connect", client_id)
+            if self.lane_session_id(client_id) != lane_before:
+                await self._send_history(client_id)
+            return
         # The page is the newest voice device of its session: a UI client attached
         # to it is switched off before the page's voice starts.
         await self._take_voice(client_id, await self._send_history(client_id, connection))
-        if self._clients.get(client_id) is not connection:
-            # Another page took the chat id while this one waited on its connect steps:
-            # the live page's session stays, this connection was closed as replaced.
-            logger.debug("voice page %s: replaced during its connect", client_id)
-            return
         if new_session_failed:
             # The history frame named the old session; the page is told why.
             await self._send_to(connection, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})

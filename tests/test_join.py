@@ -109,9 +109,10 @@ async def test_a_connect_with_a_session_sends_resume_before_the_page_is_ready(ad
     assert event.source.platform == adapter.platform
     # The ready frame follows the VoiceManager connection, which did not exist yet.
     assert adapter.vm_connections_at_dispatch == [0]
-    # The join check and the history step each read the lane's key.
+    # The connect notes the lane before its join step; the join check and the history
+    # step each read the lane's key as well.
     lane_key = adapter._source_session_key(adapter._voice_source("tablet"))
-    assert adapter._session_store.peeked == [lane_key, lane_key]
+    assert adapter._session_store.peeked == [lane_key, lane_key, lane_key]
 
 
 async def test_a_connect_without_a_session_sends_no_command(adapter, fake_vm):
@@ -234,7 +235,8 @@ async def test_a_connect_with_session_new_sends_nothing_when_the_lanes_session_i
     assert db.counted == ["abc"]
     assert adapter._session_store.session_id == "abc"
     lane_key = adapter._source_session_key(adapter._voice_source("tablet"))
-    assert adapter._session_store.peeked == [lane_key, lane_key]  # the new-session step, then the history
+    # The lane before the step, the new-session step, then the history.
+    assert adapter._session_store.peeked == [lane_key, lane_key, lane_key]
     assert page.of("join_failed") == []
 
 
@@ -478,6 +480,128 @@ async def test_a_second_page_during_the_first_ones_resume_keeps_its_session_and_
         assert adapter.session_for("phone") is live
         second.task.cancel()
     assert [m.text for m in adapter.messages] == ["/resume abc --all"]
+
+
+def _move_on_resume(adapter, session_id):
+    """The gateway's /resume moves the lane onto ``session_id`` before it answers."""
+    inner = adapter.handle_message
+
+    async def handle_message(event):
+        if event.text.startswith("/resume"):
+            adapter._session_store.session_id = session_id
+        await inner(event)
+
+    adapter.handle_message = handle_message
+
+
+async def test_a_second_page_gets_the_history_when_the_first_ones_held_resume_moves_the_lane(
+        adapter, fake_vm, plugin):
+    """The first page's /resume lands after a second page took the chat id: the lane
+    moved under the live page, so the live page is told with a fresh history frame
+    and the replaced connection gets nothing more."""
+    adapter._session_store = FakeStore("old")
+    _with_db(adapter, FakeDB())
+    _move_on_resume(adapter, "abc")
+    dispatched, release = _hold_commands(adapter)
+    first_ws = await connect(_url(adapter, "session=abc"))
+    first = Page(first_ws)
+    await asyncio.wait_for(dispatched.wait(), 3)
+    async with connect(_url(adapter, "client=phone")) as ws:
+        second = Page(ws)
+        await wait_for(lambda: second.of("ready"))
+        assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
+        assert second.of("history") == [{"type": "history", "session_id": "old", "lines": []}]
+        live = adapter.session_for("phone")
+        release.set()
+        await wait_for(lambda: len(second.of("history")) == 2)
+        await asyncio.sleep(0.2)  # the first page's connect runs to its end
+        kinds = [f["type"] for f in second.frames]
+        assert kinds.index("ready") < kinds.index("history", kinds.index("ready"))
+        assert second.of("history")[-1] == {"type": "history", "session_id": "abc", "lines": []}
+        assert second.of("replaced") == []
+        assert ws.close_code is None
+        assert adapter.session_for("phone") is live
+        assert first.frames == [{"type": "replaced"}]
+        second.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/resume abc --all"]
+
+
+def _hold_first_history_read(plugin, monkeypatch):
+    """The module's history reader sits on its first call until ``release`` is set, as a
+    slow state DB would; ``started`` is set when that call came in. Later calls return
+    at once."""
+    import threading
+
+    started, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    calls = []
+
+    def fake_history_lines(db, session_id, limit=40):
+        calls.append(session_id)
+        if len(calls) == 1:
+            loop.call_soon_threadsafe(started.set)
+            release.wait(3)
+        return []
+
+    monkeypatch.setattr(plugin.sessions, "history_lines", fake_history_lines)
+    return started, release
+
+
+async def test_a_second_page_gets_no_extra_history_when_the_replaced_connect_had_no_join_step(
+        adapter, fake_vm, plugin, monkeypatch):
+    """A plain connect has no join or new step, so the lane cannot have moved under
+    the live page: it gets its own history frame and nothing more."""
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    started, release = _hold_first_history_read(plugin, monkeypatch)
+    first_ws = await connect(_url(adapter, "client=phone"))
+    first = Page(first_ws)
+    await asyncio.wait_for(started.wait(), 3)
+    async with connect(_url(adapter, "client=phone")) as ws:
+        second = Page(ws)
+        await wait_for(lambda: second.of("ready"))
+        assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
+        release.set()
+        await asyncio.sleep(0.5)  # the first page's connect runs to its end
+        assert second.of("history") == [{"type": "history", "session_id": "abc", "lines": []}]
+        assert len(second.of("ready")) == 1
+        assert second.of("replaced") == []
+        assert ws.close_code is None
+        assert first.frames == [{"type": "replaced"}]
+        second.task.cancel()
+    assert adapter.messages == []
+
+
+async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_client_alone(
+        adapter, fake_vm, plugin):
+    """A UI client attached to the session while the first page's /resume was held, then a
+    second page took the chat id. The late /resume moves the lane onto the client's
+    session, but the replaced connect is no voice device any more: it does not switch
+    the client off, and the live page is told where its lane is now."""
+    adapter._session_store = FakeStore("old")
+    _with_db(adapter, FakeDB())
+    _move_on_resume(adapter, "abc")
+    dispatched, release = _hold_commands(adapter)
+    first_ws = await connect(_url(adapter, "session=abc"))
+    first = Page(first_ws)
+    await asyncio.wait_for(dispatched.wait(), 3)
+    attach_ws, client = await _attach(adapter, fake_vm, "abc")
+    async with connect(_url(adapter, "client=phone")) as ws:
+        second = Page(ws)
+        await wait_for(lambda: second.of("ready"))
+        assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
+        release.set()
+        await wait_for(lambda: len(second.of("history")) == 2)
+        await asyncio.sleep(0.2)  # the first page's connect runs to its end
+        assert client.of("replaced") == []
+        assert not client.task.done()
+        assert attach_ws.close_code is None
+        assert adapter.is_attached("abc")
+        assert second.of("history")[-1] == {"type": "history", "session_id": "abc", "lines": []}
+        assert first.frames == [{"type": "replaced"}]
+        second.task.cancel()
+    client.task.cancel()
+    await attach_ws.close()
 
 
 class FakeConnection:
