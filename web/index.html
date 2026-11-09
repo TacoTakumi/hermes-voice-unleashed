@@ -228,6 +228,7 @@ header > * { flex-shrink: 0; }
   let level = 0, speakingLevel = 0;
   let hermesTurn = null; // the <li> the current reply's text goes into
   let busy = false; // a Hermes turn runs: from its utterance until turn_done
+  let turnStreamed = false; // this turn streamed reply text
   // How long reply audio must be silent before the page stops showing Speaking: chunks
   // arrive paced, so the queue can run dry for a moment between two of them.
   const QUIET_MS = 600;
@@ -633,6 +634,7 @@ header > * { flex-shrink: 0; }
         addTurn("user", f.text);
         hermesTurn = null;
         busy = true;
+        turnStreamed = false;
         turnBegin();
         reasoningClear();
         show("Thinking", "hermes", "Hermes is working on it.");
@@ -656,6 +658,7 @@ header > * { flex-shrink: 0; }
       case "reply_delta":
         if (!hermesTurn) hermesTurn = addTurn("hermes", "");
         hermesTurn.textContent += f.text;
+        turnStreamed = true;
         break;
       case "reply": {
         // A message the gateway sent: tool progress, a note, an approval prompt, or the
@@ -665,6 +668,16 @@ header > * { flex-shrink: 0; }
         const streamed = hermesTurn ? hermesTurn.textContent.trim() : "";
         if (text && !(streamed && streamed.endsWith(text))) addTurn("hermes", f.text);
         hermesTurn = null;
+        // A turn that ran streams its answer before this frame and ends with turn_done. A
+        // message sent without a turn (a busy notice, a refusal) brings no turn_done, so
+        // a reply with nothing streamed this turn is the whole answer: end the turn here.
+        if (busy && !turnStreamed) {
+          busy = false;
+          turnFold();
+          reasoningDone();
+          showElapsed();
+          status();
+        }
         break;
       }
       case "audio_start":

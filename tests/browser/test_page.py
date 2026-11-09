@@ -1136,6 +1136,49 @@ async def _listening(fake, page):
     return conn
 
 
+async def _thinking_after_an_utterance(stack):
+    fake, page, sessions, utterances = stack
+    conn = await _listening(fake, page)
+    await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Thinking'",
+                                 timeout=5000)
+    return conn, sessions[0], utterances[0][1]
+
+
+async def test_a_reply_frame_with_nothing_streamed_ends_the_turn_on_the_page(stack):
+    """A message the gateway sends without running a turn, such as a busy notice, brings
+    no turn_done: the reply frame alone is the whole answer and ends the turn."""
+    _, page, _, _ = stack
+    _, session, _ = await _thinking_after_an_utterance(stack)
+    await session.send_page({"type": "reply", "text": "The gateway is busy, try again later."})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=2000)
+    assert await page.is_hidden("#elapsed")
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert "The gateway is busy, try again later." in texts
+
+
+async def test_a_reply_frame_after_streamed_text_leaves_the_turn_running(stack):
+    """The final send of a streamed answer comes before turn_done: the turn is still
+    running on the page until that frame."""
+    _, page, _, _ = stack
+    conn, session, reply_id = await _thinking_after_an_utterance(stack)
+    await session.on_reply_delta(reply_id, "t1", 1, "Let me check. ")
+    await session.send_page({"type": "reply", "text": "Let me check."})
+    await asyncio.sleep(0.5)
+    assert await page.text_content("#state") in ("Thinking", "Working")
+    await session.on_turn_done(reply_id, "t1", False)
+    frames = await wait_for(lambda: conn.json_frames("tts_stream") if any(
+        f.get("done") for f in conn.json_frames("tts_stream")) else None, timeout=5)
+    rid = frames[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x10\x00" * 2400)  # 0.1 s
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=5000)
+
+
 async def test_the_activity_panel_shows_each_tool_call(stack):
     fake, page, sessions, utterances = stack
     await _listening(fake, page)
