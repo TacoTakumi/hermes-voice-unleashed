@@ -1129,6 +1129,43 @@ async def test_gateway_messages_never_replace_the_streamed_reply(stack):
     assert texts == ["Let me check.", "web_search: weather today", "It is sunny."]
 
 
+async def test_a_final_reply_that_extends_the_streamed_text_absorbs_the_late_deltas(stack):
+    """The gateway's final send can arrive before the last deltas. A final that
+    extends the streamed text replaces it in place; the deltas it already holds
+    add nothing."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    await conn.send({"type": "turn_end", "text": "weather please", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.on_reply_delta(reply_id, "t1", 1, "Let me check. It is")
+    await session.send_page({"type": "reply", "text": "Let me check. It is sunny."})
+    await session.on_reply_delta(reply_id, "t1", 1, " sunny.")
+    await asyncio.sleep(0.3)
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert texts == ["Let me check. It is sunny."]
+
+
+async def test_a_delta_that_is_not_part_of_the_final_reply_starts_its_own_line(stack):
+    """A final with nothing streamed is its own line; a delta that does not continue
+    it starts a new line."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=10000)
+    await conn.send({"type": "turn_end", "text": "weather please", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.send_page({"type": "reply", "text": "A."})
+    await session.on_reply_delta(reply_id, "t1", 1, " B")
+    await asyncio.sleep(0.3)
+    texts = await page.eval_on_selector_all("#log .turn.hermes",
+                                            "els => els.map(e => e.textContent.trim())")
+    assert texts == ["A.", "B"]
+
+
 async def _listening(fake, page):
     (conn,) = await fake.wait_connections(1, timeout=10)
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",

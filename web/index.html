@@ -227,6 +227,7 @@ header > * { flex-shrink: 0; }
   let moved = false; // the voice moved to another page: the button leads back to the sessions
   let level = 0, speakingLevel = 0;
   let hermesTurn = null; // the <li> the current reply's text goes into
+  let absorbing = null;  // a final answer shown in place while its late deltas still arrive
   let busy = false; // a Hermes turn runs: from its utterance until turn_done
   let turnStreamed = false; // this turn streamed reply text
   // How long reply audio must be silent before the page stops showing Speaking: chunks
@@ -633,6 +634,7 @@ header > * { flex-shrink: 0; }
         transcriptEl.textContent = "";
         addTurn("user", f.text);
         hermesTurn = null;
+        absorbing = null;
         busy = true;
         turnStreamed = false;
         turnBegin();
@@ -656,6 +658,12 @@ header > * { flex-shrink: 0; }
         status();
         break;
       case "reply_delta":
+        // A delta the final answer already shows (it arrived late) adds nothing.
+        if (absorbing && absorbing.text.startsWith(absorbing.streamed + f.text)) {
+          absorbing.streamed += f.text;
+          break;
+        }
+        absorbing = null;
         if (!hermesTurn) hermesTurn = addTurn("hermes", "");
         hermesTurn.textContent += f.text;
         turnStreamed = true;
@@ -664,9 +672,17 @@ header > * { flex-shrink: 0; }
         // A message the gateway sent: tool progress, a note, an approval prompt, or the
         // final answer. The final answer was usually streamed already; anything else
         // gets its own line and the next streamed text starts a new one.
+        // The final can also beat the last deltas: when it extends the streamed text,
+        // show it in place and let the late deltas it holds pass without a new line.
         const text = (f.text || "").trim();
         const streamed = hermesTurn ? hermesTurn.textContent.trim() : "";
-        if (text && !(streamed && streamed.endsWith(text))) addTurn("hermes", f.text);
+        if (streamed && text.length > streamed.length && text.startsWith(streamed)) {
+          const soFar = hermesTurn.textContent.trimStart();
+          hermesTurn.textContent = f.text;
+          absorbing = { li: hermesTurn, text: f.text.trimStart(), streamed: soFar };
+        } else if (text && !(streamed && streamed.endsWith(text))) {
+          addTurn("hermes", f.text);
+        }
         hermesTurn = null;
         // A turn that ran streams its answer before this frame and ends with turn_done. A
         // message sent without a turn (a busy notice, a refusal) brings no turn_done, so
