@@ -205,6 +205,28 @@ entry names next to its pinned commit.
   mid-turn was mistaken for the command's reply, and the command's reply then
   showed on the page. The command's reply is now matched by its reply_to, the
   command's own message id.
+- On a window 900 px or wider but short (a small laptop window with the
+  reasoning text open), the header column grew past the window and the whole
+  page scrolled. The header now stops at the window height at every width:
+  the reasoning text and the tool list shrink and scroll inside themselves
+  first, and the header scrolls only when the rest of it does not fit.
+- On a phone held sideways, where the header scrolls itself, a new tool line,
+  a rotation or a transcript that wrapped could leave the newest tool line
+  below the header's edge. A header left at its end now follows the newest
+  tool line; a header you scrolled up stays where you left it until you
+  scroll it back to its end.
+- A tool call whose end never came (its reply was cut off) folded into the
+  turn's summary line still marked running. It is now marked stopped when the
+  turn ends.
+- A flick of the tool list that kept scrolling for more than a second was not
+  followed: a list flung back to its end could stay unpinned, and one flung
+  away from it could jump when the list changed size. The scroll after a
+  touch now counts until it stops.
+- The meter's level array was named `history` and shadowed the browser's
+  history object in the page's scope. It is renamed.
+- Back or Forward to another session while the end-of-session notice was
+  still playing joined it, then the end's wait tore the new session down
+  once the notice would have ended. The wait is cancelled on a stop.
 
 ## [0.1.0] - 2026-11-07
 
