@@ -218,6 +218,7 @@ header > * { flex-shrink: 0; }
   let ws = null, micCtx = null, micStream = null, micNode = null, playCtx = null;
   let running = false, muted = false, retry = 0, wakeLock = null;
   let ending = false; // the session ended: the notice plays out, then the chooser
+  let endDrain = 0; // the timer of the wait for that notice, so a stop can cancel it
   // Mic samples sent on this connection, and when the last frame of them was captured.
   let micSent = 0, micAnchor = null;
   let moved = false; // the voice moved to another page: the button leads back to the sessions
@@ -816,10 +817,15 @@ header > * { flex-shrink: 0; }
   }
   // The reverse of start: the socket, the mic, its contexts and the wake lock go; the
   // button offers a start again. The drawing loop ends on its own once running is off.
+  // A wait for the end notice ends here too: a stop during it (a history move to another
+  // session) means the page is done with that end, and its wait must not leave the
+  // session the page joins next.
   function stop() {
     running = false;
     ending = false;
     moved = false;
+    clearTimeout(endDrain);
+    endDrain = 0;
     disconnect();
     retry = 0;
     muted = false;
@@ -848,7 +854,9 @@ header > * { flex-shrink: 0; }
   // The session ended by voice. The mic goes at once and the socket no longer counts:
   // the server closes it next, and that close must not reconnect. The reply context
   // stays up until the notice queued on it has played (capped, should the clock stall),
-  // then the page leaves.
+  // then the page leaves. The wait is a timer the page holds in `endDrain`: stop()
+  // clears it, so a stop during the wait (a history move to another session) ends the
+  // wait with it instead of leaving the new session once the notice would have played.
   const END_DRAIN_CAP_MS = 5000;
   function endSession() {
     if (ending) return;
@@ -861,7 +869,7 @@ header > * { flex-shrink: 0; }
     const since = performance.now();
     const drained = () => !reply || !playCtx || playCtx.currentTime >= reply.next
       || performance.now() - since > END_DRAIN_CAP_MS;
-    const tick = () => { if (drained()) leave(); else setTimeout(tick, 50); };
+    const tick = () => { endDrain = 0; if (drained()) leave(); else endDrain = setTimeout(tick, 50); };
     tick();
   }
 

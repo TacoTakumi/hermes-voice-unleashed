@@ -565,6 +565,47 @@ async def test_a_session_end_frame_stops_the_mic_at_once_and_shows_the_chooser_o
     await _chooser_rows(page)
 
 
+END_DRAIN_CAP_SECONDS = 5  # the page gives the notice at most this long to play out
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_history_move_to_a_session_while_the_end_notice_plays_joins_it_and_stays(site):
+    """The session ended by voice and its notice is still playing when Back or Forward
+    moves the URL to another session. The page joins that session, and the end of the
+    first session must not come back later to tear the new one down: well past the time
+    the notice would have been given, the page is still Listening on the new session,
+    with its mic on, the chooser hidden and the session in the URL."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    session = site.sessions[0]
+    await _notice_to_the_page(session, "notice-1", seconds=END_DRAIN_CAP_SECONDS + 1)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Speaking'", timeout=5000)
+    sent_at = time.monotonic()
+    await session.send_page({"type": "session_end"})
+    await session.page.close()  # as the server does right after the frame
+    await page.wait_for_function(f"{MIC_TRACK_STATES}.every(s => s === 'ended')", timeout=2000)
+    assert await page.text_content("#state") == "Session ended"
+    target = site.rows[0]["id"]
+    await page.evaluate(
+        """([id, token]) => {
+          history.pushState({ session: id }, "", `?token=${encodeURIComponent(token)}&session=${id}`);
+          dispatchEvent(new PopStateEvent("popstate", { state: { session: id } }));
+        }""",
+        [target, TOKEN])
+    await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
+    assert site.ws_requests[1]["session"] == [target]
+    await page.wait_for_function(LISTENING, timeout=10000)
+    await asyncio.sleep(max(0.0, sent_at + END_DRAIN_CAP_SECONDS + 1.5 - time.monotonic()))
+    assert await page.text_content("#state") == "Listening"
+    assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
+    assert _url_session(page.url) == target
+    assert await page.evaluate(MIC_TRACK_STATES) == ["ended", "live"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 2, "released": 1}
+    assert len(site.ws_requests) == 2 and len(site.sessions) == 2
+    states = await page.evaluate("window.statesSeen")
+    assert "Sessions" not in states and "Reconnecting" not in states, states
+
+
 @pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
 async def test_a_session_new_frame_keeps_the_socket_and_starts_the_log_over(site):
     """The user asked for a new session by voice. The server moves the connection onto
