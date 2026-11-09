@@ -1253,6 +1253,21 @@ async def test_a_late_first_delta_with_a_paragraph_break_is_absorbed_too(stack):
     assert texts == ["Done."]
 
 
+@pytest.mark.parametrize("late", ["Done.\n", "Done. "])
+async def test_a_late_delta_that_ends_in_whitespace_is_absorbed_too(stack, late):
+    """Hermes strips the final; the delta keeps the whitespace the model ended with."""
+    fake, page, sessions, utterances = stack
+    conn = await _listening(fake, page)
+    await conn.send({"type": "turn_end", "text": "do it", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.send_page({"type": "reply", "text": "Done."})
+    await session.on_reply_delta(reply_id, "t1", 1, late)
+    await asyncio.sleep(0.3)
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert texts == ["Done."]
+
+
 async def _listening(fake, page):
     (conn,) = await fake.wait_connections(1, timeout=10)
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",

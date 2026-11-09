@@ -653,11 +653,13 @@ header > * { flex-shrink: 0; }
         break;
       case "reply_delta":
         // A delta the final answer already shows (it arrived late) adds nothing. The
-        // first delta after a tool call opens with a paragraph break the final has not.
+        // first delta after a tool call opens with a paragraph break the final has not,
+        // and the last one can end in whitespace that Hermes strips from the final.
         if (absorbing) {
           const piece = absorbing.streamed ? f.text : f.text.trimStart();
-          if (absorbing.text.startsWith(absorbing.streamed + piece)) {
-            absorbing.streamed += piece;
+          const next = absorbing.streamed + piece;
+          if (absorbing.text.startsWith(next) || next.trimEnd() === absorbing.text.trimEnd()) {
+            absorbing.streamed = next;
             break;
           }
         }
