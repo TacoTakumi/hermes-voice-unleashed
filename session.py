@@ -29,6 +29,8 @@ import uuid
 from typing import Any, Awaitable, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
+from websockets.exceptions import ConnectionClosed
+
 from . import vm_client
 from .turns import END_SESSION, NEW_SESSION, TurnTracker, heard_words, spoken_command
 from .vm_client import TurnEngineError, VoiceManagerClient
@@ -47,6 +49,10 @@ SESSION_END_TIMEOUT_S = 10.0
 SESSION_ENDED_NOTICE = "Session ended"
 SESSION_NEW_NOTICE = "New session"
 CLOSED_KEYS_KEPT = 64  # reply keys of ended or cut-off replies an attached session remembers
+# Ends the session expects: the page's socket closed (ConnectionClosed, the replaced
+# close code included) or VoiceManager dropped the connection. They are logged in one
+# line at info; any other end is a failure with a traceback.
+EXPECTED_ENDS = (ConnectionClosed, ConnectionError, vm_client.ConnectionError)
 _LAST_SPACE = re.compile(r".*\s", re.S)  # everything up to and including the last whitespace
 
 
@@ -106,6 +112,7 @@ class VoiceSession:
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
         self._tasks: list[asyncio.Task] = []
+        self._failed = False  # the end was logged and the page told; later ends are silent
 
     async def send_page(self, payload: dict[str, Any]) -> None:
         with contextlib.suppress(Exception):
@@ -133,9 +140,20 @@ class VoiceSession:
             await self._stop()
 
     async def _fail(self, exc: BaseException) -> None:
-        """The session cannot go on: say why on the page and close it (the page reconnects)."""
-        logger.warning("voice page %s: session stopped: %r", self.client_id, exc, exc_info=exc)
-        await self.send_page({"type": "error", "message": f"voice session stopped: {exc}"})
+        """The session cannot go on: say why on the page and close it (the page reconnects).
+
+        Every reader ends when VoiceManager drops the connection, so only the first
+        end does the work; the ones that follow return. A page that closed its own
+        socket gets no error frame: nobody is there to read it."""
+        if self._failed:
+            return
+        self._failed = True
+        if isinstance(exc, EXPECTED_ENDS):
+            logger.info("voice page %s: session stopped: %s", self.client_id, exc)
+        else:
+            logger.warning("voice page %s: session stopped: %r", self.client_id, exc, exc_info=exc)
+        if not isinstance(exc, ConnectionClosed):
+            await self.send_page({"type": "error", "message": f"voice session stopped: {exc}"})
         with contextlib.suppress(Exception):
             await self.page.close()
 

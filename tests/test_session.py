@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 
 import pytest
 from websockets.asyncio.client import connect
@@ -214,6 +215,67 @@ async def test_a_second_page_takes_over_and_the_first_is_told_not_to_return(adap
             conns = await fake_vm.wait_connections(2)
             await wait_for(lambda: conns[1].audio)
             assert not conns[1].closed.is_set()
+
+
+def _session_records(caplog, plugin, client_id: str) -> list:
+    """The session logger's records that name the page ``client_id``."""
+    return [r for r in caplog.records
+            if r.name == plugin.session.logger.name and client_id in r.getMessage()]
+
+
+async def test_a_replaced_page_ends_its_session_with_one_info_line(adapter, fake_vm, plugin, caplog):
+    """The replaced page's socket closes with code 4001: an expected end, so the session
+    logs one line at info without a traceback and sends the closed page no error frame."""
+    caplog.set_level(logging.INFO, logger=plugin.session.logger.name)
+    async with connect(_page_url(adapter, "phone")) as old:
+        await _ready(old)
+        (old_vm,) = await fake_vm.wait_connections(1)
+        async with connect(_page_url(adapter, "phone")) as new:
+            frames = []
+            with contextlib.suppress(ConnectionClosed):
+                async with asyncio.timeout(5):
+                    async for message in old:
+                        frames.append(json.loads(message))
+            await asyncio.wait_for(old_vm.closed.wait(), 2)
+            await _ready(new)
+    assert old.close_code == 4001
+    assert [f for f in frames if f.get("type") == "error"] == []
+    records = _session_records(caplog, plugin, "phone")
+    assert [r.levelno for r in records] == [logging.INFO]
+    assert records[0].exc_info is None
+
+
+async def test_a_voicemanager_drop_logs_one_stopped_line_at_info(adapter, fake_vm, plugin, caplog):
+    """VoiceManager closing its connection ends all four readers; the session logs the
+    stop once, at info, without a traceback, and still tells the page why."""
+    caplog.set_level(logging.INFO, logger=plugin.session.logger.name)
+    async with connect(_page_url(adapter, "phone")) as page:
+        await _ready(page)
+        (conn,) = await fake_vm.wait_connections(1)
+        await conn.ws.close()
+        errors = await _expect_error_then_close(page)
+    assert errors and "VoiceManager closed the connection" in errors[0]["message"]
+    records = [r for r in _session_records(caplog, plugin, "phone") if "stopped" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.INFO
+    assert records[0].exc_info is None
+
+
+async def test_a_reader_that_fails_logs_a_warning_with_the_traceback(adapter, fake_vm, plugin, caplog,
+                                                                        monkeypatch):
+    caplog.set_level(logging.INFO, logger=plugin.session.logger.name)
+
+    async def broken(self):
+        raise RuntimeError("the error reader broke")
+
+    monkeypatch.setattr(plugin.session.VoiceSession, "_read_errors", broken)
+    async with connect(_page_url(adapter, "phone")) as page:
+        errors = await _expect_error_then_close(page)
+    assert errors and "the error reader broke" in errors[0]["message"]
+    records = [r for r in _session_records(caplog, plugin, "phone") if "stopped" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is not None and records[0].exc_info[0] is RuntimeError
 
 
 async def _speaking_page(adapter, fake_vm, request_id: str, mic_chunks: int = 0):
