@@ -61,7 +61,7 @@ def test_other_text_is_no_new_command(plugin, said):
 def fire(hook, message_id, **payload):
     """Call a hook off the loop, inside the session context of the turn answering ``message_id``."""
     def run():
-        set_session_vars(platform=PLATFORM, chat_id="phone", message_id=message_id)
+        set_session_vars(platform=PLATFORM, chat_id="voice", message_id=message_id)
         hook(surface=PLATFORM, **payload)
 
     thread = threading.Thread(target=contextvars.Context().run, args=(run,))
@@ -122,12 +122,12 @@ async def rig(plugin, refusal=None):
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=voice") as ws:
                 page = Page(ws, order)
                 await wait_for(lambda: page.of("ready"))
                 await ws.send(b"\x00\x00" * 160)
                 (conn,) = await fake.wait_connections(1)
-                session = adapter.session_for("phone")
+                session = adapter.session_for("voice")
                 _record_order(session, order)
                 yield Rig(plugin.stream_hooks, session, conn, page, messages, order)
                 page.task.cancel()

@@ -463,11 +463,11 @@ async def test_a_second_page_during_the_first_ones_resume_keeps_its_session_and_
     first = Page(first_ws)
     await asyncio.wait_for(dispatched.wait(), 3)
     # The same key (the default client id), a plain connect, while the first page waits.
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         second = Page(ws)
         await wait_for(lambda: second.of("ready"))
         assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE == 4001
-        live = adapter.session_for("phone")
+        live = adapter.session_for("voice")
         assert live is not None
         release.set()
         await wait_for(lambda: len(adapter.messages) == 1)
@@ -478,7 +478,7 @@ async def test_a_second_page_during_the_first_ones_resume_keeps_its_session_and_
         assert second.of("replaced") == []
         assert second.of("reply") == []
         assert ws.close_code is None
-        assert adapter.session_for("phone") is live
+        assert adapter.session_for("voice") is live
         second.task.cancel()
     assert [m.text for m in adapter.messages] == ["/resume abc --all"]
 
@@ -507,12 +507,12 @@ async def test_a_second_page_gets_the_history_when_the_first_ones_held_resume_mo
     first_ws = await connect(_url(adapter, "session=abc"))
     first = Page(first_ws)
     await asyncio.wait_for(dispatched.wait(), 3)
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         second = Page(ws)
         await wait_for(lambda: second.of("ready"))
         assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
         assert second.of("history") == [{"type": "history", "session_id": "old", "lines": []}]
-        live = adapter.session_for("phone")
+        live = adapter.session_for("voice")
         release.set()
         await wait_for(lambda: len(second.of("history")) == 2)
         await asyncio.sleep(0.2)  # the first page's connect runs to its end
@@ -521,7 +521,7 @@ async def test_a_second_page_gets_the_history_when_the_first_ones_held_resume_mo
         assert second.of("history")[-1] == {"type": "history", "session_id": "abc", "lines": []}
         assert second.of("replaced") == []
         assert ws.close_code is None
-        assert adapter.session_for("phone") is live
+        assert adapter.session_for("voice") is live
         assert first.frames == [{"type": "replaced"}]
         second.task.cancel()
     assert [m.text for m in adapter.messages] == ["/resume abc --all"]
@@ -555,14 +555,14 @@ async def test_a_second_page_gets_no_extra_history_when_the_replaced_connect_had
     adapter._session_store = FakeStore("abc")
     _with_db(adapter, FakeDB())
     started, release = _hold_first_history_read(plugin, monkeypatch)
-    first_ws = await connect(_url(adapter, "client=phone"))
+    first_ws = await connect(_url(adapter, "client=voice"))
     first = Page(first_ws)
     await asyncio.wait_for(started.wait(), 3)
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         second = Page(ws)
         await wait_for(lambda: second.of("ready"))
         assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
-        live = adapter.session_for("phone")
+        live = adapter.session_for("voice")
         assert live is not None
         release.set()
         await asyncio.sleep(0.5)  # the first page's connect runs to its end
@@ -573,7 +573,7 @@ async def test_a_second_page_gets_no_extra_history_when_the_replaced_connect_had
         assert first.frames == [{"type": "replaced"}]
         # The stale connect registered no session of its own: the live page keeps
         # its session, and only one VoiceManager connection was opened.
-        assert adapter.session_for("phone") is live
+        assert adapter.session_for("voice") is live
         assert len(fake_vm.connections) == 1
         second.task.cancel()
     assert adapter.messages == []
@@ -606,18 +606,18 @@ async def test_a_page_replaced_while_its_failed_new_reply_is_sent_registers_no_s
     _with_db(adapter, FakeDB({"abc": 3}))
     adapter.gateway_reply = "Confirm /new: /approve, /always or /cancel"  # the lane stays
     started, release = _hold_first_reply_send(adapter)
-    first_ws = await connect(_url(adapter, "client=phone&session=new"))
+    first_ws = await connect(_url(adapter, "client=voice&session=new"))
     first = Page(first_ws)
     await asyncio.wait_for(started.wait(), 3)
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         second = Page(ws)
         await wait_for(lambda: second.of("ready"))
         assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
-        live = adapter.session_for("phone")
+        live = adapter.session_for("voice")
         assert live is not None
         release.set()
         await asyncio.sleep(0.5)  # the first page's connect runs to its end
-        assert adapter.session_for("phone") is live
+        assert adapter.session_for("voice") is live
         assert len(fake_vm.connections) == 1
         assert second.of("replaced") == []
         assert ws.close_code is None
@@ -639,7 +639,7 @@ async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_cli
     first = Page(first_ws)
     await asyncio.wait_for(dispatched.wait(), 3)
     attach_ws, client = await _attach(adapter, fake_vm, "abc")
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         second = Page(ws)
         await wait_for(lambda: second.of("ready"))
         assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
@@ -668,7 +668,7 @@ async def test_a_model_reply_that_lands_during_a_held_resume_is_a_reply_line_and
     async with connect(_url(adapter, "session=abc")) as ws:
         page = Page(ws)
         await asyncio.wait_for(dispatched.wait(), 3)
-        result = await adapter.send("phone", "The answer to what you asked before.", reply_to="utterance-1")
+        result = await adapter.send("voice", "The answer to what you asked before.", reply_to="utterance-1")
         assert result.success
         await wait_for(lambda: page.of("reply"))
         assert page.of("ready") == []  # the join still waits on the command
@@ -696,8 +696,8 @@ async def test_join_failed_goes_to_the_connecting_socket_not_to_the_second_page_
     adapter._session_store = FakeStore("old")
     adapter.gateway_reply = "Session not found: abc"
     stale, holder = FakeConnection(), FakeConnection()
-    adapter._clients["phone"] = holder
-    assert await adapter._join_session(stale, "phone", "abc") is False
+    adapter._clients["voice"] = holder
+    assert await adapter._join_session(stale, "voice", "abc") is False
     (failed,) = stale.sent
     assert failed["type"] == "join_failed"
     assert "abc" in failed["message"]

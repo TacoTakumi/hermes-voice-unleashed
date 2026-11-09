@@ -61,7 +61,7 @@ async def test_two_pages_get_two_connections_opted_in_before_audio(adapter, fake
 
 async def test_mic_audio_reaches_voicemanager_in_order(adapter, fake_vm):
     chunks = [bytes([i, 0]) * 160 for i in range(1, 6)]
-    async with connect(_page_url(adapter, "phone")) as page:
+    async with connect(_page_url(adapter, "voice")) as page:
         await _ready(page)
         for chunk in chunks:
             await page.send(chunk)
@@ -71,7 +71,7 @@ async def test_mic_audio_reaches_voicemanager_in_order(adapter, fake_vm):
 
 
 async def test_closing_the_page_closes_its_voicemanager_connection(adapter, fake_vm):
-    async with connect(_page_url(adapter, "phone")) as page:
+    async with connect(_page_url(adapter, "voice")) as page:
         await _ready(page)
         (conn,) = await fake_vm.wait_connections(1)
     await asyncio.wait_for(conn.closed.wait(), 2.0)
@@ -83,7 +83,7 @@ async def test_refused_turn_engine_leaves_a_classic_session(plugin):
             "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
         assert await adapter.connect()
         try:
-            async with connect(_page_url(adapter, "phone")) as page:
+            async with connect(_page_url(adapter, "voice")) as page:
                 assert (await _ready(page))["turn_engine"] is None
                 await page.send(b"\x05\x00" * 160)
                 (conn,) = await fake.wait_connections(1)
@@ -97,7 +97,7 @@ async def test_unreachable_voicemanager_tells_the_page(plugin):
         "token": TOKEN, "voicemanager_url": "http://127.0.0.1:9", "host": "127.0.0.1", "port": 0}))
     assert await adapter.connect()
     try:
-        async with connect(_page_url(adapter, "phone")) as page:
+        async with connect(_page_url(adapter, "voice")) as page:
             # Every connect starts with the history frame; the error comes after it.
             frame = json.loads(await asyncio.wait_for(page.recv(), 3))
             assert frame["type"] == "history"
@@ -131,7 +131,7 @@ async def test_reader_failure_on_turn_start_reaches_the_page(plugin, monkeypatch
             "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
         assert await adapter.connect()
         try:
-            async with connect(_page_url(adapter, "phone")) as page:
+            async with connect(_page_url(adapter, "voice")) as page:
                 errors = await _expect_error_then_close(page)
             (conn,) = fake.connections
             await asyncio.wait_for(conn.closed.wait(), 2)
@@ -151,7 +151,7 @@ async def test_reader_failure_on_dispatch_reaches_the_page(plugin):
         adapter.handle_message = broken
         assert await adapter.connect()
         try:
-            async with connect(_page_url(adapter, "phone")) as page:
+            async with connect(_page_url(adapter, "voice")) as page:
                 await _ready(page)
                 await page.send(b"\x00\x00" * 160)
                 (conn,) = await fake.wait_connections(1)
@@ -178,7 +178,7 @@ async def test_reader_failure_in_the_reply_finish_reaches_the_page(plugin, monke
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(_page_url(adapter, "phone")) as page:
+            async with connect(_page_url(adapter, "voice")) as page:
                 await _ready(page)
                 await page.send(b"\x00\x00" * 160)
                 (conn,) = await fake.wait_connections(1)
@@ -187,7 +187,7 @@ async def test_reader_failure_in_the_reply_finish_reaches_the_page(plugin, monke
                 await conn.send({"type": "transcription", "segment_index": 0, "text": "hello there",
                                  "endpoint": True, "is_final": False, "turn_id": 1})
                 await wait_for(lambda: events)
-                await adapter.session_for("phone").on_turn_done(events[0].message_id, "t1", False)
+                await adapter.session_for("voice").on_turn_done(events[0].message_id, "t1", False)
                 errors = await _expect_error_then_close(page)
             await asyncio.wait_for(conn.closed.wait(), 2)
         finally:
@@ -198,10 +198,10 @@ async def test_reader_failure_in_the_reply_finish_reaches_the_page(plugin, monke
 async def test_a_second_page_takes_over_and_the_first_is_told_not_to_return(adapter, fake_vm):
     """One page owns a conversation's mic and speaker. A new page with the same client id takes it
     over; the old page gets a replaced frame and close code 4001, so it does not reconnect."""
-    async with connect(_page_url(adapter, "phone")) as old:
+    async with connect(_page_url(adapter, "voice")) as old:
         await _ready(old)
         (old_vm,) = await fake_vm.wait_connections(1)
-        async with connect(_page_url(adapter, "phone")) as new:
+        async with connect(_page_url(adapter, "voice")) as new:
             frames = []
             with contextlib.suppress(ConnectionClosed):
                 async with asyncio.timeout(5):
@@ -227,10 +227,10 @@ async def test_a_replaced_page_ends_its_session_with_one_info_line(adapter, fake
     """The replaced page's socket closes with code 4001: an expected end, so the session
     logs one line at info without a traceback and sends the closed page no error frame."""
     caplog.set_level(logging.INFO, logger=plugin.session.logger.name)
-    async with connect(_page_url(adapter, "phone")) as old:
+    async with connect(_page_url(adapter, "voice")) as old:
         await _ready(old)
         (old_vm,) = await fake_vm.wait_connections(1)
-        async with connect(_page_url(adapter, "phone")) as new:
+        async with connect(_page_url(adapter, "voice")) as new:
             frames = []
             with contextlib.suppress(ConnectionClosed):
                 async with asyncio.timeout(5):
@@ -240,7 +240,7 @@ async def test_a_replaced_page_ends_its_session_with_one_info_line(adapter, fake
             await _ready(new)
     assert old.close_code == 4001
     assert [f for f in frames if f.get("type") == "error"] == []
-    records = _session_records(caplog, plugin, "phone")
+    records = _session_records(caplog, plugin, "voice")
     assert [r.levelno for r in records] == [logging.INFO]
     assert records[0].exc_info is None
 
@@ -249,13 +249,13 @@ async def test_a_voicemanager_drop_logs_one_stopped_line_at_info(adapter, fake_v
     """VoiceManager closing its connection ends all four readers; the session logs the
     stop once, at info, without a traceback, and still tells the page why."""
     caplog.set_level(logging.INFO, logger=plugin.session.logger.name)
-    async with connect(_page_url(adapter, "phone")) as page:
+    async with connect(_page_url(adapter, "voice")) as page:
         await _ready(page)
         (conn,) = await fake_vm.wait_connections(1)
         await conn.ws.close()
         errors = await _expect_error_then_close(page)
     assert errors and "VoiceManager closed the connection" in errors[0]["message"]
-    records = [r for r in _session_records(caplog, plugin, "phone") if "stopped" in r.getMessage()]
+    records = [r for r in _session_records(caplog, plugin, "voice") if "stopped" in r.getMessage()]
     assert len(records) == 1
     assert records[0].levelno == logging.INFO
     assert records[0].exc_info is None
@@ -269,10 +269,10 @@ async def test_a_reader_that_fails_logs_a_warning_with_the_traceback(adapter, fa
         raise RuntimeError("the error reader broke")
 
     monkeypatch.setattr(plugin.session.VoiceSession, "_read_errors", broken)
-    async with connect(_page_url(adapter, "phone")) as page:
+    async with connect(_page_url(adapter, "voice")) as page:
         errors = await _expect_error_then_close(page)
     assert errors and "the error reader broke" in errors[0]["message"]
-    records = [r for r in _session_records(caplog, plugin, "phone") if "stopped" in r.getMessage()]
+    records = [r for r in _session_records(caplog, plugin, "voice") if "stopped" in r.getMessage()]
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
     assert records[0].exc_info is not None and records[0].exc_info[0] is RuntimeError
@@ -280,7 +280,7 @@ async def test_a_reader_that_fails_logs_a_warning_with_the_traceback(adapter, fa
 
 async def _speaking_page(adapter, fake_vm, request_id: str, mic_chunks: int = 0):
     """A ready page with a reply playing: it sent ``mic_chunks`` frames of 160 samples first."""
-    page = await connect(_page_url(adapter, "phone"))
+    page = await connect(_page_url(adapter, "voice"))
     assert (await _ready(page))["turn_engine"] == "tyger"
     (conn,) = await fake_vm.wait_connections(1)
     for _ in range(mic_chunks):

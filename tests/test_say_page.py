@@ -31,7 +31,7 @@ async def rig(plugin):
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=voice") as ws:
                 page = Page(ws)
                 await wait_for(lambda: page.of("ready"))
                 await ws.send(b"\x00\x00" * 160)
@@ -65,7 +65,7 @@ async def test_a_leading_say_block_is_spoken_and_the_rest_only_shown(rig):
 
 async def test_the_reply_frame_carries_no_say_tags(rig):
     hooks, conn, page, adapter = rig
-    result = await adapter.send("phone", "<say>Hi there.</say> Full text")
+    result = await adapter.send("voice", "<say>Hi there.</say> Full text")
     assert result.success
     await wait_for(lambda: page.of("reply"))
     assert page.of("reply")[-1]["text"] == "Hi there. Full text"

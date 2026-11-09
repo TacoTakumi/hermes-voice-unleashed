@@ -23,7 +23,7 @@ PLATFORM = "voicemanager_live"
 def fire(hook, message_id, **payload):
     """Call a hook off the loop, inside the session context of the turn answering ``message_id``."""
     def run():
-        set_session_vars(platform=PLATFORM, chat_id="phone", message_id=message_id)
+        set_session_vars(platform=PLATFORM, chat_id="voice", message_id=message_id)
         hook(surface=PLATFORM, **payload) if hook.__name__ != "on_session_end" else hook(
             platform=PLATFORM, **payload)
 
@@ -64,7 +64,7 @@ async def rig(plugin, refusal=None):
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=voice") as ws:
                 page = Page(ws)
                 await wait_for(lambda: page.of("ready"))
                 await ws.send(b"\x00\x00" * 160)
@@ -179,7 +179,7 @@ async def test_audio_start_of_a_reply_cancelled_before_its_audio_is_not_forwarde
     async with rig(plugin) as (hooks, conn, page, messages):
         await conn.send({"type": "turn_end", "text": "tell me a story", "turn_id": 0})
         await wait_for(lambda: messages)
-        session = hooks._adapters[-1].session_for("phone")
+        session = hooks._adapters[-1].session_for("voice")
         fire(hooks.on_stream_delta, messages[-1].message_id, delta="Once upon a time", kind="text",
              turn_id="t1", iteration=1)
         rid = (await wait_for(lambda: tts(conn)))[-1]["request_id"]

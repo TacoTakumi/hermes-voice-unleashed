@@ -19,7 +19,7 @@ TOKEN = "tok"
 PLATFORM = "voicemanager_live"
 
 
-def fire(hook, platform=PLATFORM, chat_id="phone", **payload):
+def fire(hook, platform=PLATFORM, chat_id="voice", **payload):
     """Call a hook the way Hermes does: off the loop, inside the turn's session context."""
     def run():
         set_session_vars(platform=platform, chat_id=chat_id)
@@ -59,7 +59,7 @@ async def rig(plugin):
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=voice") as ws:
                 page = Page(ws)
                 await wait_for(lambda: page.of("ready"))
                 await ws.send(b"\x00\x00" * 160)

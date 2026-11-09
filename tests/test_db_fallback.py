@@ -120,7 +120,7 @@ async def test_the_session_list_without_a_state_db_is_empty_and_ok(adapter, fake
     caplog.set_level(logging.DEBUG)
     url = f"http://127.0.0.1:{adapter.bound_port}/sessions"
     async with httpx.AsyncClient() as http:
-        answer = await http.get(url, params={"token": TOKEN, "client": "phone"})
+        answer = await http.get(url, params={"token": TOKEN, "client": "voice"})
     assert answer.status_code == 200
     assert answer.json() == []
     assert _loud(caplog) == []

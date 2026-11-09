@@ -60,12 +60,12 @@ async def rig(plugin):
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=voice") as ws:
                 page = Page(ws)
                 await wait_for(lambda: page.of("ready"))
                 await ws.send(b"\x00\x00" * 160)
                 (conn,) = await fake.wait_connections(1)
-                session = adapter.session_for("phone")
+                session = adapter.session_for("voice")
                 rig = Rig(adapter, session, page, conn, events)
 
                 async def pending() -> bool:

@@ -32,7 +32,7 @@ class Page:
 
 
 class Rig:
-    """A ready page "phone", its VoiceManager connection and the adapter."""
+    """A ready page "voice", its VoiceManager connection and the adapter."""
 
     def __init__(self, adapter, page, conn):
         self.adapter, self.page, self.conn = adapter, page, conn
@@ -53,7 +53,7 @@ async def rig(plugin):
         adapter.handle_message = handle_message
         assert await adapter.connect()
         try:
-            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=phone") as ws:
+            async with connect(f"ws://127.0.0.1:{adapter.bound_port}/ws?token={TOKEN}&client=voice") as ws:
                 page = Page(ws)
                 await wait_for(lambda: page.of("ready"))
                 await ws.send(b"\x00\x00" * 160)
@@ -74,7 +74,7 @@ async def _prompt(adapter, chat_id: str, command: str = "rm -rf build", request_
 
 
 async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
-    result = await _prompt(rig.adapter, "phone")
+    result = await _prompt(rig.adapter, "voice")
     assert result.success
     await wait_for(lambda: rig.page.of("reply"))
     assert "rm -rf build" in rig.page.of("reply")[-1]["text"]
@@ -109,7 +109,7 @@ def test_a_multi_line_command_is_spoken_as_its_first_line_and_a_line_count(plugi
 
 
 async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
-    result = await _prompt(rig.adapter, "phone", command=SCRIPT, request_id="r2", description="runs a script")
+    result = await _prompt(rig.adapter, "voice", command=SCRIPT, request_id="r2", description="runs a script")
     assert result.success
     await wait_for(lambda: rig.page.of("reply"))
     shown = rig.page.of("reply")[-1]["text"]
@@ -121,7 +121,7 @@ async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
 
 
 async def test_the_session_uses_the_gateway_approval_words(rig):
-    session = rig.adapter.session_for("phone")
+    session = rig.adapter.session_for("voice")
     expected = set()
     for key in ("approve", "deny", "always", "session"):
         expected.update(approval_input_words(key))
@@ -138,8 +138,8 @@ async def test_the_pending_check_asks_the_gateway_under_the_chat_session_key(rig
         return True
 
     monkeypatch.setattr(plugin.adapter, "has_blocking_approval", has_blocking_approval)
-    session = rig.adapter.session_for("phone")
+    session = rig.adapter.session_for("voice")
     assert await session._approval_pending() is True
-    source = rig.adapter.build_source(chat_id="phone", chat_name="Voice", chat_type="dm",
+    source = rig.adapter.build_source(chat_id="voice", chat_name="Voice", chat_type="dm",
                                       user_id=plugin.adapter.OWNER, user_name="Owner")
     assert seen == [rig.adapter._source_session_key(source)]

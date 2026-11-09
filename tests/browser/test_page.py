@@ -219,7 +219,7 @@ async def test_a_client_in_the_page_url_is_not_sent_on_from_the_chooser(site):
     page = site.page
     await page.goto(f"{site.url}/?token={TOKEN}&client=tablet")
     await _chooser_rows(page)
-    assert site.list_requests == ["phone"]
+    assert site.list_requests == ["voice"]
     (query,) = _list_queries(site)
     assert "client" not in query
     await page.click("#new")
@@ -575,7 +575,7 @@ async def _listening_from_the_chooser(site):
     await page.click("#new")
     await site.fake.wait_connections(1, timeout=10)
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
-    assert site.list_requests == ["phone"]
+    assert site.list_requests == ["voice"]
     assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
     assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 0}
     await page.evaluate(STATES_SEEN)
@@ -628,7 +628,7 @@ async def test_a_session_end_frame_stops_the_mic_at_once_and_shows_the_chooser_o
     assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
     assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
     assert await page.text_content("#state") == "Sessions"
-    assert site.list_requests == ["phone", "phone"]
+    assert site.list_requests == ["voice", "voice"]
     assert len(site.ws_requests) == 1  # no reconnect
     states = await page.evaluate("window.statesSeen")
     assert "Reconnecting" not in states and "Voice moved to another device" not in states, states
@@ -711,7 +711,7 @@ async def test_a_session_new_frame_keeps_the_socket_and_starts_the_log_over(site
     states = await page.evaluate("window.statesSeen")
     assert "Voice moved to another device" not in states and "Reconnecting" not in states, states
     assert "Connecting" not in states and "Sessions" not in states, states
-    assert site.list_requests == ["phone"]
+    assert site.list_requests == ["voice"]
 
 
 @pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)

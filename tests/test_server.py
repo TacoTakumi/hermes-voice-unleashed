@@ -82,12 +82,12 @@ async def test_page_needs_the_token(adapter):
 
 
 async def test_send_reaches_the_connected_page(adapter):
-    async with connect(_ws_url(adapter, TOKEN, "phone")) as ws:
+    async with connect(_ws_url(adapter, TOKEN, "voice")) as ws:
         for _ in range(50):
             if adapter.client_calls:
                 break
             await asyncio.sleep(0.01)
-        result = await adapter.send("phone", "hello there")
+        result = await adapter.send("voice", "hello there")
         frame = json.loads(await asyncio.wait_for(ws.recv(), 2))
     assert result.success
     assert frame == {"type": "reply", "text": "hello there"}
@@ -234,7 +234,7 @@ def test_adapter_sessions_callback_reads_the_runners_store_and_db(plugin, monkey
     assert seen["store"] is store
     assert seen["db"] is db
     assert seen["lane_key"] == adapter._source_session_key(adapter._voice_source("tablet"))
-    assert seen["lane_key"] != adapter._source_session_key(adapter._voice_source("phone"))
+    assert seen["lane_key"] != adapter._source_session_key(adapter._voice_source("voice"))
 
 
 def test_adapter_sessions_callback_marks_the_row_whose_session_has_voice_attached(plugin, monkeypatch):

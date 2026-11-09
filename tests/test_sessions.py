@@ -36,7 +36,7 @@ def state(tmp_path, monkeypatch):
         store.close_all_db_handles()
 
 
-def _lane(store, db, chat_id="phone"):
+def _lane(store, db, chat_id="voice"):
     """Put the page's lane on a session, as the gateway does for its first message."""
     source = SessionSource(platform=Platform(PLATFORM), chat_id=chat_id, chat_type="dm",
                            user_id="owner", user_name="Owner")

@@ -133,7 +133,7 @@ async def test_attach_starts_a_voicemanager_session_bound_to_the_session_id(adap
         (conn,) = await fake_vm.wait_connections(1)
         assert conn.frames[0] == {"type": "turn_engine", "engine": "tyger"}
         assert adapter.is_attached(SESSION_ID)
-        assert not adapter.is_attached("phone")
+        assert not adapter.is_attached("voice")
         assert adapter.session_for(SESSION_ID) is None  # not a page: no hook text routes to it
         client.task.cancel()
 
@@ -240,7 +240,7 @@ async def test_a_page_and_an_attached_client_with_the_same_id_both_stay(adapter,
 
 
 async def test_a_page_ignores_say_frames(adapter, fake_vm):
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         page = Client(ws)
         await wait_for(lambda: page.of("ready"))
         (conn,) = await fake_vm.wait_connections(1)
@@ -344,7 +344,7 @@ async def test_utterance_and_clear_frames_carry_a_rising_epoch(attached, adapter
 
 
 async def test_a_page_gets_no_epoch(adapter, fake_vm):
-    async with connect(_url(adapter, "client=phone")) as ws:
+    async with connect(_url(adapter, "client=voice")) as ws:
         page = Client(ws)
         await wait_for(lambda: page.of("ready"))
         (conn,) = await fake_vm.wait_connections(1)
@@ -515,7 +515,7 @@ class LaneStore:
 
 async def test_an_attach_takes_the_session_from_the_page_on_it(adapter, fake_vm, plugin):
     adapter._session_store = LaneStore(SESSION_ID)
-    async with connect(_url(adapter, "client=phone")) as page_ws:
+    async with connect(_url(adapter, "client=voice")) as page_ws:
         page = Client(page_ws)
         await wait_for(lambda: page.of("ready"))
         async with connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
@@ -525,7 +525,7 @@ async def test_an_attach_takes_the_session_from_the_page_on_it(adapter, fake_vm,
             await asyncio.wait_for(page_ws.wait_closed(), 3)
             assert page_ws.close_code == plugin.server.REPLACED_CLOSE_CODE == 4001
             assert page.of("replaced") == [{"type": "replaced"}]
-            await wait_for(lambda: adapter.session_for("phone") is None)
+            await wait_for(lambda: adapter.session_for("voice") is None)
             assert adapter.is_attached(SESSION_ID)
             assert client.of("replaced") == []
             client.task.cancel()
@@ -534,14 +534,14 @@ async def test_an_attach_takes_the_session_from_the_page_on_it(adapter, fake_vm,
 
 async def test_a_page_on_another_session_is_not_replaced_by_an_attach(adapter, fake_vm):
     adapter._session_store = LaneStore("another")
-    async with connect(_url(adapter, "client=phone")) as page_ws, \
+    async with connect(_url(adapter, "client=voice")) as page_ws, \
             connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
         page, client = Client(page_ws), Client(attach_ws)
         await wait_for(lambda: page.of("ready") and client.of("ready"))
         await asyncio.sleep(0.2)
         assert page.of("replaced") == []
         assert not page.task.done()
-        assert adapter.session_for("phone") is not None
+        assert adapter.session_for("voice") is not None
         assert adapter.is_attached(SESSION_ID)
         page.task.cancel()
         client.task.cancel()
