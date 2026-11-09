@@ -148,7 +148,7 @@ def client_from_url(url: str, token: str = "") -> VoiceManagerClient:
 class VoiceSession:
     """Relays one page to one VoiceManager connection until either side closes."""
 
-    def __init__(self, page, client: VoiceManagerClient, client_id: str = "phone",
+    def __init__(self, page, client: VoiceManagerClient, client_id: str = "voice",
                  on_utterance: Optional[Callable[[str, str], Awaitable[None]]] = None,
                  attached: bool = False,
                  approval_words: Optional[Callable[[], Iterable[str]]] = None,

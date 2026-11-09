@@ -91,6 +91,26 @@ The same settings can go in `config.yaml` under
 Restart the gateway. Its log says `voicemanager_live connected` and
 `voice page listening on <host>:<port>`.
 
+### Home channel
+
+Hermes asks every platform for a home channel, the chat where it delivers cron
+results and messages from other platforms. Until one is set it says so at the
+start of every new voice session. The page talks on the lane `voice` unless its
+URL names another with `?client=<name>`, so set that lane as the home channel
+in the profile's `config.yaml`:
+
+```yaml
+platforms:
+  voicemanager_live:
+    home_channel:
+      platform: voicemanager_live
+      chat_id: voice
+      name: Voice
+```
+
+A message to the home channel reaches the page only while it is open on that
+lane. The plugin drops it otherwise.
+
 ### Thinking models
 
 Voice turns use Hermes's `auxiliary.voice_chat` settings. By default they turn

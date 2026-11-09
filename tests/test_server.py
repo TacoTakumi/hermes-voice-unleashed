@@ -182,12 +182,12 @@ async def test_sessions_route_answers_the_callbacks_rows_for_the_lane(sessions_s
     assert sessions_server.sessions_calls == ["tablet"]
 
 
-async def test_sessions_route_defaults_to_the_phone_lane(sessions_server):
+async def test_sessions_route_defaults_to_the_voice_lane(sessions_server):
     url = f"http://127.0.0.1:{sessions_server.bound_port}/sessions"
     async with httpx.AsyncClient() as http:
         answer = await http.get(url, params={"token": TOKEN})
     assert answer.status_code == 200
-    assert sessions_server.sessions_calls == ["phone"]
+    assert sessions_server.sessions_calls == ["voice"]
 
 
 @pytest.mark.parametrize("token", [None, "", "wrong"])

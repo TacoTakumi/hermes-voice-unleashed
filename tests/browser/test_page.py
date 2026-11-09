@@ -165,7 +165,7 @@ async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
     await page.goto(f"{site.url}/?token={TOKEN}")
     texts = await _chooser_rows(page)
     assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
-    assert site.list_requests == ["phone"]  # the server's default lane: the page named none
+    assert site.list_requests == ["voice"]  # the server's default lane: the page named none
     (query,) = _list_queries(site)
     assert query["token"] == [TOKEN] and "client" not in query
     assert await page.evaluate(

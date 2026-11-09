@@ -6,6 +6,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.2.1]
+
+### Changed
+
+- The page's default lane, the chat id Hermes sees when the page URL names no
+  `client`, is `voice` instead of `phone`. A conversation held under the old
+  lane is still reachable with `?client=phone`.
+- README: how to set the `voice` lane as the platform's home channel, which
+  stops Hermes asking for one at the start of every new voice session.
+
 ## [0.2.0]
 
 ### Added

@@ -46,7 +46,7 @@ REPLACED_CLOSE_CODE = 4001  # another page took this conversation over
 JOIN_FAILED_CLOSE_CODE = 4002  # the session the page asked to join could not be joined
 MAX_ATTACH_ID = 256  # a longer Hermes session id is refused, never cut
 SESSION_ID_CHARS = re.compile(r"[A-Za-z0-9_-]+\Z")  # the alphabet of a Hermes session id
-DEFAULT_CLIENT = "phone"
+DEFAULT_CLIENT = "voice"
 MAX_CLIENT_ID = 64  # a longer page client id is cut to this
 
 
