@@ -199,9 +199,14 @@ class VoiceSession:
     async def _next_turn(self) -> None:
         """The reply is over: in classic mode open the next listening turn."""
         self.tracker.reply_ended()
+        if not self.turn_engine:
+            # The answered segments leave the text before anything is awaited: a frame
+            # that arrives while the turn_start ack is on its way must not dispatch
+            # them again with the new words.
+            self._cleared_turn = False
+            self.tracker.turn_over()
         await self._send_turn_done()
         if not self.turn_engine:
-            self._cleared_turn = False
             self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
 
     # --- the reply's text, from the stream hooks -----------------------------------

@@ -21,6 +21,7 @@ class FakeConnection:
     ws: ServerConnection
     frames: list = field(default_factory=list)  # every frame received, in order (bytes or dict)
     closed: asyncio.Event = field(default_factory=asyncio.Event)
+    hold_turn_start: bool = False  # a test answers turn_start itself, when it wants to
 
     @property
     def audio(self) -> bytes:
@@ -86,7 +87,7 @@ class FakeVoiceManager:
                     else:
                         await conn.send({"type": "error", "error_type": self.turn_engine_refusal,
                                          "message": "refused"})
-                elif frame.get("type") == "turn_start" and self.answer_turn_start:
+                elif frame.get("type") == "turn_start" and self.answer_turn_start and not conn.hold_turn_start:
                     await conn.send({"type": "turn_started", "turn_id": len(conn.json_frames("turn_start"))})
         except Exception:
             pass

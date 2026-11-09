@@ -92,6 +92,15 @@ class TurnTracker:
     def reply_ended(self) -> None:
         self.reply_active = False
 
+    def turn_over(self) -> None:
+        """Classic: the turn's reply is over and the next turn is not open yet. The
+        answered segments leave the text now, so words heard before the turn_start
+        ack start clean instead of joining them; a late confirmation of an answered
+        segment is still ignored."""
+        answered = self._answered_keys | self._dispatched_keys
+        self._reset()
+        self._answered_keys = answered
+
     def turn_engine_lost(self) -> None:
         self.turn_engine = None
         if not self.reply_active:

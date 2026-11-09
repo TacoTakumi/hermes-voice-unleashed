@@ -130,6 +130,34 @@ async def test_classic_talk_over_cancels_tts_and_clears_the_page(plugin):
         assert [f for k, f in page.log[cleared_at + 1:] if k == "pcm"] == []
 
 
+async def test_classic_words_heard_before_the_next_turn_opens_dispatch_alone(plugin):
+    """After a reply ends, the session waits for VoiceManager to answer its turn_start.
+    Words heard in that wait are a new question: the answered one does not join them,
+    and a late confirmation of the answered segment dispatches nothing."""
+    async with rig(plugin, refusal="turn_engine_unsupported") as (hooks, conn, page, messages):
+        await wait_for(lambda: conn.json_frames("turn_start"))
+        await conn.send({"type": "transcription", "segment_index": 0, "text": "tell me a story",
+                         "endpoint": True, "is_final": False, "turn_id": 1})
+        await wait_for(lambda: messages)
+        message_id, rid = await _start_reply(hooks, conn, page, messages)
+        conn.hold_turn_start = True
+        fire(hooks.on_session_end, message_id, turn_id="t1", interrupted=False)
+        await wait_for(lambda: any(f["request_id"] == rid and f["done"] for f in tts(conn)))
+        await conn.send({"type": "audio_end", "request_id": rid, "reason": "completed"})
+        await wait_for(lambda: len(conn.json_frames("turn_start")) == 2)  # asked, not yet answered
+        clears = len(page.of("clear"))
+        await conn.send({"type": "transcription", "segment_index": 0, "text": "tell me a story",
+                         "endpoint": True, "is_final": True, "turn_id": 1})
+        await conn.send({"type": "transcription", "segment_index": 1, "text": "what time is it",
+                         "endpoint": True, "is_final": False, "turn_id": 1})
+        await wait_for(lambda: len(messages) == 2)
+        assert messages[1].text == "what time is it"
+        await conn.send({"type": "turn_started", "turn_id": 2})
+        await asyncio.sleep(0.2)
+        assert [m.text for m in messages] == ["tell me a story", "what time is it"]
+        assert len(page.of("clear")) == clears
+
+
 async def test_text_of_a_cancelled_reply_never_reaches_the_next_one(plugin):
     async with rig(plugin) as (hooks, conn, page, messages):
         await conn.send({"type": "turn_end", "text": "first question", "turn_id": 0})

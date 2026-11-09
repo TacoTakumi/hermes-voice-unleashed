@@ -71,6 +71,20 @@ async def test_classic_new_words_during_a_reply_cancel_it(classic):
     assert len(rec.events) == 3
 
 
+async def test_classic_turn_over_drops_the_answered_segments(classic):
+    tracker, rec = classic
+    await tracker.on_transcript(_frame(0, "tell me a story", endpoint=True))
+    tracker.reply_ended()
+    tracker.turn_over()
+    assert tracker.text == ""
+    await tracker.on_transcript(_frame(0, "tell me a story", final=True))  # late confirmation
+    await tracker.on_transcript(_frame(1, "what time is it", endpoint=True))
+    assert rec.events == [("dispatch", "tell me a story"), ("dispatch", "what time is it")]
+    tracker.reply_ended()
+    tracker.open_turn(2)
+    assert tracker.text == ""
+
+
 async def test_classic_ignores_frames_of_another_turn(classic):
     tracker, rec = classic
     await tracker.on_transcript(_frame(0, "old words", endpoint=True, turn_id=0))
