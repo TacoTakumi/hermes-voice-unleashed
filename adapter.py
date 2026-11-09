@@ -45,6 +45,9 @@ COMMAND_SPOKEN_CHARS = 80  # a longer command is cut to this many characters, ".
 COMMAND_REPLY_TIMEOUT_S = 15.0
 # How many parent links a compaction chain is followed through when a join is judged.
 LINEAGE_HOPS = 32
+# The model_config keys under which a /new, /branch or delegate child names the parent
+# it was made from. Such a child is not the continuation of its parent's conversation.
+FORK_MARKERS = ("_reset_from", "_branched_from", "_delegate_from")
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -55,23 +58,50 @@ def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
     return default if value in (None, "") else value
 
 
+def _forked_from_parent(row: dict, parent_id: str) -> bool:
+    """Whether the session row names ``parent_id`` under a fork marker in its
+    model_config: it was made from the parent by /new, /branch or a delegate. Only a
+    marker that names this parent counts: compaction copies model_config onto its
+    child, so an older marker rides along on a genuine continuation."""
+    cfg = row.get("model_config")
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except ValueError:
+            return False
+    if not isinstance(cfg, dict):
+        return False
+    return any(cfg.get(marker) == parent_id for marker in FORK_MARKERS)
+
+
 def _same_conversation(db, lane_id: Optional[str], requested: str) -> bool:
     """Whether the session ``lane_id`` is ``requested`` or a compaction descendant of it.
 
     Compaction ends a session and goes on in a child that points back at it with
     ``parent_session_id``, so the chain is walked from the lane's session towards
     its root, through the state DB's session rows, up to ``LINEAGE_HOPS`` links. A
-    session without a row, a cycle or the cap ends the walk as no match."""
-    seen: set[str] = set()
-    current = lane_id
-    while current and current not in seen and len(seen) < LINEAGE_HOPS:
-        if current == requested:
-            return True
-        seen.add(current)
-        row = db.get_session(current)
-        if not row:
+    link is followed only when it is a compaction link, by the gateway's own rule:
+    the parent row ended with ``compression`` and the child does not name the parent
+    under a fork marker. A /new, /branch or delegate child points at its parent the
+    same way but is another conversation. A session without a row, a link that is
+    not a compaction link, a cycle or the cap ends the walk as no match."""
+    if not lane_id:
+        return False
+    if lane_id == requested:
+        return True
+    seen = {lane_id}
+    row = db.get_session(lane_id)
+    while row and len(seen) < LINEAGE_HOPS:
+        parent_id = row.get("parent_session_id")
+        if not parent_id or parent_id in seen or _forked_from_parent(row, parent_id):
             return False
-        current = row.get("parent_session_id")
+        parent = db.get_session(parent_id)
+        if not parent or parent.get("end_reason") != "compression":
+            return False
+        if parent_id == requested:
+            return True
+        seen.add(parent_id)
+        row = parent
     return False
 
 

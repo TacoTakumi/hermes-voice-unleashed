@@ -156,14 +156,14 @@ async def test_a_session_that_was_not_joined_is_refused_with_its_own_close_code(
 class FakeDB:
     """The profile's state DB, as far as the connect steps need it: the stored message
     count per session (else the number of rows given), ``get_messages`` returning the
-    rows it was given, ``get_session`` giving a session's parent link from ``parents``
-    (a session not in it is unknown), and a record of the sessions counted, read and
-    looked up."""
+    rows it was given, ``get_session`` giving a session's row from ``sessions`` (id to
+    its ``parent_session_id``, ``end_reason`` and ``model_config``; a session not in it
+    is unknown), and a record of the sessions counted, read and looked up."""
 
-    def __init__(self, counts=None, rows=(), parents=None):
+    def __init__(self, counts=None, rows=(), sessions=None):
         self.counts = counts
         self.rows = list(rows)
-        self.parents = parents or {}
+        self.sessions = sessions or {}
         self.counted = []  # sessions whose message count was asked for
         self.asked = []  # sessions whose messages were read
         self.looked_up = []  # sessions whose row was asked for
@@ -180,9 +180,22 @@ class FakeDB:
 
     def get_session(self, session_id):
         self.looked_up.append(session_id)
-        if session_id not in self.parents:
+        if session_id not in self.sessions:
             return None
-        return {"id": session_id, "parent_session_id": self.parents[session_id]}
+        row = self.sessions[session_id]
+        return {"id": session_id, "parent_session_id": row.get("parent_session_id"),
+                "end_reason": row.get("end_reason"), "model_config": row.get("model_config")}
+
+
+def _compaction_chain(*ids):
+    """The session rows of a compaction chain, tip first: each session points at the
+    next with ``parent_session_id`` and every parent ended with ``compression``."""
+    rows = {}
+    for child, parent in zip(ids, ids[1:]):
+        rows.setdefault(child, {})["parent_session_id"] = parent
+        rows[parent] = {"end_reason": "compression"}
+    rows.setdefault(ids[-1], {})
+    return rows
 
 
 def _runner_with_db(adapter, db):
@@ -573,7 +586,7 @@ async def test_new_session_by_voice_on_an_empty_session_sends_no_new_but_the_fra
 # --- a join judged by the compaction chain ---------------------------------------------------
 
 
-CHAIN = {"tip": "mid", "mid": "abc", "abc": None, "other": None}
+CHAIN = {**_compaction_chain("tip", "mid", "abc"), "other": {}}
 
 
 async def test_a_resume_of_a_compaction_ancestor_joins_the_lane_on_the_chains_tip(adapter, fake_vm):
@@ -581,7 +594,7 @@ async def test_a_resume_of_a_compaction_ancestor_joins_the_lane_on_the_chains_ti
     still carries session=abc. The gateway's /resume lands on the live tip, which is the
     same conversation, so the join passes."""
     adapter._session_store = FakeStore("tip")
-    db = FakeDB(parents=CHAIN)
+    db = FakeDB(sessions=CHAIN)
     _with_db(adapter, db)
     adapter.gateway_reply = "Resumed session tip. Conversation restored."
     async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
@@ -592,13 +605,13 @@ async def test_a_resume_of_a_compaction_ancestor_joins_the_lane_on_the_chains_ti
     assert page.of("join_failed") == []
     history = _one_history_frame_before_ready(page)
     assert history == {"type": "history", "session_id": "tip", "lines": []}
-    assert db.looked_up == ["tip", "mid"]  # the walk stops at the requested ancestor
+    assert db.looked_up == ["tip", "mid", "abc"]  # the ancestor's own row shows how it ended
     assert ws.close_code in (None, 1000)
 
 
 async def test_a_resume_that_leaves_the_lane_on_an_unrelated_session_is_refused(adapter, fake_vm, plugin):
     adapter._session_store = FakeStore("other")
-    db = FakeDB(parents=CHAIN)
+    db = FakeDB(sessions=CHAIN)
     _with_db(adapter, db)
     adapter.gateway_reply = "Session not found: abc"
     async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
@@ -611,9 +624,28 @@ async def test_a_resume_that_leaves_the_lane_on_an_unrelated_session_is_refused(
     assert db.looked_up == ["other"]
 
 
+async def test_a_resume_that_leaves_the_lane_on_the_sessions_reset_child_is_refused(adapter, fake_vm, plugin):
+    """/new ended abc with session_reset and started child, which points back at abc
+    like a compaction child does. A lane left on child is on another conversation:
+    the page asked for abc and must not get child's history."""
+    adapter._session_store = FakeStore("child")
+    db = FakeDB(sessions={"child": {"parent_session_id": "abc"}, "abc": {"end_reason": "session_reset"}})
+    _with_db(adapter, db)
+    adapter.gateway_reply = "Session not found: abc"
+    async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("join_failed"))
+        await asyncio.wait_for(ws.wait_closed(), 3)
+        page.task.cancel()
+    assert ws.close_code == plugin.server.JOIN_FAILED_CLOSE_CODE == 4002
+    assert page.of("ready") == []
+    assert page.of("history") == []
+    assert db.looked_up == ["child", "abc"]
+
+
 async def test_a_resume_that_lands_on_the_requested_session_reads_no_lineage(adapter, fake_vm):
     adapter._session_store = FakeStore("abc")
-    db = FakeDB(parents=CHAIN)
+    db = FakeDB(sessions=CHAIN)
     _with_db(adapter, db)
     async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
         page = Page(ws)
@@ -625,26 +657,54 @@ async def test_a_resume_that_lands_on_the_requested_session_reads_no_lineage(ada
 
 def test_the_lineage_walk_finds_an_ancestor_and_not_an_unrelated_session(plugin):
     same = plugin.adapter._same_conversation
-    assert same(FakeDB(parents=CHAIN), "tip", "tip")
-    assert same(FakeDB(parents=CHAIN), "tip", "mid")
-    assert same(FakeDB(parents=CHAIN), "tip", "abc")
-    assert not same(FakeDB(parents=CHAIN), "abc", "tip")  # a descendant is not an ancestor
-    assert not same(FakeDB(parents=CHAIN), "other", "abc")
-    assert not same(FakeDB(parents=CHAIN), None, "abc")
-    assert not same(FakeDB(parents={}), "unknown", "abc")  # a session the DB has no row for
+    assert same(FakeDB(sessions=CHAIN), "tip", "tip")
+    assert same(FakeDB(sessions=CHAIN), "tip", "mid")
+    assert same(FakeDB(sessions=CHAIN), "tip", "abc")
+    assert not same(FakeDB(sessions=CHAIN), "abc", "tip")  # a descendant is not an ancestor
+    assert not same(FakeDB(sessions=CHAIN), "other", "abc")
+    assert not same(FakeDB(sessions=CHAIN), None, "abc")
+    assert not same(FakeDB(sessions={}), "unknown", "abc")  # a session the DB has no row for
+
+
+def test_the_lineage_walk_follows_a_parent_link_only_when_the_parent_ended_by_compression(plugin):
+    """A /new, /branch or delegate child also points at its parent with
+    parent_session_id; only a compaction child continues the parent's conversation.
+    The gateway's own rule: the parent ended with compression and the child's
+    model_config does not name the parent as what it was reset, branched or
+    delegated from."""
+    same = plugin.adapter._same_conversation
+
+    def db(end_reason, model_config=None):
+        return FakeDB(sessions={"child": {"parent_session_id": "abc", "model_config": model_config},
+                                "abc": {"end_reason": end_reason}})
+
+    assert same(db("compression"), "child", "abc")
+    assert not same(db("session_reset"), "child", "abc")  # /new
+    assert not same(db("branched"), "child", "abc")  # /branch
+    assert not same(db(None), "child", "abc")  # the parent is still open: a delegate's parent
+    for marker in ("_reset_from", "_branched_from", "_delegate_from"):
+        assert not same(db("compression", json.dumps({marker: "abc"})), "child", "abc")
+    # Compaction copies model_config onto its child: a marker naming another session does not count.
+    assert same(db("compression", json.dumps({"_reset_from": "older"})), "child", "abc")
+    assert same(db("compression", "not json"), "child", "abc")
+    # The link is judged at every hop, not only at the first.
+    rows = {**_compaction_chain("tip", "mid", "abc"), "abc": {"end_reason": "session_reset"}}
+    assert same(FakeDB(sessions=rows), "tip", "mid")
+    assert not same(FakeDB(sessions=rows), "tip", "abc")
 
 
 def test_the_lineage_walk_stops_on_a_cycle(plugin):
-    db = FakeDB(parents={"tip": "mid", "mid": "tip"})
+    db = FakeDB(sessions={"tip": {"parent_session_id": "mid", "end_reason": "compression"},
+                          "mid": {"parent_session_id": "tip", "end_reason": "compression"}})
     assert not plugin.adapter._same_conversation(db, "tip", "abc")
     assert db.looked_up == ["tip", "mid"]
 
 
 def test_the_lineage_walk_stops_at_its_cap(plugin):
     cap = plugin.adapter.LINEAGE_HOPS
-    parents = {f"s{i}": f"s{i + 1}" for i in range(cap + 5)}
-    assert plugin.adapter._same_conversation(FakeDB(parents=parents), "s0", f"s{cap - 1}")
-    db = FakeDB(parents=parents)
+    rows = _compaction_chain(*(f"s{i}" for i in range(cap + 6)))
+    assert plugin.adapter._same_conversation(FakeDB(sessions=rows), "s0", f"s{cap - 1}")
+    db = FakeDB(sessions=rows)
     assert not plugin.adapter._same_conversation(db, "s0", f"s{cap}")
     assert len(db.looked_up) == cap
 
