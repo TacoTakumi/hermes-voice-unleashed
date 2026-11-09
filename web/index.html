@@ -224,6 +224,7 @@ header > * { flex-shrink: 0; }
   let endDrain = 0; // the timer of the wait for that notice, so a stop can cancel it
   // Mic samples sent on this connection, and when the last frame of them was captured.
   let micSent = 0, micAnchor = null;
+  let captureLatency = 0; // ms from the mic to a frame reaching the page, read once per mic start
   let moved = false; // the voice moved to another page: the button leads back to the sessions
   let level = 0, speakingLevel = 0;
   let hermesTurn = null; // the <li> the current reply's text goes into
@@ -491,16 +492,9 @@ header > * { flex-shrink: 0; }
   // A playback edge is placed on the mic stream: the number of mic samples this page had
   // sent when the sound left the speaker. Each sent mic frame anchors the count at its
   // capture time; the speaker time of a play context time comes from the output clock.
-  function captureLatencyMs() {
-    const track = micStream && micStream.getAudioTracks()[0];
-    const s = track && track.getSettings ? track.getSettings() : null;
-    const sec = s && typeof s.latency === "number" ? s.latency
-      : micCtx && typeof micCtx.baseLatency === "number" ? micCtx.baseLatency : 0;
-    return sec * 1000;
-  }
   function micFrameSent(bytes) {
     micSent += bytes / 2;
-    micAnchor = { count: micSent, time: performance.now() - captureLatencyMs() };
+    micAnchor = { count: micSent, time: performance.now() - captureLatency };
   }
   // When the sound scheduled at play context time t reaches the speaker, in performance.now() ms.
   function speakerPerf(t) {
@@ -833,6 +827,11 @@ header > * { flex-shrink: 0; }
     await micCtx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
     micNode = new AudioWorkletNode(micCtx, "mic-16k");
+    // The capture latency does not change while the mic runs: read it once here, not
+    // on every frame. The track's own figure first, else the context's, else none.
+    const settings = micStream.getAudioTracks()[0]?.getSettings?.();
+    captureLatency = 1000 * (typeof settings?.latency === "number" ? settings.latency
+      : typeof micCtx.baseLatency === "number" ? micCtx.baseLatency : 0);
     micNode.port.onmessage = (ev) => {
       level = Math.max(level * 0.6, Math.min(1, ev.data.rms * 6));
       if (!muted && ws && ws.readyState === 1) {

@@ -1082,6 +1082,62 @@ async def test_playback_frames_carry_mic_sample_without_latency_apis(stack):
     assert abs((stop["mic_sample"] - start["mic_sample"]) - 0.5 * 16000) <= 8000, (start, stop)
 
 
+COUNT_GET_SETTINGS = """
+const getSettings = MediaStreamTrack.prototype.getSettings;
+window.__getSettingsCalls = 0;
+MediaStreamTrack.prototype.getSettings = function () {
+  window.__getSettingsCalls += 1;
+  return getSettings.call(this);
+};
+"""
+
+
+@pytest.mark.parametrize("site", [COUNT_GET_SETTINGS], indirect=True)
+async def test_the_capture_latency_is_read_once_per_mic_start(site):
+    """The mic track's settings are read when the mic starts, not on every 20 ms frame."""
+    await site.page.goto(f"{site.url}/?token={TOKEN}")
+    await site.page.click("#new")
+    await site.page.wait_for_function(LISTENING, timeout=10000)
+    await site.page.wait_for_timeout(2000)
+    calls = await site.page.evaluate("window.__getSettingsCalls")
+    assert calls <= 1, calls
+
+
+def _capture_latency_only(seconds):
+    """Stub the output clock away and give the mic track a fixed capture latency, so the
+    capture latency is the only latency the page sees."""
+    return f"""
+AudioContext.prototype.getOutputTimestamp = () => ({{ contextTime: 0, performanceTime: 0 }});
+Object.defineProperty(AudioContext.prototype, 'outputLatency', {{ get: () => undefined, configurable: true }});
+MediaStreamTrack.prototype.getSettings = () => ({{ latency: {seconds} }});
+"""
+
+
+async def _start_offset_with_capture_latency(tmp_path, seconds):
+    """Start a reply on a page whose mic track reports ``seconds`` of capture latency, and
+    return the start edge's mic_sample minus the mic samples sent when the frame came."""
+    async with _site(tmp_path, _capture_latency_only(seconds)) as site:
+        await site.page.goto(f"{site.url}/?token={TOKEN}")
+        await site.page.click("#new")
+        (conn,) = await site.fake.wait_connections(1, timeout=10)
+        rid = await _reply_request(conn, site.page, site.sessions, site.utterances, "hello")
+        for _ in range(5):
+            await conn.send(b"\x10\x00" * 2400)  # 5 x 0.1 s at 24 kHz
+        start, sent_at_start = await _start_frame(conn)
+        assert start["event"] == "start"
+        assert _is_count(start["mic_sample"])
+        return start["mic_sample"] - sent_at_start
+
+
+async def test_a_larger_capture_latency_moves_the_start_edge_later_on_the_mic_stream(tmp_path):
+    """A mic frame reaches the page its capture latency after the sound reached the mic,
+    so a speaker time maps onto a mic sample that many samples later: 0.3 s more capture
+    latency moves the start edge 4800 mic samples up."""
+    offset_0 = await _start_offset_with_capture_latency(tmp_path, 0)
+    offset_300 = await _start_offset_with_capture_latency(tmp_path, 0.3)
+    assert abs((offset_300 - offset_0) - 4800) <= 2400, (offset_0, offset_300)
+
+
 async def test_the_page_shows_working_while_the_turn_runs_between_spoken_parts(stack):
     """A reply that speaks, then goes quiet while Hermes runs tools, shows Working, not
     Speaking or Listening, until the turn is over."""
