@@ -42,6 +42,8 @@ COMMAND_SPOKEN_CHARS = 80  # a longer command is cut to this many characters, ".
 # gateway handles a slash command in a background task, so its reply comes through
 # send() after handle_message returned; without a reply the lane's session is checked.
 COMMAND_REPLY_TIMEOUT_S = 15.0
+# How many parent links a compaction chain is followed through when a join is judged.
+LINEAGE_HOPS = 32
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -50,6 +52,26 @@ def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
         return value
     value = extra.get(key)
     return default if value in (None, "") else value
+
+
+def _same_conversation(db, lane_id: Optional[str], requested: str) -> bool:
+    """Whether the session ``lane_id`` is ``requested`` or a compaction descendant of it.
+
+    Compaction ends a session and goes on in a child that points back at it with
+    ``parent_session_id``, so the chain is walked from the lane's session towards
+    its root, through the state DB's session rows, up to ``LINEAGE_HOPS`` links. A
+    session without a row, a cycle or the cap ends the walk as no match."""
+    seen: set[str] = set()
+    current = lane_id
+    while current and current not in seen and len(seen) < LINEAGE_HOPS:
+        if current == requested:
+            return True
+        seen.add(current)
+        row = db.get_session(current)
+        if not row:
+            return False
+        current = row.get("parent_session_id")
+    return False
 
 
 def approval_words() -> set[str]:
@@ -278,7 +300,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         of its own, so the page does not reconnect into a conversation it did not ask
         for."""
         reply = await self.send_command(client_id, f"/resume {session_id} --all")
-        if self.lane_session_id(client_id) == session_id:
+        if await self._lane_on_session(client_id, session_id):
             return True
         message = f"could not join session {session_id}"
         if reply:
@@ -288,6 +310,28 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         with contextlib.suppress(Exception):
             await connection.close(code=JOIN_FAILED_CLOSE_CODE, reason="join failed")
         return False
+
+    async def _lane_on_session(self, client_id: str, session_id: str) -> bool:
+        """Whether the lane ``client_id`` is on the conversation ``session_id``: on that
+        session, or on a compaction descendant of it. The gateway's /resume follows the
+        compaction chain to its live tip, so the lane lands on the tip even when the
+        page asked for an ancestor (a session the lane was on before a compaction while
+        the page was connected). A chain that cannot be read counts as no match."""
+        lane_id = self.lane_session_id(client_id)
+        if lane_id == session_id:
+            return True
+
+        def walk() -> bool:
+            with self._session_db() as db:
+                return _same_conversation(db, lane_id, session_id)
+
+        try:
+            # SQLite reads block; keep them off the event loop.
+            return await asyncio.to_thread(walk)
+        except Exception:
+            logger.warning("voice page %s: cannot read the lineage of session %s",
+                           client_id, lane_id, exc_info=True)
+            return False
 
     def session_for(self, chat_id: str) -> Optional[VoiceSession]:
         return self._sessions.get(chat_id)

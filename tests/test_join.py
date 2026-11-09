@@ -153,13 +153,17 @@ async def test_a_session_that_was_not_joined_is_refused_with_its_own_close_code(
 class FakeDB:
     """The profile's state DB, as far as the connect steps need it: the stored message
     count per session (else the number of rows given), ``get_messages`` returning the
-    rows it was given, and a record of the sessions counted and read."""
+    rows it was given, ``get_session`` giving a session's parent link from ``parents``
+    (a session not in it is unknown), and a record of the sessions counted, read and
+    looked up."""
 
-    def __init__(self, counts=None, rows=()):
+    def __init__(self, counts=None, rows=(), parents=None):
         self.counts = counts
         self.rows = list(rows)
+        self.parents = parents or {}
         self.counted = []  # sessions whose message count was asked for
         self.asked = []  # sessions whose messages were read
+        self.looked_up = []  # sessions whose row was asked for
 
     def message_count(self, session_id):
         self.counted.append(session_id)
@@ -170,6 +174,12 @@ class FakeDB:
     def get_messages(self, session_id, limit=None, offset=0, latest=True):
         self.asked.append(session_id)
         return self.rows[offset:offset + limit] if limit else self.rows[offset:]
+
+    def get_session(self, session_id):
+        self.looked_up.append(session_id)
+        if session_id not in self.parents:
+            return None
+        return {"id": session_id, "parent_session_id": self.parents[session_id]}
 
 
 def _runner_with_db(adapter, db):
@@ -480,3 +490,82 @@ async def test_new_session_by_voice_on_an_empty_session_sends_no_new_but_the_fra
         assert kinds.count("ready") == 1
         assert ws.close_code is None
         page.task.cancel()
+
+
+# --- a join judged by the compaction chain ---------------------------------------------------
+
+
+CHAIN = {"tip": "mid", "mid": "abc", "abc": None, "other": None}
+
+
+async def test_a_resume_of_a_compaction_ancestor_joins_the_lane_on_the_chains_tip(adapter, fake_vm):
+    """Compaction moved the lane from abc to tip while the page was connected; the reload
+    still carries session=abc. The gateway's /resume lands on the live tip, which is the
+    same conversation, so the join passes."""
+    adapter._session_store = FakeStore("tip")
+    db = FakeDB(parents=CHAIN)
+    _with_db(adapter, db)
+    adapter.gateway_reply = "Resumed session tip. Conversation restored."
+    async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/resume abc --all"]
+    assert page.of("join_failed") == []
+    history = _one_history_frame_before_ready(page)
+    assert history == {"type": "history", "session_id": "tip", "lines": []}
+    assert db.looked_up == ["tip", "mid"]  # the walk stops at the requested ancestor
+    assert ws.close_code in (None, 1000)
+
+
+async def test_a_resume_that_leaves_the_lane_on_an_unrelated_session_is_refused(adapter, fake_vm, plugin):
+    adapter._session_store = FakeStore("other")
+    db = FakeDB(parents=CHAIN)
+    _with_db(adapter, db)
+    adapter.gateway_reply = "Session not found: abc"
+    async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("join_failed"))
+        await asyncio.wait_for(ws.wait_closed(), 3)
+        page.task.cancel()
+    assert ws.close_code == plugin.server.JOIN_FAILED_CLOSE_CODE == 4002
+    assert page.of("ready") == []
+    assert db.looked_up == ["other"]
+
+
+async def test_a_resume_that_lands_on_the_requested_session_reads_no_lineage(adapter, fake_vm):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB(parents=CHAIN)
+    _with_db(adapter, db)
+    async with connect(_url(adapter, "client=tablet&session=abc")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert page.of("join_failed") == []
+    assert db.looked_up == []
+
+
+def test_the_lineage_walk_finds_an_ancestor_and_not_an_unrelated_session(plugin):
+    same = plugin.adapter._same_conversation
+    assert same(FakeDB(parents=CHAIN), "tip", "tip")
+    assert same(FakeDB(parents=CHAIN), "tip", "mid")
+    assert same(FakeDB(parents=CHAIN), "tip", "abc")
+    assert not same(FakeDB(parents=CHAIN), "abc", "tip")  # a descendant is not an ancestor
+    assert not same(FakeDB(parents=CHAIN), "other", "abc")
+    assert not same(FakeDB(parents=CHAIN), None, "abc")
+    assert not same(FakeDB(parents={}), "unknown", "abc")  # a session the DB has no row for
+
+
+def test_the_lineage_walk_stops_on_a_cycle(plugin):
+    db = FakeDB(parents={"tip": "mid", "mid": "tip"})
+    assert not plugin.adapter._same_conversation(db, "tip", "abc")
+    assert db.looked_up == ["tip", "mid"]
+
+
+def test_the_lineage_walk_stops_at_its_cap(plugin):
+    cap = plugin.adapter.LINEAGE_HOPS
+    parents = {f"s{i}": f"s{i + 1}" for i in range(cap + 5)}
+    assert plugin.adapter._same_conversation(FakeDB(parents=parents), "s0", f"s{cap - 1}")
+    db = FakeDB(parents=parents)
+    assert not plugin.adapter._same_conversation(db, "s0", f"s{cap}")
+    assert len(db.looked_up) == cap
