@@ -653,6 +653,14 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         await session.speak_notice(approval_sentence(prompt.command))
         return SendResult(success=True, message_id=None)
 
+    def _should_auto_tts_for_chat(self, chat_id: str) -> bool:
+        """Never: VoiceManager speaks every reply, so Hermes must not synthesize one too.
+
+        The gateway asks this before it makes a TTS call for a reply to a voice message,
+        whatever ``voice.auto_tts`` or ``/voice`` say; a call made here would be paid for
+        and then dropped by ``play_tts``."""
+        return False
+
     async def play_tts(self, chat_id: str, audio_path: str, **kwargs) -> SendResult:
         """VoiceManager already speaks every reply; a Hermes TTS file would say it twice."""
         return SendResult(success=True, message_id=None)

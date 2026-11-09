@@ -16,6 +16,12 @@ entry names next to its pinned commit.
 - README: how to set the `voice` lane as the platform's home channel, which
   stops Hermes asking for one at the start of every new voice session.
 
+### Fixed
+
+- Hermes no longer makes a TTS call of its own for a voice reply when
+  `voice.auto_tts` is on or `/voice on` was given. VoiceManager speaks every
+  reply, and the plugin dropped the extra audio after it was synthesized.
+
 ## [0.2.0]
 
 ### Added
