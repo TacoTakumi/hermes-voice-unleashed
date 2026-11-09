@@ -307,3 +307,17 @@ async def test_a_prompt_on_a_fresh_page_leaves_no_request_open_when_the_reply_re
     await wait_for(lambda: rig.tts_text().endswith("Done. "))
     assert rig.conn.json_frames("tts_stream")[-1]["request_id"] != prompt_request
 
+
+
+async def test_a_failing_approval_check_leaves_the_word_an_ordinary_utterance(rig, caplog):
+    async def failing() -> bool:
+        raise RuntimeError("no session key")
+
+    rig.session._approval_pending = failing
+    with caplog.at_level("WARNING"):
+        await _heard(rig, "yes")
+    assert rig.events[-1].text == "yes"
+    assert rig.events[-1].message_id == rig.session.reply_id is not None
+    assert any("approval check failed" in r.getMessage() for r in caplog.records)
+    await _heard(rig, "are you there")  # the session still runs
+    assert rig.events[-1].text == "are you there"

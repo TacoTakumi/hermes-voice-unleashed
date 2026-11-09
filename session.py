@@ -491,6 +491,11 @@ class VoiceSession:
             # resumed turn's text. The word goes out under a message id of its own.
             # The id is the one of the reply that raised the prompt: an utterance the
             # gateway did not interrupt the blocked turn for opened a newer reply since.
+            # Known race: the approval can resolve (its timeout) between the check
+            # above and the gateway's own check of the word. The gateway then runs the
+            # word as a new turn under the word's message id, and this reopened reply
+            # does not take that turn's text: it is shown by the final send but not
+            # spoken. The window is a few milliseconds.
             self._reopen_reply()
             await self.send_page({"type": "utterance", "text": words[0], **self._next_epoch()})
             if self._on_utterance is not None:
@@ -505,10 +510,16 @@ class VoiceSession:
         """Whether the bare ``word`` answers an approval the chat waits for."""
         if self._approval_words is None or self._approval_pending is None:
             return False
-        if word not in self._approval_words():
+        try:
+            if word not in self._approval_words():
+                return False
+            if await self._approval_pending():
+                return True
+        except Exception:
+            # The check asks the gateway; a failure there must not end the voice
+            # session. The word goes on as an ordinary utterance.
+            logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
             return False
-        if await self._approval_pending():
-            return True
         self._prompt_reply = None  # the approval was answered elsewhere or timed out
         return False
 
