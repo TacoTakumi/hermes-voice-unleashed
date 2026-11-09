@@ -73,7 +73,8 @@ async def fake_vm():
 async def adapter(plugin, fake_vm):
     """An adapter whose gateway is a recording handle_message: it notes each event, how many
     VoiceManager connections existed when it ran, and answers a command at once through
-    send(), as the gateway's slash dispatch does. A ``gateway_reply`` of None is a command
+    send(), as the gateway's slash dispatch does, with ``reply_to`` naming the command's
+    message as the gateway's reply anchor does. A ``gateway_reply`` of None is a command
     answered some other way (a confirmation the adapter took), so no text is sent."""
     adapter = plugin.adapter.VoiceLiveAdapter(_config(voicemanager_url=fake_vm.url))
     messages, vm_connections_at_dispatch = [], []
@@ -82,7 +83,7 @@ async def adapter(plugin, fake_vm):
         messages.append(event)
         vm_connections_at_dispatch.append(len(fake_vm.connections))
         if event.text.startswith("/") and adapter.gateway_reply is not None:
-            await adapter.send(event.source.chat_id, adapter.gateway_reply)
+            await adapter.send(event.source.chat_id, adapter.gateway_reply, reply_to=event.message_id)
 
     adapter.handle_message = handle_message
     adapter.messages = messages
@@ -602,6 +603,28 @@ async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_cli
         second.task.cancel()
     client.task.cancel()
     await attach_ws.close()
+
+
+async def test_a_model_reply_that_lands_during_a_held_resume_is_a_reply_line_and_the_commands_reply_ends_the_join(
+        adapter, fake_vm):
+    """A page reloads mid-turn: the model's answer to the utterance before the reload
+    finishes while the join's /resume waits. That answer is a reply to the utterance's
+    message, not to the command's, so the page shows it and the join keeps waiting for the
+    gateway's reply to /resume, which then stays off the page."""
+    adapter._session_store = FakeStore("abc")
+    dispatched, release = _hold_commands(adapter)
+    async with connect(_url(adapter, "session=abc")) as ws:
+        page = Page(ws)
+        await asyncio.wait_for(dispatched.wait(), 3)
+        result = await adapter.send("phone", "The answer to what you asked before.", reply_to="utterance-1")
+        assert result.success
+        await wait_for(lambda: page.of("reply"))
+        assert page.of("ready") == []  # the join still waits on the command
+        release.set()
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    assert page.of("reply") == [{"type": "reply", "text": "The answer to what you asked before."}]
+    assert [m.text for m in adapter.messages] == ["/resume abc --all"]
 
 
 class FakeConnection:

@@ -16,7 +16,7 @@ import logging
 import re
 import sqlite3
 import uuid
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from gateway.config import Platform
 from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra_from_env
@@ -74,6 +74,13 @@ class _EmptyStateDB:
         pass
 # What the page is told, and hears, when /new left its lane on the session it was on.
 NEW_SESSION_FAILED_NOTICE = "Could not start a new session; still on the same one."
+
+
+class PendingReply(NamedTuple):
+    """A command the plugin sent on a lane, waiting for the gateway's reply: the id of
+    the command's message, and the future that gets the reply text."""
+    message_id: str
+    reply: asyncio.Future
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -171,9 +178,10 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         # Hermes session id -> the voice session of the UI client attached to it. Kept
         # apart from the pages, so the stream hooks and send() never reach one.
         self._attached: dict[str, VoiceSession] = {}
-        # chat_id -> the gateway's reply to a command the plugin sent on that lane. While
-        # one is pending, send() for the lane resolves it instead of showing a reply frame.
-        self._pending_replies: dict[str, asyncio.Future] = {}
+        # chat_id -> the command the plugin sent on that lane and is waiting on. While one
+        # is pending, send() of a reply to the command's message resolves it instead of
+        # showing a reply frame.
+        self._pending_replies: dict[str, PendingReply] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
@@ -325,21 +333,22 @@ class VoiceLiveAdapter(BasePlatformAdapter):
     async def send_command(self, chat_id: str, text: str) -> Optional[str]:
         """Send the slash command ``text`` on the lane ``chat_id`` as if the page had said it,
         and return the gateway's reply, which stays off the page. None when no reply came
-        in time."""
+        in time. The command's message gets an id of its own, and send() knows the reply
+        by it: the gateway sends a command's reply with ``reply_to`` set to that id."""
         loop = asyncio.get_running_loop()
-        reply: asyncio.Future = loop.create_future()
-        self._pending_replies[chat_id] = reply
+        pending = PendingReply(uuid.uuid4().hex, loop.create_future())
+        self._pending_replies[chat_id] = pending
         try:
             await self.handle_message(MessageEvent(
                 text=text, message_type=MessageType.TEXT, source=self._voice_source(chat_id),
-                message_id=uuid.uuid4().hex, timestamp=datetime.datetime.now()))
+                message_id=pending.message_id, timestamp=datetime.datetime.now()))
             async with asyncio.timeout(COMMAND_REPLY_TIMEOUT_S):
-                return await reply
+                return await pending.reply
         except TimeoutError:
             logger.warning("voice page %s: no reply to %r", chat_id, text)
             return None
         finally:
-            if self._pending_replies.get(chat_id) is reply:
+            if self._pending_replies.get(chat_id) is pending:
                 del self._pending_replies[chat_id]
 
     def _gateway_session_store(self):
@@ -568,10 +577,15 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        """Text from the gateway for the lane ``chat_id``. The gateway sends every reply
+        with ``reply_to`` set to the id of the message it answers, a command's reply and
+        a model reply alike, so the reply to a command the plugin sent is the one whose
+        ``reply_to`` is that command's message id: it is for the plugin, not the page.
+        Any other text, such as the model's answer to the utterance before a reload
+        that lands while a /resume waits, is a reply line on the page."""
         pending = self._pending_replies.get(chat_id)
-        if pending is not None and not pending.done():
-            # The reply to a command the plugin sent: it is for the plugin, not the page.
-            pending.set_result(content)
+        if pending is not None and not pending.reply.done() and reply_to == pending.message_id:
+            pending.reply.set_result(content)
             return SendResult(success=True, message_id=None)
         # The page shows the reply's text without the say tags a Desktop voice chat's
         # replies carry; the session already spoke what it should.
@@ -587,12 +601,12 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         pending reply: the gateway sends no text of its own once the confirmation is taken.
         Any other confirmation is left to the gateway's text prompt."""
         pending = self._pending_replies.get(chat_id)
-        if pending is None or pending.done():
+        if pending is None or pending.reply.done():
             return await super().send_slash_confirm(chat_id, title, message, session_key, confirm_id, metadata)
         logger.info("voice page %s: %s confirmed, the page asked for it", chat_id, title)
         reply = await slash_confirm.resolve(session_key, confirm_id, "once")
-        if not pending.done():
-            pending.set_result(reply or "")
+        if not pending.reply.done():
+            pending.reply.set_result(reply or "")
         return SendResult(success=True, message_id=None)
 
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:

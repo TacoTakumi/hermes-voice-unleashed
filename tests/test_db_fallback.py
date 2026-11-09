@@ -79,7 +79,7 @@ async def adapter(plugin, fake_vm):
     async def handle_message(event):
         messages.append(event)
         if event.text.startswith("/") and adapter.gateway_reply is not None:
-            await adapter.send(event.source.chat_id, adapter.gateway_reply)
+            await adapter.send(event.source.chat_id, adapter.gateway_reply, reply_to=event.message_id)
 
     adapter.handle_message = handle_message
     adapter.messages = messages
