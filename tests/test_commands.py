@@ -270,6 +270,21 @@ async def test_the_page_is_closed_when_the_notice_does_not_end_in_time(plugin, m
         assert r.order[-1][0] == "closed"
 
 
+async def test_the_end_of_another_notice_does_not_end_the_wait_for_the_session_ended_notice(plugin):
+    async with rig(plugin) as r:
+        await r.session.notice("An earlier notice")
+        earlier = await wait_for(lambda: _request_saying(r, "An earlier notice"))
+        await _heard(r, "end session")
+        ended = await wait_for(lambda: _request_saying(r, "Session ended"))
+        await wait_for(lambda: any(f["request_id"] == ended and f["done"] for f in r.tts()))
+        await r.conn.send({"type": "audio_end", "request_id": earlier, "reason": "completed"})
+        await wait_for(lambda: r.page.of("audio_end"))
+        await asyncio.sleep(0.2)
+        assert r.page.of("session_end") == []  # still waiting for its own notice
+        await r.conn.send({"type": "audio_end", "request_id": ended, "reason": "completed"})
+        await wait_for(lambda: r.page.of("session_end"))
+
+
 async def test_end_session_now_please_is_an_ordinary_utterance(plugin):
     async with rig(plugin) as r:
         await _heard(r, "end session now please")

@@ -200,3 +200,42 @@ async def test_a_notice_with_no_reply_open_is_still_spoken(rig):
     assert not rig.session.reply_open
     await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
     await wait_for(lambda: rig.tts_text() == "Approval needed to run: ls. Say yes or no.")
+
+
+def _requests(rig) -> list[str]:
+    """The ids of the TTS requests so far, in the order they were opened."""
+    return list(dict.fromkeys(f["request_id"] for f in rig.conn.json_frames("tts_stream")))
+
+
+def _ended(rig, request_id: str) -> bool:
+    return any(f["request_id"] == request_id and f["done"] for f in rig.conn.json_frames("tts_stream"))
+
+
+async def test_a_notice_with_no_reply_open_ends_its_own_request(rig):
+    assert not rig.session.reply_open
+    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
+    await wait_for(lambda: _requests(rig) and _ended(rig, _requests(rig)[0]))
+    assert rig.session.reply_request is None  # nothing is left open for a reply to drop
+    rid = _requests(rig)[0]
+    await rig.conn.send({"type": "audio_end", "request_id": rid, "reason": "completed"})
+    await wait_for(lambda: rig.page.of("audio_end"))
+    await asyncio.sleep(0.1)
+    assert rig.page.of("turn_done") == []  # the notice's audio end is no reply's end
+    assert rig.session._notice_requests == {}
+
+
+async def test_two_notices_each_keep_their_id_until_their_own_audio_end(rig):
+    await rig.session.notice("New session")
+    await rig.session.notice("Could not start a new session.")
+    await wait_for(lambda: len(_requests(rig)) == 2 and all(_ended(rig, r) for r in _requests(rig)))
+    first, second = _requests(rig)
+    assert set(rig.session._notice_requests) == {first, second}
+    await rig.conn.send({"type": "audio_end", "request_id": first, "reason": "completed"})
+    await wait_for(lambda: len(rig.page.of("audio_end")) == 1)
+    assert set(rig.session._notice_requests) == {second}
+    await rig.conn.send({"type": "audio_end", "request_id": second, "reason": "completed"})
+    await wait_for(lambda: len(rig.page.of("audio_end")) == 2)
+    await asyncio.sleep(0.1)
+    assert rig.session._notice_requests == {}
+    assert rig.page.of("turn_done") == []
+
