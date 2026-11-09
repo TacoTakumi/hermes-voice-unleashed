@@ -514,7 +514,7 @@ header > * { flex-shrink: 0; }
 
   function replyBegin(id, rate) {
     replyClear(null);
-    reply = { id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [],
+    reply = { id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [], chunks: [],
               ended: false, started: false, startSample: 0, stopped: false, playing: 0, audible: false, quiet: null };
   }
   function replyPcm(buf) {
@@ -545,6 +545,7 @@ header > * { flex-shrink: 0; }
     reply.next = at + audio.duration;
     reply.samples += pcm.length;
     reply.sources.push(src);
+    reply.chunks.push({ start: at, length: pcm.length });
     reply.playing += 1;
     const r = reply;
     // The reply finishes when its audio_end has come and no chunk is still playing,
@@ -588,8 +589,11 @@ header > * { flex-shrink: 0; }
   function replyClear(id) {
     if (!reply || (id && reply.id !== id)) return;
     const r = reply;
-    const played = r.first === null ? 0
-      : Math.max(0, Math.min(r.samples, Math.round((playCtx.currentTime - r.first) * r.rate)));
+    // Count the played part of each chunk from its own start time: a gap between chunks
+    // (the page waiting for the next one) is silence and must not count as played.
+    const now = playCtx.currentTime;
+    let played = 0;
+    for (const c of r.chunks) played += Math.min(c.length, Math.max(0, Math.round((now - c.start) * r.rate)));
     for (const s of r.sources) { try { s.onended = null; s.stop(); } catch (e) { /* already stopped */ } }
     // The scheduled end of the last chunk: replyFinish clamps it to now while audio still plays.
     replyFinish(r, played, r.next);
