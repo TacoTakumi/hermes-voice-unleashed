@@ -188,6 +188,10 @@ class VoiceSession:
         # their audio ends: such an audio end is no reply's end. The value is the event
         # to set at that end, for a command that waits for its own notice.
         self._notice_requests: dict[str, Optional[asyncio.Event]] = {}
+        # The id of the reply that ran when the last approval prompt was spoken, in a
+        # one-item tuple (the id is None on a page that never saw the utterance); None
+        # when no prompt waits for its word.
+        self._prompt_reply: Optional[tuple[Optional[str]]] = None
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -485,6 +489,8 @@ class VoiceSession:
             # resumes under its original message id. The cancel that a new utterance
             # causes closed the reply, so it opens again under that id to take the
             # resumed turn's text. The word goes out under a message id of its own.
+            # The id is the one of the reply that raised the prompt: an utterance the
+            # gateway did not interrupt the blocked turn for opened a newer reply since.
             self._reopen_reply()
             await self.send_page({"type": "utterance", "text": words[0], **self._next_epoch()})
             if self._on_utterance is not None:
@@ -499,7 +505,18 @@ class VoiceSession:
         """Whether the bare ``word`` answers an approval the chat waits for."""
         if self._approval_words is None or self._approval_pending is None:
             return False
-        return word in self._approval_words() and await self._approval_pending()
+        if word not in self._approval_words():
+            return False
+        if await self._approval_pending():
+            return True
+        self._prompt_reply = None  # the approval was answered elsewhere or timed out
+        return False
+
+    async def speak_approval_prompt(self, sentence: str) -> None:
+        """Speak an approval prompt and remember the reply that raised it: the turn
+        behind that reply is the one a spoken approval word resumes."""
+        self._prompt_reply = (self.reply_id,)
+        await self.speak_notice(sentence)
 
     async def speak_notice(self, text: str,
                            ended: Optional[asyncio.Event] = None) -> Optional[vm_client.TTSRequest]:
@@ -554,6 +571,7 @@ class VoiceSession:
         its own, send the page a ``session_new`` frame). The connection stays open
         and takes the next utterance; nothing reconnects."""
         logger.info("voice page %s: new session by voice", self.client_id)
+        self._prompt_reply = None
         await self._command_notice(SESSION_NEW_NOTICE, "new session")
         if self._on_new_session is not None:
             await self._on_new_session()
@@ -599,9 +617,12 @@ class VoiceSession:
         self._cutter = SayCutter()
 
     def _reopen_reply(self) -> None:
-        """The running reply takes text again under its own id and key. Its old TTS
+        """The reply that raised the approval prompt takes text again under its own
+        id: the running reply, unless a later utterance opened a newer one. Its old TTS
         request is gone: the cancel before this dropped it and cleared the page."""
         self._cancel_finishing()
+        if self._prompt_reply is not None:
+            (self.reply_id,), self._prompt_reply = self._prompt_reply, None
         self.reply_open, self.reply_request, self._unsent = True, None, ""
         self._cutter = SayCutter()
 

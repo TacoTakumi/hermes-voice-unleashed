@@ -650,7 +650,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if self._clients.get(prompt.chat_id) is None or session is None:
             return SendResult(success=False, error="the voice page is not connected")
         await self._send_json(prompt.chat_id, {"type": "reply", "text": prompt.text})
-        await session.speak_notice(approval_sentence(prompt.command))
+        await session.speak_approval_prompt(approval_sentence(prompt.command))
         return SendResult(success=True, message_id=None)
 
     def _should_auto_tts_for_chat(self, chat_id: str) -> bool:

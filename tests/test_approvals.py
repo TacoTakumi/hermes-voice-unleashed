@@ -239,3 +239,71 @@ async def test_two_notices_each_keep_their_id_until_their_own_audio_end(rig):
     assert rig.session._notice_requests == {}
     assert rig.page.of("turn_done") == []
 
+
+async def _prompted(rig, command: str = "rm -rf build") -> None:
+    """The gateway asks for an approval: the adapter speaks the prompt on the page."""
+    spoken = len(rig.tts_text())
+    result = await rig.adapter.send_exec_approval(chat_id="voice", command=command, session_key="k",
+                                                  description="deletes files", request_id="r1")
+    assert result.success
+    rig.wants(True)
+    await wait_for(lambda: rig.tts_text()[spoken:].endswith("Say yes or no."))
+
+
+async def test_an_approval_word_reopens_the_reply_that_raised_the_prompt_not_a_newer_one(rig):
+    """The gateway did not interrupt the blocked turn for the utterance in between
+    (it steers or queues it), so the approval still waits and the turn resumes under
+    its first message id."""
+    blocked = await _reply_in_progress(rig)
+    await _prompted(rig)
+    await _heard(rig, "wait what does that do")
+    newer = rig.session.reply_id
+    assert newer != blocked
+    await _heard(rig, "yes")
+    assert rig.session.reply_id == blocked and rig.session.reply_open
+    spoken = len(rig.tts_text())
+    await rig.session.on_reply_delta(blocked, "t1", 2, "Done. ")
+    await wait_for(lambda: rig.tts_text()[spoken:] == "Done. ")
+    await rig.session.on_reply_delta(newer, "t2", 1, "It deletes the build. ")
+    await asyncio.sleep(0.1)
+    assert rig.tts_text()[spoken:] == "Done. "
+    assert [f["text"] for f in rig.page.of("reply_delta")][-1] == "Done. "
+
+
+async def test_the_prompt_reply_is_forgotten_once_the_word_used_it(rig):
+    blocked = await _reply_in_progress(rig)
+    await _prompted(rig)
+    await _heard(rig, "yes")
+    assert rig.session._prompt_reply is None
+    rig.wants(False)
+    await _heard(rig, "tell me more")
+    later = rig.session.reply_id
+    assert later not in (None, blocked) and rig.events[-1].message_id == later
+    spoken = len(rig.tts_text())
+    await rig.session.on_reply_delta(later, "t2", 1, "Sure. ")
+    await wait_for(lambda: rig.tts_text()[spoken:] == "Sure. ")
+
+
+async def test_an_approval_word_with_the_approval_gone_is_an_ordinary_utterance_and_forgets_the_prompt(rig):
+    blocked = await _reply_in_progress(rig)
+    await _prompted(rig)
+    rig.wants(False)  # answered on another device, or timed out
+    await _heard(rig, "yes")
+    assert rig.session._prompt_reply is None
+    assert rig.session.reply_id not in (None, blocked)
+    assert rig.events[-1].message_id == rig.session.reply_id
+
+
+async def test_a_prompt_on_a_fresh_page_leaves_no_request_open_when_the_reply_reopens(rig):
+    """A page that reconnected while the turn was blocked: no reply is open for the prompt."""
+    assert rig.session.reply_id is None and not rig.session.reply_open
+    await _prompted(rig)
+    (prompt_request,) = _requests(rig)
+    await wait_for(lambda: _ended(rig, prompt_request))
+    assert rig.session.reply_request is None
+    await _heard(rig, "yes")
+    assert rig.session.reply_open and rig.session.reply_id is None
+    await rig.session.on_reply_delta("someid", "t1", 2, "Done. ")
+    await wait_for(lambda: rig.tts_text().endswith("Done. "))
+    assert rig.conn.json_frames("tts_stream")[-1]["request_id"] != prompt_request
+

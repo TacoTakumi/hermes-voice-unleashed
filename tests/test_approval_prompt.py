@@ -78,8 +78,11 @@ async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
     assert result.success
     await wait_for(lambda: rig.page.of("reply"))
     assert "rm -rf build" in rig.page.of("reply")[-1]["text"]
-    await wait_for(lambda: rig.tts_text())
+    await wait_for(lambda: "Say yes or no." in rig.tts_text())
     assert "Approval needed to run: rm -rf build. Say yes or no." in rig.tts_text()
+    # The session remembers the reply that ran when the prompt came (none on this page).
+    session = rig.adapter.session_for("voice")
+    assert session._prompt_reply == (session.reply_id,)
 
 
 async def test_without_a_page_the_prompt_is_not_sent(rig):
