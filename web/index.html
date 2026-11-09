@@ -971,7 +971,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   if (token) { if (sessionChoice) join(sessionChoice); else showChooser(); }
 
   // --- the meter: your level in teal, Hermes in amber ----------------------------------
-  const bars = 48, history = new Array(bars).fill(0), whoHistory = new Array(bars).fill(0);
+  const bars = 48, levels = new Array(bars).fill(0), whoHistory = new Array(bars).fill(0);
   function draw() {
     const dpr = window.devicePixelRatio || 1;
     const w = meter.clientWidth, h = meter.clientHeight;
@@ -981,12 +981,12 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     g.clearRect(0, 0, w, h);
     const hermesPlaying = reply && reply.audible;
     const v = hermesPlaying ? 0.35 + 0.5 * Math.abs(Math.sin(performance.now() / 140)) * speakingLevel : level;
-    history.shift(); history.push(muted ? 0 : v);
+    levels.shift(); levels.push(muted ? 0 : v);
     whoHistory.shift(); whoHistory.push(hermesPlaying ? 1 : 0);
     level *= 0.85;
     const gap = 3, bw = (w - gap * (bars - 1)) / bars;
     for (let i = 0; i < bars; i++) {
-      const bh = Math.max(3, history[i] * h);
+      const bh = Math.max(3, levels[i] * h);
       g.fillStyle = whoHistory[i] ? "#f2b544" : "#7fd1c7";
       g.globalAlpha = 0.35 + 0.65 * (i / bars);
       g.fillRect(i * (bw + gap), (h - bh) / 2, bw, bh);
