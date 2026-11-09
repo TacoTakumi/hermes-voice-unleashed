@@ -115,7 +115,9 @@ entry names next to its pinned commit.
   conversation on the server, then sends a `session_new` frame with
   `session_id` (the fresh session's id) and a `history` frame with empty
   lines on the same connection; the page clears its log and listens. Nothing
-  reconnects.
+  reconnects. When the gateway asks to confirm `/new` (the default
+  `approvals.destructive_slash_confirm`), the plugin confirms its own
+  command at once: tapping New or saying it was the confirmation.
 - For other clients: `GET /sessions?token=...` (401 without the token,
   `Cache-Control: no-store`) answers a JSON array of rows with `id`, `title`,
   `preview`, `last_active` (epoch seconds), `message_count`, `source`,
