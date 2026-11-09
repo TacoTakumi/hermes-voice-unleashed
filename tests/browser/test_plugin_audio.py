@@ -310,6 +310,21 @@ async def test_the_stop_after_a_gap_in_the_reply_lands_at_the_end_of_the_last_ch
     assert abs(span - (0.8 + 0.2) * MIC_RATE) <= 8000, span
 
 
+async def test_a_cut_after_a_gap_counts_only_the_samples_that_played(page):
+    """A clear counts what each chunk played, not the span since the reply
+    began: the gap between the chunks has no samples in it."""
+    await _start(page)
+    await _send_reply(page, "r1", 4800, end=False)  # 0.2 s, then silence
+    await _wait_playback(page, 1)
+    await page.wait_for_timeout(800)
+    await page.evaluate("window.audio.onBinary(new Int16Array(window.tone(48000, 24000, 300)).buffer)")
+    await page.wait_for_timeout(300)  # 7200 samples of the second chunk
+    await page.evaluate("window.audio.onJson({ type: 'clear', request_id: 'r1' })")
+    start, stop = await _wait_playback(page, 2)
+    assert stop["event"] == "stop"
+    assert abs(stop["reply_sample"] - 12000) <= 2400, stop["reply_sample"]
+
+
 async def test_a_reply_finishes_when_audio_end_comes_after_the_audio(page):
     await _start(page)
     await _send_reply(page, "r1", 4800, end=False)  # 0.2 s

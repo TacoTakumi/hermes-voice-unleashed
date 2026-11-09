@@ -169,7 +169,7 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     const tail = replies[replies.length - 1]
     const r = {
       id, rate, next: Math.max(playCtx.currentTime + 0.06, tail ? tail.next : 0), first: null, samples: 0,
-      sources: [], ended: false, due: false, started: false, stopped: false, playing: 0
+      sources: [], chunks: [], ended: false, due: false, started: false, stopped: false, playing: 0
     }
     replies.push(r)
     intake = r
@@ -198,6 +198,9 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     }
     r.next = at + audio.duration
     r.samples += pcm.length
+    // Each chunk's start and length: a cut counts what the chunks played,
+    // not the span since the first one, which a gap between chunks inflates.
+    r.chunks.push({ start: at, length: pcm.length })
     r.sources.push(src)
     r.playing += 1
     // The reply finishes when its audio_end has come and no chunk is still
@@ -265,8 +268,9 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
     replies = []
     intake = null
     for (const r of all) {
-      const played = r.first === null || !playCtx ? 0
-        : Math.max(0, Math.min(r.samples, Math.round((playCtx.currentTime - r.first) * r.rate)))
+      const now = playCtx ? playCtx.currentTime : 0
+      const played = !playCtx ? 0 : r.chunks.reduce((sum, c) =>
+        sum + Math.min(c.length, Math.max(0, Math.round((now - c.start) * r.rate))), 0)
       for (const s of r.sources) {
         try {
           s.onended = null
