@@ -1189,6 +1189,48 @@ async def test_a_full_activity_area_leaves_room_for_the_log(stack):
     assert folded <= bare + 120, (bare, folded)  # the time line, the reasoning line and the fold control
 
 
+async def test_a_full_header_stays_within_a_short_wide_window(stack):
+    # Two columns at the narrowest width that gets them, on a window too short for the
+    # whole header: the reasoning text and the tool list shrink and scroll inside
+    # themselves, the header itself does not scroll and the page does not grow.
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 900, "height": 560})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "do a lot"})
+    await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 40})
+    for i in range(12):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 12")
+    await page.click("#reason-fold")
+    await asyncio.sleep(0.2)
+    box = await page.evaluate("""() => {
+        const header = document.querySelector('header');
+        const h = header.getBoundingClientRect();
+        const b = document.getElementById('toggle').getBoundingClientRect();
+        const tools = document.getElementById('tools');
+        const full = document.getElementById('reason-full');
+        const li = [...document.querySelectorAll('#tools .tool')].pop().getBoundingClientRect();
+        return {
+            pageScroll: document.documentElement.scrollHeight, window: window.innerHeight,
+            headerBottom: h.bottom,
+            button: b.top >= 0 && b.bottom <= window.innerHeight,
+            toolsScroll: tools.scrollHeight, toolsClient: tools.clientHeight,
+            reasonHeight: full.getBoundingClientRect().height,
+            reasonMin: parseFloat(getComputedStyle(full).minHeight),
+            headerScrollTop: header.scrollTop,
+            newest: li.height > 0 && li.top >= h.top - 1 && li.bottom <= h.bottom + 1,
+        };
+    }""")
+    assert box["pageScroll"] <= box["window"], box
+    assert box["headerBottom"] <= box["window"], box
+    assert box["button"], box
+    assert box["toolsScroll"] > box["toolsClient"], box
+    assert box["reasonHeight"] >= box["reasonMin"] > 0, box
+    assert box["headerScrollTop"] == 0, box
+    assert box["newest"], box
+
+
 async def test_each_tool_status_shows_its_own_words(stack):
     fake, page, sessions, utterances = stack
     await _listening(fake, page)
