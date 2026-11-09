@@ -1433,6 +1433,22 @@ async def test_a_reconnect_ends_the_turn_on_the_page(stack):
     await _turn_was_ended(page)
 
 
+async def test_the_reconnecting_screen_keeps_the_error_message(stack):
+    # The session sends an error frame and closes the page's socket right after it, so
+    # the Reconnecting screen must carry the message or nobody ever reads it.
+    fake, page, sessions, utterances = stack
+    conn = await _listening(fake, page)
+    await conn.ws.close()
+    await page.wait_for_function("""() => {
+        const detail = document.getElementById('detail').textContent;
+        return document.getElementById('state').textContent === 'Reconnecting'
+            && detail.includes('VoiceManager closed the connection') && detail.includes('Trying again');
+    }""", timeout=5000)
+    await fake.wait_connections(2, timeout=10)
+    await page.wait_for_function("""() => document.getElementById('state').textContent === 'Listening'
+        && document.getElementById('detail').textContent === 'Say something.'""", timeout=10000)
+
+
 async def test_a_replaced_page_ends_its_turn_on_the_moved_screen(stack):
     fake, page, sessions, utterances = stack
     await _listening(fake, page)
