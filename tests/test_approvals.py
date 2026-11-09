@@ -309,11 +309,15 @@ async def test_a_prompt_on_a_fresh_page_leaves_no_request_open_when_the_reply_re
 
 
 
-async def test_a_failing_approval_check_leaves_the_word_an_ordinary_utterance(rig, caplog):
-    async def failing() -> bool:
+@pytest.mark.parametrize("part", ["_approval_pending", "_approval_words"])
+async def test_a_failing_approval_check_leaves_the_word_an_ordinary_utterance(rig, caplog, part):
+    async def pending() -> bool:
         raise RuntimeError("no session key")
 
-    rig.session._approval_pending = failing
+    def words() -> frozenset:
+        raise RuntimeError("no gateway")
+
+    setattr(rig.session, part, pending if part == "_approval_pending" else words)
     with caplog.at_level("WARNING"):
         await _heard(rig, "yes")
     assert rig.events[-1].text == "yes"
@@ -321,3 +325,19 @@ async def test_a_failing_approval_check_leaves_the_word_an_ordinary_utterance(ri
     assert any("approval check failed" in r.getMessage() for r in caplog.records)
     await _heard(rig, "are you there")  # the session still runs
     assert rig.events[-1].text == "are you there"
+
+
+async def test_a_notice_leaves_a_finished_reply_that_still_plays_its_own_request(rig):
+    reply_id = await _reply_in_progress(rig)
+    await rig.session._end_reply(reply_id)  # the text is over; its audio still plays
+    reply_request = rig.session.reply_request
+    assert reply_request is not None and not rig.session.reply_open
+    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
+    assert rig.session.reply_request is reply_request
+    await wait_for(lambda: len(_requests(rig)) == 2)
+    notice = next(r for r in _requests(rig) if r != reply_request.request_id)
+    await wait_for(lambda: _ended(rig, notice))
+    await rig.conn.send({"type": "audio_end", "request_id": reply_request.request_id, "reason": "completed"})
+    await wait_for(lambda: rig.page.of("turn_done"))  # the reply's own audio end ends the turn
+    assert rig.session.reply_request is None
+

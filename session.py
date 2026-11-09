@@ -328,12 +328,16 @@ class VoiceSession:
             chunk, self._unsent = self._unsent[:match.end()], self._unsent[match.end():]
             await self._send_tts(chunk)
 
-    async def _send_tts(self, chunk: str) -> None:
+    async def _send_tts(self, chunk: str, request: Optional[vm_client.TTSRequest] = None) -> None:
+        """Send ``chunk`` to the reply's TTS request, opened here when it has none, or
+        to ``request`` when the text belongs to no reply."""
         if not chunk.strip():
             return
-        if self.reply_request is None:
-            self.reply_request = self.duplex.tts_request(chunking="clause")
-        await self.reply_request.send(chunk)
+        if request is None:
+            if self.reply_request is None:
+                self.reply_request = self.duplex.tts_request(chunking="clause")
+            request = self.reply_request
+        await request.send(chunk)
 
     async def on_reply_delta(self, reply_id: str, turn_id: str, iteration: int, delta: str) -> None:
         """Reply text from the stream hooks. On the page path the say cutter decides what
@@ -549,16 +553,18 @@ class VoiceSession:
             rest, self._unsent = self._unsent, ""
             await self._send_tts(rest)
             return None
-        playing, self.reply_request = self.reply_request, None
-        try:
-            await self._speak(text)
-            rest, self._unsent = self._unsent, ""
-            await self._send_tts(rest)
-        finally:
-            request, self.reply_request = self.reply_request, playing
-        if request is not None:
-            self._notice_requests[request.request_id] = ended
-            await request.done()
+        self._last_text_at = asyncio.get_running_loop().time()
+        self.tracker.reply_text()
+        if text:
+            await self.send_page({"type": "reply_delta", "text": text})
+        if not text.strip():
+            return None
+        # The request stays out of reply_request: an audio end or an utterance that
+        # arrives while this waits on a send must find the reply state as it is.
+        request = self.duplex.tts_request(chunking="clause")
+        self._notice_requests[request.request_id] = ended
+        await self._send_tts(text, request)
+        await request.done()
         return request
 
     async def _end_session(self) -> None:

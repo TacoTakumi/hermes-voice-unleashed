@@ -143,10 +143,10 @@ def _record_order(session, order):
     on_new_session = session._on_new_session
     texts = {}
 
-    async def recording_tts(chunk):
-        await send_tts(chunk)
+    async def recording_tts(chunk, request=None):
+        await send_tts(chunk, request)
         if chunk.strip():
-            rid = session.reply_request.request_id
+            rid = (request or session.reply_request).request_id
             texts[rid] = texts.get(rid, "") + chunk
             order.append(("tts", texts[rid].strip()))
 
