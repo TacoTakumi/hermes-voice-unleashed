@@ -624,6 +624,7 @@ class VoiceSession:
         logger.info("voice page %s: reply cancelled (%s)", self.client_id, reason)
         self._cancel_finishing()
         self.reply_open = False
+        self._unsent = ""  # a closed reply's held word is never spoken, not even by a notice
         self._retire(self.reply_key)
         request, self.reply_request = self.reply_request, None
         if request is not None:

@@ -359,6 +359,21 @@ async def test_new_session_cancels_the_playing_reply_before_the_notice(plugin, r
         assert r.messages[1].text == "tell me a joke"
 
 
+async def test_the_notice_does_not_speak_the_word_the_cancelled_reply_held(plugin):
+    async with rig(plugin) as r:
+        message_id, rid = await _playing_reply(r)
+        fire(r.hooks.on_stream_delta, message_id, delta="Standing by", kind="text", turn_id="t1",
+             iteration=1)  # no space after it: "by" waits for more text
+        await wait_for(lambda: "Standing " in r.tts_text())
+        assert r.session._unsent == "by"
+        await _heard(r, "new session")
+        notice_rid = await _notice_played(r, "New session")
+        await wait_for(lambda: r.page.of("session_new"))
+        assert notice_rid != rid
+        assert "".join(f["text"] for f in r.tts() if f["request_id"] == notice_rid) == "New session"
+        assert all("by" not in f["text"] for f in r.tts())
+
+
 async def test_new_session_in_classic_mode_ends_its_turn_so_the_next_segment_starts_clean(plugin):
     refusal = "turn_engine_unsupported"
     async with rig(plugin, refusal) as r:
