@@ -163,6 +163,48 @@ entry names next to its pinned commit.
   it had forwarded so far, behind the capture. On a phone or a Bluetooth
   headset VoiceManager's echo hold and agent channel missed part of the reply,
   so echo could reach the speech recognizer or a barge-in could be missed.
+- A page that connected while another page took over its chat id could move
+  the shared conversation under the live page: its /resume or /new landed
+  late, and the live page kept showing the old session. The replaced connect
+  is now checked right after its join or new step, and when that step moved
+  the lane the live page gets a fresh history frame.
+- A /new that left the lane on the same session was presented as a new one:
+  the page got session_new with the old id and the old history. The page now
+  gets no session_new; it is told in a reply, and hears, that the new session
+  could not be started.
+- When the plugin cleared an attached UI client's reply because the user
+  talked over its tail, the reply stayed open on the plugin until a new
+  utterance or key replaced it. It is now closed on the plugin as well.
+- A page replaced by another page, and a dropped VoiceManager connection, were
+  logged at warning with a traceback, the drop four times per session. Each is
+  now one line at info; other failures keep the warning and the traceback.
+- Under multiplexed profiles, two profiles serving the page with the same
+  client id got each other's reply text, and one profile's replies were
+  silent. Stream hook events are now routed by the turn's profile as well as
+  the chat id.
+- On a session taken over from a Desktop voice chat, the page spoke the
+  `<say>` block and the rest of the reply, and showed the tags. A reply that
+  starts with a say block now speaks only that block; the tags are stripped
+  from the shown text, the final reply and the history.
+- A malformed `session=` value in the WebSocket URL (empty, longer than 256
+  characters, or with a character outside letters, digits, underscore and
+  dash) reached the gateway as the text of /resume. It is now refused with an
+  error frame and close code 1008, as `attach=` is; an attach id with such a
+  character is refused too.
+- A profile with no state DB yet logged a warning with a traceback on every
+  connect, and the session list answered 500. It now reads as empty. The
+  message count before /new runs off the event loop.
+- In classic end-of-turn mode, words heard between the end of a reply and the
+  next turn_start acknowledgement were dispatched together with the question
+  just answered. The answered segments are now cleared before the wait.
+- The audio_start of a TTS request cancelled before its audio began was still
+  forwarded, so the page adopted a dead request as its current reply. It is
+  now dropped.
+- The reply to a command the plugin sent (/resume, /new) was taken from
+  whatever text arrived next, so a model reply that finished during a reload
+  mid-turn was mistaken for the command's reply, and the command's reply then
+  showed on the page. The command's reply is now matched by its reply_to, the
+  command's own message id.
 
 ## [0.1.0] - 2026-11-07
 
