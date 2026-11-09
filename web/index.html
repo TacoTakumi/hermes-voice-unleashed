@@ -666,15 +666,19 @@ header > * { flex-shrink: 0; }
         // A message the gateway sent: tool progress, a note, an approval prompt, or the
         // final answer. The final answer was usually streamed already; anything else
         // gets its own line and the next streamed text starts a new one.
-        // The final can also beat the last deltas: when it extends the streamed text,
-        // show it in place and let the late deltas it holds pass without a new line.
+        // The final can also beat the last deltas, or every delta of a short answer:
+        // when it extends the streamed text (nothing streamed counts as a prefix),
+        // show it and let the late deltas it holds pass without a new line.
         const text = (f.text || "").trim();
         const streamed = hermesTurn ? hermesTurn.textContent.trim() : "";
         if (streamed && text.length > streamed.length && text.startsWith(streamed)) {
           const soFar = hermesTurn.textContent.trimStart();
           hermesTurn.textContent = f.text;
           absorbing = { li: hermesTurn, text: f.text.trimStart(), streamed: soFar };
-        } else if (text && !(streamed && streamed.endsWith(text))) {
+        } else if (text && !streamed) {
+          const li = addTurn("hermes", f.text);
+          absorbing = { li, text: f.text.trimStart(), streamed: "" };
+        } else if (text && !streamed.endsWith(text)) {
           addTurn("hermes", f.text);
         }
         hermesTurn = null;
