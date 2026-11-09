@@ -1268,6 +1268,23 @@ async def test_a_late_delta_that_ends_in_whitespace_is_absorbed_too(stack, late)
     assert texts == ["Done."]
 
 
+async def test_a_final_that_does_not_extend_the_streamed_text_absorbs_its_late_deltas(stack):
+    """With interim assistant messages off the final is the last message only, while
+    the line still holds the text from before the tool call. The final gets its own
+    line, and the late delta that repeats it adds nothing."""
+    fake, page, sessions, utterances = stack
+    conn = await _listening(fake, page)
+    await conn.send({"type": "turn_end", "text": "do it", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await session.on_reply_delta(reply_id, "t1", 1, "Let me check.")
+    await session.send_page({"type": "reply", "text": "Done."})
+    await session.on_reply_delta(reply_id, "t1", 2, "\n\nDone.")
+    await asyncio.sleep(0.3)
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert texts == ["Let me check.", "Done."]
+
+
 async def _listening(fake, page):
     (conn,) = await fake.wait_connections(1, timeout=10)
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",

@@ -673,19 +673,19 @@ header > * { flex-shrink: 0; }
         // final answer. The final answer was usually streamed already; anything else
         // gets its own line and the next streamed text starts a new one.
         // The final can also beat the last deltas, or every delta of a short answer:
-        // when it extends the streamed text (nothing streamed counts as a prefix),
-        // show it and let the late deltas it holds pass without a new line.
+        // when it extends the streamed text, show it in place. A line added here (nothing
+        // streamed, or a final that is the last message only while the line still holds
+        // the text from before a tool call) starts with none of it streamed. Either way
+        // the late deltas the shown text already holds pass without a new line.
         const text = (f.text || "").trim();
         const streamed = hermesTurn ? hermesTurn.textContent.trim() : "";
         if (streamed && text.length > streamed.length && text.startsWith(streamed)) {
           const soFar = hermesTurn.textContent.trimStart();
           hermesTurn.textContent = f.text;
           absorbing = { li: hermesTurn, text: f.text.trimStart(), streamed: soFar };
-        } else if (text && !streamed) {
+        } else if (text && !streamed.endsWith(text)) {
           const li = addTurn("hermes", f.text);
           absorbing = { li, text: f.text.trimStart(), streamed: "" };
-        } else if (text && !streamed.endsWith(text)) {
-          addTurn("hermes", f.text);
         }
         hermesTurn = null;
         // A turn that ran streams its answer before this frame and ends with turn_done. A
