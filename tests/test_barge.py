@@ -145,3 +145,24 @@ async def test_text_of_a_cancelled_reply_never_reaches_the_next_one(plugin):
         await asyncio.sleep(0.1)
         texts = [f["text"] for f in tts(conn)]
         assert texts == ["First ", "Second "]  # whole words only; nothing of the cancelled reply after it
+
+
+async def test_audio_start_of_a_reply_cancelled_before_its_audio_is_not_forwarded(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        await conn.send({"type": "turn_end", "text": "tell me a story", "turn_id": 0})
+        await wait_for(lambda: messages)
+        session = hooks._adapters[-1].session_for("phone")
+        fire(hooks.on_stream_delta, messages[-1].message_id, delta="Once upon a time", kind="text",
+             turn_id="t1", iteration=1)
+        rid = (await wait_for(lambda: tts(conn)))[-1]["request_id"]
+        # The user speaks again before VoiceManager starts the reply's audio.
+        await conn.send({"type": "turn_end", "text": "no, a different one", "turn_id": 0})
+        await wait_for(lambda: len(messages) == 2 and page.of("clear"))
+        assert rid in session._dropped
+        await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+        await conn.send(b"\x11\x00" * 240)
+        await conn.send({"type": "audio_end", "request_id": rid, "reason": "cancelled"})
+        await wait_for(lambda: any(f["request_id"] == rid for f in page.of("audio_end")))
+        assert [f for f in page.of("audio_start") if f["request_id"] == rid] == []
+        assert page.pcm_after_first("clear") == []
+        assert rid not in session._dropped

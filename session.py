@@ -305,6 +305,8 @@ class VoiceSession:
                         await self.page.send(event[1])
             elif kind == "audio_start":
                 frame = event[1]
+                if frame.get("request_id") in self._dropped:
+                    continue  # cancelled before its audio began: the page must not adopt it
                 await self.send_page({"type": "audio_start", "request_id": frame.get("request_id"),
                                       "sample_rate": frame.get("sample_rate")})
             elif kind == "audio_end":
