@@ -391,3 +391,54 @@ async def test_the_last_word_before_a_tool_call_is_spoken_at_the_stream_end(rig)
         f["text"] for f in tts_frames(conn)).endswith("by.") else None, timeout=1.0)
     assert "".join(f["text"] for f in frames) == "Acknowledged. Standing by."
     assert not any(f["done"] for f in frames)  # the turn goes on: the request stays open
+
+
+def _session(hooks):
+    return hooks._adapters[-1].session_for("voice")
+
+
+TURN_EVENTS = {
+    "the start of the model call": lambda hooks: fire(hooks.pre_llm_call, session_id="s1"),
+    "reply text": lambda hooks: fire(hooks.on_stream_delta, delta="Hello. ", kind="text", turn_id="t1",
+                                     iteration=1, surface=PLATFORM),
+    "reasoning": lambda hooks: fire(hooks.on_stream_delta, delta="Thinking.", kind="reasoning",
+                                    turn_id="t1", iteration=1, surface=PLATFORM),
+    "a tool call": lambda hooks: fire(hooks.pre_tool_call, tool_name="terminal", args={"command": "ls"},
+                                      tool_call_id="c1"),
+    "the end of a model response": lambda hooks: fire(hooks.on_stream_end, surface=PLATFORM),
+}
+
+
+@pytest.mark.parametrize("event", TURN_EVENTS)
+async def test_the_turn_runs_from_its_first_hook_event(rig, event):
+    hooks, conn, page = rig
+    session = _session(hooks)
+    assert session.reply_open and not session.turn_running  # heard, nothing of the turn yet
+    TURN_EVENTS[event](hooks)
+    await wait_for(lambda: session.turn_running)
+
+
+async def test_an_event_of_another_platform_does_not_start_the_turn(rig):
+    hooks, conn, page = rig
+    session = _session(hooks)
+    fire(hooks.pre_llm_call, platform="telegram", session_id="s1")
+    fire(hooks.on_stream_delta, platform="telegram", delta="Hi. ", kind="text", turn_id="t9", iteration=1)
+    await asyncio.sleep(0.1)
+    assert not session.turn_running
+
+
+async def test_the_turn_runs_no_more_once_it_is_done_or_cancelled(rig):
+    hooks, conn, page = rig
+    session = _session(hooks)
+    fire(hooks.pre_llm_call, session_id="s1")
+    await wait_for(lambda: session.turn_running)
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await wait_for(lambda: not session.turn_running)
+    await conn.send({"type": "turn_end", "text": "and another thing", "turn_id": 0})
+    await wait_for(lambda: len(page.of("utterance")) == 2)
+    assert not session.turn_running  # a new utterance starts with no turn running
+    fire(hooks.pre_llm_call, session_id="s1")
+    await wait_for(lambda: session.turn_running)
+    await session.cancel_reply("test")
+    assert not session.turn_running
+

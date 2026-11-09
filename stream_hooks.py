@@ -149,7 +149,14 @@ SAY_INSTRUCTION = (
 
 
 def pre_llm_call(session_id: str = "", **_: Any) -> Optional[str]:
-    """The say instruction when ``session_id`` has voice attached in a running adapter, else None."""
+    """The say instruction when ``session_id`` has voice attached in a running adapter, else None.
+
+    Called once per turn before the model call, so it also tells a voice page's session
+    that its turn runs."""
+    try:
+        _post(None, "on_turn_start")
+    except Exception:
+        logger.debug("turn start for the page failed", exc_info=True)
     if not session_id:
         return None
     try:

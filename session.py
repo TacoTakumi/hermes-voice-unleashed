@@ -192,6 +192,7 @@ class VoiceSession:
         # one-item tuple (the id is None on a page that never saw the utterance); None
         # when no prompt waits for its word.
         self._prompt_reply: Optional[tuple[Optional[str]]] = None
+        self._turn_started = False  # a hook event of the open reply's turn was seen
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -297,6 +298,24 @@ class VoiceSession:
 
     # --- the reply's text, from the stream hooks -----------------------------------
 
+    @property
+    def turn_running(self) -> bool:
+        """Whether the open reply's Hermes turn runs: it started (a hook event of it
+        was seen) and the reply is not over. Such a turn ends with a turn_done frame."""
+        return self.reply_open and self._turn_started
+
+    def _in_turn(self, reply_id: str) -> bool:
+        """Whether a hook event for ``reply_id`` belongs to the running reply; if so,
+        the reply's turn has started."""
+        if not self._takes(reply_id):
+            return False
+        self._turn_started = True
+        return True
+
+    async def on_turn_start(self, reply_id: str) -> None:
+        """The turn's model call is about to start: nothing to show, the turn runs."""
+        self._in_turn(reply_id)
+
     def _takes(self, reply_id: str) -> bool:
         """Whether hook text for ``reply_id`` belongs to the running reply.
 
@@ -342,7 +361,7 @@ class VoiceSession:
     async def on_reply_delta(self, reply_id: str, turn_id: str, iteration: int, delta: str) -> None:
         """Reply text from the stream hooks. On the page path the say cutter decides what
         of it is spoken; an attached client's text comes as say frames, already cut."""
-        if not self._takes(reply_id):
+        if not self._in_turn(reply_id):
             return
         if self.attached:
             await self._speak(delta)
@@ -351,16 +370,16 @@ class VoiceSession:
 
     async def on_reasoning_delta(self, reply_id: str, text: str) -> None:
         """Reasoning of the running reply's turn: shown on the page, never spoken."""
-        if not self.attached and self._takes(reply_id):
+        if not self.attached and self._in_turn(reply_id):
             await self.send_page({"type": "reasoning_delta", "text": text})
 
     async def on_tool_start(self, reply_id: str, call_id: str, name: str, summary: str) -> None:
         """A tool call of the running reply's turn started: show it on the page."""
-        if not self.attached and self._takes(reply_id):
+        if not self.attached and self._in_turn(reply_id):
             await self.send_page({"type": "tool_start", "id": call_id, "name": name, "summary": summary})
 
     async def on_tool_end(self, reply_id: str, call_id: str, status: str, duration_ms: int) -> None:
-        if not self.attached and self._takes(reply_id):
+        if not self.attached and self._in_turn(reply_id):
             await self.send_page({"type": "tool_end", "id": call_id, "status": status,
                                   "duration_ms": duration_ms})
 
@@ -369,7 +388,7 @@ class VoiceSession:
         for a while: once the reply's text has gone quiet, send what waits for a space so
         the response's last word is spoken now. The stream end can overtake that response's
         last delta, hence the quiet window instead of sending at once."""
-        if not self._takes(reply_id) or self._flushing is not None:
+        if not self._in_turn(reply_id) or self._flushing is not None:
             return
         self._flushing = asyncio.create_task(self._guarded(self._flush_when_quiet(reply_id)))
 
@@ -631,6 +650,7 @@ class VoiceSession:
         self._retire(self.reply_key)
         self.reply_id = uuid.uuid4().hex
         self.reply_open, self.reply_request, self._unsent = True, None, ""
+        self._turn_started = False
         self._cutter = SayCutter()
 
     def _reopen_reply(self) -> None:
@@ -640,6 +660,7 @@ class VoiceSession:
         self._cancel_finishing()
         if self._prompt_reply is not None:
             (self.reply_id,), self._prompt_reply = self._prompt_reply, None
+        self._turn_started = True  # the blocked turn goes on
         self.reply_open, self.reply_request, self._unsent = True, None, ""
         self._cutter = SayCutter()
 
