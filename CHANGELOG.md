@@ -70,16 +70,34 @@ entry names next to its pinned commit.
   platform (Telegram, the CLI, Desktop...), the most recently active first, at
   most 20, a compacted conversation as one row. A row shows the title, else
   the first message, else the time, with how long ago it was active, its line
-  count and its platform; the session the page's conversation is on says
-  "Current", and no id is shown. A tap on a row connects with `session=<id>`:
-  the plugin sends `/resume <id> --all` on the conversation's behalf and keeps
-  the gateway's text reply off the page. The owner is seeded as the platform's
-  slash admin (`allow_admin_from: [owner]`, unless the setting is given) so
-  the cross-session resume passes the gateway's guard without configuration.
-  A tap on New connects with `session=new`, which sends `/new` only when the
-  current session holds messages; an empty session is kept, and a
-  conversation with no session yet gets one from its first utterance.
-  `&session=<id>` in the page URL skips the chooser.
+  count and its platform; a session with voice on in Hermes Desktop or the
+  Webapp says "Voice on Desktop", and no id is shown. A tap on a row connects
+  with `session=<id>`: the plugin sends `/resume <id> --all` on the
+  conversation's behalf and keeps the gateway's text reply off the page. The
+  owner is seeded as the platform's slash admin (`allow_admin_from: [owner]`,
+  unless the setting is given) so the cross-session resume passes the
+  gateway's guard without configuration. A tap on New connects with
+  `session=new`, which sends `/new` only when the current session holds
+  messages; an empty session is kept, and a conversation with no session yet
+  gets one from its first utterance. `&session=<id>` in the page URL skips
+  the chooser.
+- The URL carries the session. A tap on a row puts `session=<id>` into the
+  URL with a history entry; the chooser is the bare URL with the token only.
+  Back returns from a session to the chooser with the microphone off, and
+  Forward joins again. A load with `session=<id>` joins that session by
+  itself and opens the microphone without a tap; a browser that keeps
+  playback locked until a tap (Safari on iOS) shows a "Tap to unmute" button
+  until it is tapped. The URL follows the session id of each history frame,
+  so a reload after a spoken "new session" rejoins the new session.
+- One voice device per profile. A second page takes the voice: the first
+  page gets a `replaced` frame and close code 4001, stops its microphone,
+  releases the wake lock and shows "Voice moved to another device" with a
+  "Sessions" button that returns to the chooser. The hand-over also works
+  with a UI client that has voice attached (Hermes Desktop, the Webapp): a
+  page that joins its session sends that client `replaced` and 4001, so its
+  voice toggle goes off and the chat stays, and a client that attaches voice
+  to the session a page is on sends the page `replaced` and 4001, so it shows
+  the moved screen.
 - Every connect gets a `history` frame before `ready`: the session id and the
   last 40 stored user and assistant lines with text, oldest first, as
   `{"role": "user" | "hermes", "text": ...}`. The page shows them as turns and
@@ -87,18 +105,33 @@ entry names next to its pinned commit.
 - Two spoken commands on the page, matched on the whole utterance after
   normalization (lower case, punctuation stripped, spaces collapsed), never on
   an attached session. "End session", "end the session" or "end this session"
-  stops a playing reply, speaks "Session ended", sends a `session_end` frame
-  and closes the connection once the notice has played; the page stops the
-  microphone, releases the wake lock, closes the socket and shows the chooser
-  with a fresh list. "New session", "start a new session" or "start new
-  session" stops a playing reply, speaks "New session" and sends a
-  `session_new` frame; the connection stays open and the page reconnects with
-  `session=new`.
-- For other clients: `GET /sessions?token=...&client=<name>` (401 without the
-  token, `Cache-Control: no-store`) answers a JSON array of rows with `id`,
-  `title`, `preview`, `last_active` (epoch seconds), `message_count`, `source`
+  stops a playing reply and speaks "Session ended"; the server waits for the
+  notice's audio to end (10 s at most), then sends a `session_end` frame and
+  closes the connection. The page stops the microphone at once, lets the
+  queued notice play out under the heading "Session ended", then releases the
+  wake lock and shows the chooser with a fresh list. "New session", "start a
+  new session" or "start new session" stops a playing reply, speaks "New
+  session", applies the empty-session rule and runs `/new` for the page's
+  conversation on the server, then sends a `session_new` frame with
+  `session_id` (the fresh session's id) and a `history` frame with empty
+  lines on the same connection; the page clears its log and listens. Nothing
+  reconnects.
+- For other clients: `GET /sessions?token=...` (401 without the token,
+  `Cache-Control: no-store`) answers a JSON array of rows with `id`, `title`,
+  `preview`, `last_active` (epoch seconds), `message_count`, `source`,
+  `voice_attached` (true when a UI client has voice attached to the session)
   and `current`. A session that cannot be joined gets a `join_failed` frame
-  with a `message` and close code 4002, next to 4001 for a replaced page.
+  with a `message` and close code 4002, next to 4001 for a replaced voice
+  device.
+
+### Changed
+
+- The voice page no longer sends the `client` URL parameter, so `&client=<name>`
+  in a page URL does nothing: there is one voice device per profile, and a
+  second page always takes the voice over. The replaced page's "In use on
+  another device" screen with its "Use here" takeback is gone; it shows
+  "Voice moved to another device" with a "Sessions" button that returns to
+  the chooser instead.
 
 ### Fixed
 

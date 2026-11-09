@@ -148,20 +148,37 @@ come from any Hermes platform (Telegram, the CLI, Desktop...), so the phone can
 pick up a conversation you started elsewhere. A conversation that Hermes has
 compacted is one row. Each row shows the session's title, else its first
 message, else its time, with how long ago it was active, its number of lines
-and the platform it came from. The session this page's conversation is on says
-"Current". Row ids are not shown.
+and the platform it came from. A row whose session has voice on in Hermes
+Desktop or the Webapp says "Voice on Desktop". Row ids are not shown.
 
 Tap a row to go on with that session, or "New session" for a fresh one, and
 allow the microphone. The page keeps the screen on. The last 40 lines of the
 session appear in the log. "New session" opens a fresh session only when the
-current one holds messages; an empty session is used as it is, so a second tap
-on New does not stack up empty sessions.
+one the page is on holds messages; an empty session is used as it is, so a
+second tap on New does not stack up empty sessions.
 
-Add `&session=<Hermes session id>` to skip the list and join that session: the
-page then opens on "Start talking" as before. `&session=new` skips it and
-starts a fresh one, under the same rule. Add `&client=<name>` to give a device
-its own conversation; the default is `phone`. Add `&aec=0` to turn off the
-browser's echo cancellation and noise suppression.
+The URL follows the page. A tap on a row puts `&session=<id>` into it; the
+chooser is the bare URL with the token only. The browser's Back button returns
+from a session to the chooser with the microphone off, and Forward joins the
+session again. A reload while on a session joins it again by itself and opens
+the microphone without a tap, also after a spoken "new session", because the
+URL takes the id of the session the page lands on. A browser that keeps
+playback locked until a tap (Safari on iOS) shows a "Tap to unmute" button
+until you tap it.
+
+There is one voice device per profile. When you open the page on a second
+phone or tab, that page takes the voice: the first one shows "Voice moved to
+another device" with a "Sessions" button that returns to the chooser; its
+microphone is off and the screen may go to sleep. The same hand-over works
+with Hermes Desktop and the Webapp. When the page joins a session that has
+voice on there, the voice toggle on that client goes off and the chat stays;
+when you turn voice on there for the session the page is on, the page shows
+the moved screen.
+
+Add `&session=<Hermes session id>` to the URL to skip the list and join that
+session at once; `&session=new` skips it and starts a fresh one, under the
+same rule. Add `&aec=0` to turn off the browser's echo cancellation and noise
+suppression.
 
 ## HTTPS for the phone
 
@@ -206,13 +223,16 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   without a valid `mic_sample` still works: the plugin uses its own count of
   the mic samples it forwarded, which places the edge early by the device
   latencies.
-- For your own client of `/ws`: `GET /sessions?token=...&client=<name>` (401
-  without the token, sent with `Cache-Control: no-store`) answers the session
-  list as a JSON array, most recently active first. Each row has `id`,
-  `title` (null when the session has none), `preview` (its first user
-  message, short), `last_active` (epoch seconds), `message_count`, `source`
-  (the platform it came from) and `current` (whether that client's
-  conversation is on it). `/ws?...&session=<id>` joins that session on
+- For your own client of `/ws`: `GET /sessions?token=...` (401 without the
+  token, sent with `Cache-Control: no-store`) answers the session list as a
+  JSON array, most recently active first. Each row has `id`, `title` (null
+  when the session has none), `preview` (its first user message, short),
+  `last_active` (epoch seconds), `message_count`, `source` (the platform it
+  came from), `voice_attached` (true when a UI client such as Hermes Desktop
+  has voice attached to it) and `current` (whether the page's conversation
+  is on it; the page ignores it). The page's conversation is keyed inside the
+  plugin: a connect needs no parameter beyond the token, and a second
+  connection replaces the first. `/ws?...&session=<id>` joins that session on
   connect, `session=new` asks for a fresh one under the rule above, and
   without `session` the connection stays on the session the conversation is
   on. Every connect gets one `history` frame before `ready`: `{"type":
@@ -220,20 +240,25 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
   ...}]}`, the last 40 stored user and assistant lines with text, oldest
   first; `session_id` is null and `lines` empty when the conversation has no
   session yet. When the session cannot be joined, the client gets a
-  `join_failed` frame with a `message` and the socket closes with code 4002,
-  next to 4001 for a connection another client took over. The spoken
-  commands below send a `session_end` frame, after which the server closes
-  the socket once its notice has played, or a `session_new` frame, after
-  which the connection stays open and the client reconnects with
-  `session=new` itself.
+  `join_failed` frame with a `message` and the socket closes with code 4002.
+  A connection that another voice device replaced gets a `replaced` frame
+  and close code 4001, and must not reconnect: a page gets it when a second
+  page connects or when a UI client attaches voice (`attach=<session id>`) to
+  the session it is on, and an attached UI client gets it when a page joins
+  its session. The spoken commands below send a `session_end` frame once the
+  server's notice has played (10 s at most), after which it closes the socket,
+  or a `session_new` frame with `session_id` (the id of the fresh session)
+  followed by a `history` frame with empty lines on the same connection,
+  which stays open and takes the next utterance.
 - Two spoken commands end or restart the session from the page. A command is
   the whole utterance, in any case and with any punctuation: "end session",
-  "end the session" or "end this session" stops a reply that is playing, says
-  "Session ended" and closes the connection once the notice has played; the
-  page stops the microphone, lets the screen go off and shows the session list
-  again. "new session", "start a new session" or "start new session" stops a
-  playing reply, says "New session", and the page reconnects on a fresh
-  session with the microphone on; an empty session is kept, as above.
+  "end the session" or "end this session" stops a reply that is playing and
+  says "Session ended"; the page stops the microphone at once, lets the notice
+  play out under the heading "Session ended", then lets the screen go off and
+  shows the session list again. "new session", "start a new session" or
+  "start new session" stops a playing reply, says "New session", moves the
+  connection onto a fresh session and clears the page's log; the microphone
+  stays on and nothing reconnects. An empty session is kept, as above.
   Anything else ("end the session now") reaches Hermes as a message. An
   attached client (the Desktop half) gets every utterance and these commands
   do nothing there.
