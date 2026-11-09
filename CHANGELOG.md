@@ -6,7 +6,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
-## [0.1.1]
+## [0.2.0]
 
 ### Added
 
