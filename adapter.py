@@ -72,6 +72,8 @@ class _EmptyStateDB:
 
     def close(self) -> None:
         pass
+# What the page is told, and hears, when /new left its lane on the session it was on.
+NEW_SESSION_FAILED_NOTICE = "Could not start a new session; still on the same one."
 
 
 def _setting(extra: dict, env: str, key: str, default: Any = "") -> Any:
@@ -286,8 +288,17 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         session (the same rule as a connect with session=new), then tell the page which
         session it is on now with a ``session_new`` frame and the new session's history,
         which is empty. The socket stays: a reconnect would leave a gap in which a late
-        reply could be redelivered into the new session."""
-        await self._start_new_session(client_id)
+        reply could be redelivered into the new session.
+
+        When /new left the lane where it was, the page gets no ``session_new`` frame:
+        it is told in a reply, and hears the same words, that it is still on the old
+        session."""
+        if not await self._start_new_session(client_id):
+            await self._send_json(client_id, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
+            session = self.session_for(client_id)
+            if session is not None:
+                await session.speak_notice(NEW_SESSION_FAILED_NOTICE)
+            return
         await self._send_json(client_id, {"type": "session_new", "session_id": self.lane_session_id(client_id)})
         await self._send_history(client_id)
 
@@ -474,15 +485,19 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             await self._send_to(connection, frame)
         return session_id
 
-    async def _start_new_session(self, client_id: str) -> None:
+    async def _start_new_session(self, client_id: str) -> bool:
         """Move the lane ``client_id`` onto a fresh session with /new, unless the one it
         is on is empty already: a session without a stored message is as good as new,
         and sending /new would only stack up empty sessions. A lane with no session yet
         gets its first one from its first utterance. The command's reply stays off the
-        page, like /resume's."""
+        page, like /resume's.
+
+        Returns True when the lane is on a session as good as new afterwards: it moved,
+        or no /new was needed. False when /new left the lane on the session it was on,
+        as when the gateway answered with a text prompt instead of starting one."""
         session_id = self.lane_session_id(client_id)
         if session_id is None:
-            return
+            return True
 
         def count_messages() -> int:
             with self._session_db() as db:
@@ -501,12 +516,15 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             if self.lane_session_id(client_id) == session_id:
                 logger.warning("voice page %s: the lane is still on session %s after /new",
                                client_id, session_id)
+                return False
+        return True
 
     async def _run_client(self, connection, client_id: str, session: Optional[str] = None) -> None:
         # session=new asks for a fresh session, not a join; the history is of
         # whatever session the lane is on once the connect steps are done.
+        new_session_failed = False
         if session == "new":
-            await self._start_new_session(client_id)
+            new_session_failed = not await self._start_new_session(client_id)
         elif session and not await self._join_session(connection, client_id, session):
             return
         # The page is the newest voice device of its session: a UI client attached
@@ -517,6 +535,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # the live page's session stays, this connection was closed as replaced.
             logger.debug("voice page %s: replaced during its connect", client_id)
             return
+        if new_session_failed:
+            # The history frame named the old session; the page is told why.
+            await self._send_to(connection, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
         session = self._new_session(connection, client_id)
         self._sessions[client_id] = session
         try:

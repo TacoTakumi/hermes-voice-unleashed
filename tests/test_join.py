@@ -208,6 +208,7 @@ async def test_a_connect_with_session_new_sends_new_when_the_lanes_session_has_m
     db = FakeDB({"abc": 3})
     _runner_with_db(adapter, db)
     adapter.gateway_reply = "New session started."
+    _move_on_new(adapter, "fresh")
     async with connect(_url(adapter, "client=tablet&session=new")) as ws:
         page = Page(ws)
         await wait_for(lambda: page.of("ready"))
@@ -217,7 +218,7 @@ async def test_a_connect_with_session_new_sends_new_when_the_lanes_session_has_m
     assert event.source.chat_id == "tablet"
     assert db.counted == ["abc"]
     assert adapter.vm_connections_at_dispatch == [0]
-    assert page.of("reply") == []
+    assert page.of("reply") == []  # the reply to /new stayed off the page
     assert page.of("join_failed") == []
 
 
@@ -583,6 +584,34 @@ async def test_new_session_by_voice_on_an_empty_session_sends_no_new_but_the_fra
         page.task.cancel()
 
 
+async def test_new_session_by_voice_that_did_not_move_the_lane_tells_the_page_and_speaks_it(adapter, fake_vm, plugin):
+    adapter._session_store = FakeStore("abc")
+    db = FakeDB({"abc": 3})
+    _with_db(adapter, db)
+    adapter.gateway_reply = "Confirm /new: /approve, /always or /cancel"  # the gateway's text prompt; the lane stays
+    notice = plugin.adapter.NEW_SESSION_FAILED_NOTICE
+    async with connect(_url(adapter, "client=tablet")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        conn = await _spoken(ws, fake_vm, "new session")
+        await wait_for(lambda: page.of("reply"))
+        await wait_for(lambda: notice in "".join(f["text"] for f in conn.json_frames("tts_stream")))
+        await asyncio.sleep(0.1)
+        assert [m.text for m in adapter.messages] == ["/new"]
+        assert page.of("session_new") == []  # the page is not told it is on a new session
+        assert len(page.of("history")) == 1  # no second history frame either
+        assert page.of("reply") == [{"type": "reply", "text": notice}]
+        assert page.of("utterance") == []
+        assert [f["type"] for f in page.frames].count("ready") == 1  # the page did not reconnect
+        # The same socket and session take the next utterance.
+        await conn.send({"type": "turn_end", "text": "tell me a joke", "turn_id": 1})
+        await wait_for(lambda: len(adapter.messages) == 2)
+        assert adapter.messages[1].text == "tell me a joke"
+        assert adapter.messages[1].source.chat_id == "tablet"
+        assert ws.close_code is None
+        page.task.cancel()
+
+
 # --- a join judged by the compaction chain ---------------------------------------------------
 
 
@@ -818,7 +847,8 @@ async def test_a_confirm_that_is_not_for_a_plugin_command_is_not_supported(adapt
         slash_confirm.clear(key)
 
 
-async def test_a_new_that_did_not_move_the_lane_is_logged_and_the_page_still_connects(adapter, fake_vm, caplog):
+async def test_a_new_on_connect_that_did_not_move_the_lane_sends_the_old_history_then_the_failure_reply(
+        adapter, fake_vm, plugin, caplog):
     adapter._session_store = FakeStore("abc")
     db = FakeDB({"abc": 3})
     _with_db(adapter, db)
@@ -833,5 +863,9 @@ async def test_a_new_that_did_not_move_the_lane_is_logged_and_the_page_still_con
     assert len(warnings) == 1
     assert "tablet" in warnings[0].getMessage()
     assert "abc" in warnings[0].getMessage()
-    _one_history_frame_before_ready(page)
-    assert page.of("reply") == []
+    history = _one_history_frame_before_ready(page)
+    assert history["session_id"] == "abc"  # the page is still on the old session, and is told so
+    assert page.of("reply") == [{"type": "reply", "text": plugin.adapter.NEW_SESSION_FAILED_NOTICE}]
+    kinds = [f["type"] for f in page.frames]
+    assert kinds.index("history") < kinds.index("reply") < kinds.index("ready")
+    assert page.of("session_new") == []
