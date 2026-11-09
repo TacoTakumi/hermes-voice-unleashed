@@ -149,10 +149,23 @@ def approval_words() -> set[str]:
 
 def approval_sentence(command: str) -> str:
     """The spoken form of an approval prompt: the command, cut short when long,
-    and how to answer."""
-    short = re.sub(r"\s+", " ", command).strip()
+    and how to answer.
+
+    A command of several lines, a script fed through a heredoc for example, is
+    spoken as its first line and the count of the other lines; reading the whole
+    script aloud tells the listener nothing. The heredoc opener (``<<EOF`` and its
+    quoted and dash forms) is dropped from that first line.
+    """
+    lines = [line for line in command.splitlines() if line.strip()]
+    first = lines[0] if lines else command
+    if len(lines) > 1:
+        first = re.sub(r"<<-?\s*(['\"]?)\w+\1\s*$", "", first)
+    short = re.sub(r"\s+", " ", first).strip()
     if len(short) > COMMAND_SPOKEN_CHARS:
         short = short[:COMMAND_SPOKEN_CHARS - 3] + "..."
+    if len(lines) > 1:
+        more = len(lines) - 1
+        short += f", and {more} more line" + ("s" if more != 1 else "")
     return f"Approval needed to run: {short}. Say yes or no."
 
 

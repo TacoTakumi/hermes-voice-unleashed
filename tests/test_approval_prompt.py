@@ -64,9 +64,13 @@ async def rig(plugin):
             await adapter.disconnect()
 
 
-async def _prompt(adapter, chat_id: str):
-    return await adapter.send_exec_approval(chat_id=chat_id, command="rm -rf build", session_key="k",
-                                            description="deletes files", request_id="r1")
+SCRIPT = "python3 - <<EOF\n" + "\n".join(f"print({n})" for n in range(12)) + "\nEOF"
+
+
+async def _prompt(adapter, chat_id: str, command: str = "rm -rf build", request_id: str = "r1",
+                  description: str = "deletes files"):
+    return await adapter.send_exec_approval(chat_id=chat_id, command=command, session_key="k",
+                                            description=description, request_id=request_id)
 
 
 async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
@@ -93,8 +97,27 @@ def test_a_long_command_is_cut_short_when_spoken(plugin):
     assert command.endswith("...") and len(command) <= 81
     whole = plugin.adapter.approval_sentence("y" * 80)
     assert "y" * 80 + ". Say" in whole  # a command of 80 characters is not cut
-    short = plugin.adapter.approval_sentence("ls  -la\n /tmp")
+    short = plugin.adapter.approval_sentence("ls  -la   /tmp")
     assert short == "Approval needed to run: ls -la /tmp. Say yes or no."
+
+
+def test_a_multi_line_command_is_spoken_as_its_first_line_and_a_line_count(plugin):
+    sentence = plugin.adapter.approval_sentence(SCRIPT)
+    assert sentence == "Approval needed to run: python3 -, and 13 more lines. Say yes or no."
+    two = plugin.adapter.approval_sentence("cd /tmp\nls -la")
+    assert two == "Approval needed to run: cd /tmp, and 1 more line. Say yes or no."
+
+
+async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
+    result = await _prompt(rig.adapter, "phone", command=SCRIPT, request_id="r2", description="runs a script")
+    assert result.success
+    await wait_for(lambda: rig.page.of("reply"))
+    shown = rig.page.of("reply")[-1]["text"]
+    for line in SCRIPT.splitlines():
+        assert line in shown
+    await wait_for(lambda: rig.tts_text())
+    assert "Approval needed to run: python3 -, and 13 more lines. Say yes or no." in rig.tts_text()
+    assert "print(0)" not in rig.tts_text()
 
 
 async def test_the_session_uses_the_gateway_approval_words(rig):
