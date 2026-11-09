@@ -117,7 +117,10 @@ footer[hidden] { display: none; }
 .turn.user { align-self: flex-end; text-align: right; color: var(--you); }
 .turn.hermes { align-self: flex-start; padding-left: 14px; border-left: 3px solid var(--hermes); }
 .turn.note { align-self: center; color: var(--muted); font-size: 15px; }
-footer { padding: 12px var(--gutter) 20px; display: flex; justify-content: center; }
+footer { padding: 12px var(--gutter) 20px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+/* Shown only while the browser keeps reply playback locked after a join without a tap. */
+#unmute { background: var(--hermes); }
+#unmute[hidden] { display: none; }
 button {
   font: 700 18px/1 var(--type);
   color: var(--ink);
@@ -183,6 +186,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 </main>
 <footer>
   <button id="toggle" type="button" aria-pressed="false">Start talking</button>
+  <button id="unmute" type="button" hidden>Tap to unmute</button>
 </footer>
 <script>
 "use strict";
@@ -191,7 +195,9 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
   const token = params.get("token") || "";
   const browserAec = params.get("aec") !== "0";
   // The Hermes session the next connect asks for: an id, "new", or null for the one the
-  // lane is on. A page opened with ?session=<id> asks for that one and skips the chooser.
+  // lane is on. The session is the page's identity: the URL carries session=<id> while
+  // the page is on one, so a reload rejoins it, and the chooser sits at the bare URL
+  // (the token only), so Back from a session returns to it.
   let sessionChoice = params.get("session") || null;
   const MIC_RATE = 16000;
   // The server's close codes: another page took the voice; the session the page asked
@@ -200,7 +206,7 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
 
   const $ = (id) => document.getElementById(id);
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
-  const logEl = $("log"), toggle = $("toggle"), meter = $("meter");
+  const logEl = $("log"), toggle = $("toggle"), unmuteEl = $("unmute"), meter = $("meter");
   const chooserEl = $("chooser"), sessionsEl = $("sessions"), newEl = $("new");
   const footerEl = document.querySelector("footer");
   const reasoningEl = $("reasoning"), reasonFoldEl = $("reason-fold"), reasonLineEl = $("reason-line");
@@ -534,7 +540,9 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     switch (f.type) {
       case "history":
         // Every connect gets one, before ready: the log starts over with the spoken lines
-        // of the session the page is on, so a reconnect shows them once.
+        // of the session the page is on, so a reconnect shows them once. It also names
+        // the session, which after New the page learns only here: the URL follows it.
+        if (f.session_id && running) setUrlSession(f.session_id);
         logEl.textContent = "";
         hermesTurn = null;
         for (const line of f.lines || []) addTurn(line.role === "user" ? "user" : "hermes", line.text || "");
@@ -753,10 +761,14 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     toggle.disabled = true;
     try {
       playCtx = new AudioContext();
-      await playCtx.resume();
+      const unlocked = unlockPlayback(playCtx);
       await startMic();
+      unlocked();
     } catch (e) {
       show("No microphone", "alert", "Allow the microphone for this page, then try again.");
+      if (playCtx) playCtx.close().catch(() => {});
+      playCtx = null;
+      unmuteEl.hidden = true;
       toggle.disabled = false;
       return;
     }
@@ -767,6 +779,24 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     connect();
     draw();
   }
+
+  // Reply playback must be let go by the browser. A context made on a tap runs at once.
+  // One made on a load (a rejoin) may stay suspended: its resume() rejects, or resolves
+  // or hangs with the state still "suspended". The page joins all the same, and shows
+  // one button that resumes the context on a tap for as long as it is not running.
+  // Returns the check to run once the mic is up, when the state has had time to settle.
+  function unlockPlayback(ctx) {
+    const check = () => { if (playCtx === ctx) unmuteEl.hidden = ctx.state === "running"; };
+    ctx.onstatechange = check;
+    ctx.resume().then(check, check);
+    return check;
+  }
+  unmuteEl.addEventListener("click", () => {
+    const ctx = playCtx;
+    if (!ctx) { unmuteEl.hidden = true; return; }
+    const check = () => { if (playCtx === ctx) unmuteEl.hidden = ctx.state === "running"; };
+    ctx.resume().then(check, check);
+  });
 
   // The mic and its context go. The worklet stops with the context: on a stopped track
   // alone it would go on sending frames of silence.
@@ -786,8 +816,9 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     retry = 0;
     muted = false;
     micOff();
-    if (playCtx) playCtx.close().catch(() => {});
+    if (playCtx) { playCtx.onstatechange = null; playCtx.close().catch(() => {}); }
     playCtx = null;
+    unmuteEl.hidden = true;
     if (wakeLock) Promise.resolve(wakeLock.release()).catch(() => {});
     wakeLock = null;
     level = speakingLevel = 0;
@@ -796,12 +827,14 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     toggle.setAttribute("aria-pressed", "false");
   }
   // The page is done with its session: stop, then offer the sessions again, with
-  // `detail` as the line under the heading when there is something to say.
+  // `detail` as the line under the heading when there is something to say. The URL
+  // loses its session: a reload shows the chooser, and Back from a later join returns here.
   function leave(detail) {
     stop();
     reasoningClear();
     toolsEl.textContent = "";
     activityEl.hidden = true;
+    setUrlSession(null);
     showChooser(detail);
   }
   // The session ended by voice. The mic goes at once and the socket no longer counts:
@@ -897,14 +930,45 @@ button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
     for (const row of rows) sessionsEl.appendChild(sessionRow(row));
     if (!rows.length) detailEl.textContent = "No sessions yet. Start a new one.";
   }
-  function choose(id) {
+  // Go on with the session `id` ("new" for a fresh one): the connect asks for it and the
+  // mic opens. From the chooser this runs on the tap; on a load or a history move it
+  // runs by itself, and a browser that keeps playback locked gets the unmute button.
+  function join(id) {
     sessionChoice = id;
     chooserEl.hidden = true;
     logEl.hidden = meter.hidden = footerEl.hidden = false;
     start();
   }
+  // --- the URL: session=<id> while on a session, bare on the chooser -----------------
+  function urlWithSession(id) {
+    const url = new URL(location.href);
+    if (id) url.searchParams.set("session", id); else url.searchParams.delete("session");
+    return url.pathname + url.search + url.hash;
+  }
+  // The URL names `id` (or no session for null), in place: the entry Back leads to stays.
+  function setUrlSession(id) {
+    if ((new URLSearchParams(location.search).get("session") || null) === id) return;
+    window.history.replaceState({ session: id }, "", urlWithSession(id));
+  }
+  // A tap in the chooser: the session gets its own history entry, so Back returns to the
+  // chooser. New gets one at the bare URL; the history frame fills in the id.
+  function choose(id) {
+    window.history.pushState({ session: id }, "", urlWithSession(id === "new" ? null : id));
+    join(id);
+  }
+  // Back or Forward moved the URL. Without a session it is the chooser: whatever the page
+  // was on ends, mic off. With one, the page joins it as a load would.
+  window.addEventListener("popstate", () => {
+    const id = new URLSearchParams(location.search).get("session");
+    if (!id) {
+      if (running || moved || ending || chooserEl.hidden) leave();
+      return;
+    }
+    if (running || moved || ending) stop();
+    join(id);
+  });
   newEl.addEventListener("click", () => choose("new"));
-  if (!sessionChoice && token) showChooser();
+  if (token) { if (sessionChoice) join(sessionChoice); else showChooser(); }
 
   // --- the meter: your level in teal, Hermes in amber ----------------------------------
   const bars = 48, history = new Array(bars).fill(0), whoHistory = new Array(bars).fill(0);

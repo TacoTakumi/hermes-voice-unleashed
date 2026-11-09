@@ -226,20 +226,6 @@ async def test_a_client_in_the_page_url_is_not_sent_on_from_the_chooser(site):
     assert "client" not in site.ws_requests[0]
 
 
-async def test_a_session_in_the_page_url_skips_the_chooser(site):
-    page = site.page
-    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
-    await asyncio.sleep(0.3)
-    assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
-    assert await page.text_content("#state") == "Tap to start"
-    assert site.list_requests == []
-    await page.click("#toggle")
-    await site.fake.wait_connections(1, timeout=10)
-    assert site.ws_requests[0]["session"] == ["sid-titled-111"]
-    assert "client" not in site.ws_requests[0]
-    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
-
-
 async def test_a_reconnect_after_the_chooser_does_not_ask_for_the_session_again(site):
     """The choice is sent once. A reconnect stays on the session the lane is on: asking
     for a new session again would open another one each time."""
@@ -285,10 +271,12 @@ async def test_the_history_frame_shows_its_lines_once_per_connect(site):
     lines once, not twice."""
     page = site.page
     site.before_ready.append({"type": "history", "session_id": "sid-titled-111", "lines": HISTORY_LINES})
-    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
     await page.evaluate(TURNS_AT_LISTENING)
-    await page.click("#toggle")
+    await page.click("#sessions .session:nth-child(1) button")
     await site.fake.wait_connections(1, timeout=10)
+    assert site.ws_requests[0]["session"] == ["sid-titled-111"]
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
     expected = [["turn user", "what should I plant"],
                 ["turn hermes", "Tomatoes and basil, they like the same bed."],
@@ -338,6 +326,175 @@ window.contextCloses = 0;
 const realClose = AudioContext.prototype.close;
 AudioContext.prototype.close = function () { window.contextCloses += 1; return realClose.call(this); };
 """
+
+
+def _url_session(url):
+    """The session the page URL names, or None."""
+    return parse_qs(urlsplit(url).query).get("session", [None])[0]
+
+
+def _page_loads(site):
+    """How many times the page itself was fetched: one per load or reload."""
+    return sum(1 for url in site.http_requests if urlsplit(url).path == "/")
+
+
+LISTENING = "document.getElementById('state').textContent === 'Listening'"
+
+
+async def test_tapping_a_row_puts_the_session_in_the_url_without_a_navigation(site):
+    """The session is the page's identity: a join writes session=<id> into the URL as a
+    history entry, in place, so the page is not loaded again and the token stays."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    assert _url_session(page.url) is None
+    await page.evaluate("window.samePage = true")
+    await page.click("#sessions .session:nth-child(2) button")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert _url_session(page.url) == "sid-untitled-222"
+    assert parse_qs(urlsplit(page.url).query)["token"] == [TOKEN]
+    assert await page.evaluate("window.samePage") is True  # no load happened
+    assert _page_loads(site) == 1
+    assert len(site.ws_requests) == 1 and site.ws_requests[0]["session"] == ["sid-untitled-222"]
+    assert await page.evaluate("history.length") >= 2  # Back has somewhere to go
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_back_returns_to_the_chooser_with_the_mic_off_and_no_session_in_the_url(site):
+    """The chooser is the history entry before the join: Back leaves the session, lets
+    go of the mic and the wake lock, shows the sessions again and does not reconnect."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    await page.click("#sessions .session:nth-child(2) button")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function(LISTENING, timeout=10000)
+    await page.evaluate(STATES_SEEN)
+    await page.go_back()
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    await wait_for(lambda: len(site.ended) == 1, timeout=10)
+    await wait_for(lambda: len(site.list_requests) == 2, timeout=5)
+    await asyncio.sleep(1.0)  # long enough for a first reconnect try
+    assert _url_session(page.url) is None
+    assert parse_qs(urlsplit(page.url).query)["token"] == [TOKEN]
+    assert _page_loads(site) == 1  # Back moved within the page
+    assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 1}
+    assert await page.text_content("#state") == "Sessions"
+    assert await page.is_visible("#chooser") and await page.is_hidden("#toggle")
+    assert len(site.ws_requests) == 1  # no reconnect
+    states = await page.evaluate("window.statesSeen")
+    assert "Reconnecting" not in states, states
+    await _chooser_rows(page)
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_load_with_a_session_in_the_url_rejoins_it_without_a_tap(site):
+    """A reload must reload the session: a page opened with session=<id> connects with
+    that id and opens the mic by itself. No chooser, no tap, no unmute button when the
+    browser lets playback run."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
+    await site.fake.wait_connections(1, timeout=10)
+    assert site.ws_requests[0]["session"] == ["sid-titled-111"]
+    assert "client" not in site.ws_requests[0]
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert await page.is_hidden("#chooser") and await page.is_visible("#toggle")
+    assert site.list_requests == []
+    assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
+    assert await page.evaluate("window.wakeLocks") == {"requested": 1, "released": 0}
+    assert await page.text_content("#toggle") == "Mute microphone"
+    assert await page.is_hidden("#unmute")
+    assert _url_session(page.url) == "sid-titled-111"
+
+
+# Playback stays locked: the context reports suspended until its second resume, as a
+# browser that waits for a tap does. The real context runs (the harness allows autoplay),
+# so the page's audio path is not touched; only what the page reads is.
+PLAYBACK_LOCKED = MIC_AND_WAKE_LOCK + """
+window.resumeCalls = 0;
+const realResume = AudioContext.prototype.resume;
+AudioContext.prototype.resume = function () {
+  window.resumeCalls += 1;
+  this.resumes = (this.resumes || 0) + 1;
+  return realResume.call(this);
+};
+Object.defineProperty(AudioContext.prototype, 'state', { configurable: true,
+  get() { return (this.resumes || 0) >= 2 ? 'running' : 'suspended'; } });
+"""
+
+
+@pytest.mark.parametrize("site", [PLAYBACK_LOCKED], indirect=True)
+async def test_a_rejoin_with_playback_locked_shows_one_unmute_button_that_resumes_it(site):
+    """Without a tap the browser may keep the reply context suspended. The page joins
+    all the same, with the mic open, and shows one Tap to unmute button; the tap resumes
+    the context and the button goes."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function(LISTENING, timeout=10000)
+    await page.wait_for_selector("#unmute:not([hidden])", timeout=5000)
+    assert await page.text_content("#unmute") == "Tap to unmute"
+    assert await page.locator("button:visible", has_text="unmute").count() == 1
+    assert await page.evaluate("window.resumeCalls") == 1
+    assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
+    assert await page.text_content("#state") == "Listening"
+    await page.click("#unmute")
+    await page.wait_for_selector("#unmute", state="hidden", timeout=5000)
+    assert await page.evaluate("window.resumeCalls") == 2
+    assert await page.text_content("#state") == "Listening"
+    assert len(site.ws_requests) == 1
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_history_frame_puts_its_session_in_the_url_so_a_reload_rejoins_it(site):
+    """After New the page learns the session's id from the history frame and writes it
+    into the URL in place; a reload then rejoins that session, and Back from it still
+    returns to the chooser."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert site.ws_requests[0]["session"] == ["new"]
+    assert _url_session(page.url) is None  # the id is not known yet
+    await site.sessions[0].send_page({"type": "history", "session_id": "fresh", "lines": []})
+    await page.wait_for_function("new URLSearchParams(location.search).get('session') === 'fresh'", timeout=5000)
+    assert _page_loads(site) == 1
+    assert len(site.ws_requests) == 1
+    await page.reload()
+    await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
+    assert site.ws_requests[1]["session"] == ["fresh"]
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert _page_loads(site) == 2
+    assert await page.is_hidden("#chooser")
+    assert _url_session(page.url) == "fresh"
+    await page.go_back()
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    assert _url_session(page.url) is None
+    await asyncio.sleep(1.0)
+    assert len(site.ws_requests) == 2  # no reconnect
+    assert await page.evaluate(f"{MIC_TRACK_STATES}.every(s => s === 'ended')")
+
+
+async def test_the_chooser_after_a_failed_join_is_at_the_bare_url_and_a_reload_shows_it_again(site):
+    """When the page itself leaves to the chooser, the URL loses its session: a reload
+    shows the chooser, not another try at the session that failed."""
+    page = site.page
+    site.join_failed_message = "could not join session sid-titled-111: no such session"
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    await wait_for(lambda: len(site.ws_requests) == 1, timeout=10)
+    assert _url_session(page.url) is None
+    assert parse_qs(urlsplit(page.url).query)["token"] == [TOKEN]
+    await page.reload()
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
+    await _chooser_rows(page)
+    await asyncio.sleep(0.5)
+    assert len(site.ws_requests) == 1  # the reload did not try the session again
+    assert len(site.list_requests) == 2
 
 
 async def _listening_from_the_chooser(site):
@@ -448,12 +605,12 @@ async def test_a_session_new_frame_keeps_the_socket_and_starts_the_log_over(site
 @pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
 async def test_a_join_failed_frame_shows_the_chooser_with_the_message(site):
     """The session the page asked for could not be joined: the server says so and closes
-    with its own code. The page shows the chooser with the message and does not reconnect."""
+    with its own code. The page, which joined the session in its URL by itself, shows
+    the chooser with the message and does not reconnect."""
     page = site.page
     site.join_failed_message = "could not join session sid-titled-111: no such session"
     await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
     await page.evaluate(STATES_SEEN)
-    await page.click("#toggle")
     await wait_for(lambda: len(site.ws_requests) == 1, timeout=10)
     await page.wait_for_selector("#chooser:not([hidden])", timeout=5000)
     await wait_for(lambda: len(site.list_requests) == 1, timeout=5)
