@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import httpx
 import pytest
 from websockets.asyncio.client import connect
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from gateway.config import PlatformConfig
 
@@ -297,3 +298,75 @@ async def test_adapter_wires_the_sessions_callback_into_the_server(plugin, monke
         assert adapter._server.kwargs["on_sessions"] == adapter._session_rows
     finally:
         await adapter.disconnect()
+
+
+# The session query of a websocket connect: its value becomes the id of a /resume
+# on the gateway, so a shape that is not a Hermes session id is refused before
+# the client handler runs.
+
+
+@pytest.fixture
+async def join_server(plugin):
+    """A voice server whose client handler records the lane and options it was given."""
+    calls = []
+
+    async def record(connection, client_id, **options):
+        calls.append((client_id, options))
+        async for _ in connection:
+            pass
+
+    server = plugin.server.VoiceServer("127.0.0.1", 0, TOKEN, record)
+    server.client_calls = calls
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+def _join_url(server, session):
+    return f"ws://127.0.0.1:{server.bound_port}/ws?token={TOKEN}&client=tablet&session={quote(session)}"
+
+
+async def _refused_connect(server, session):
+    """Connect with the session value; return the error frame and the close code."""
+    async with connect(_join_url(server, session)) as ws:
+        frame = json.loads(await asyncio.wait_for(ws.recv(), 2))
+        with pytest.raises(ConnectionClosed) as info:
+            while True:
+                await asyncio.wait_for(ws.recv(), 2)
+    await asyncio.sleep(0.05)
+    return frame, info.value.rcvd
+
+
+async def test_an_empty_session_query_is_refused(join_server):
+    frame, close = await _refused_connect(join_server, "")
+    assert frame["type"] == "error" and "empty" in frame["message"]
+    assert close.code == 1008
+    assert join_server.client_calls == []
+
+
+async def test_a_session_query_longer_than_256_characters_is_refused(join_server):
+    frame, close = await _refused_connect(join_server, "a" * 257)
+    assert frame["type"] == "error" and "256" in frame["message"]
+    assert close.code == 1008
+    assert join_server.client_calls == []
+
+
+@pytest.mark.parametrize("session", ["20261107 101500", "20261107_'ab", 'id"x'])
+async def test_a_session_query_with_a_character_outside_the_id_alphabet_is_refused(join_server, session):
+    frame, close = await _refused_connect(join_server, session)
+    assert frame["type"] == "error" and "character" in frame["message"]
+    assert close.code == 1008
+    assert join_server.client_calls == []
+
+
+async def test_a_well_formed_session_query_of_256_characters_reaches_the_client_handler(join_server):
+    session = ("20261107_101500_" + "Ab-9_" * 60)[:256]
+    assert len(session) == 256
+    async with connect(_join_url(join_server, session)):
+        for _ in range(50):
+            if join_server.client_calls:
+                break
+            await asyncio.sleep(0.01)
+    assert join_server.client_calls == [("tablet", {"session": session})]

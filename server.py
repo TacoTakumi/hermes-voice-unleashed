@@ -10,6 +10,10 @@ VoiceManager session.
 instead of a page conversation; it is handed to ``on_attach``.
 ``/ws?client=<id>&session=<Hermes session id>`` asks for the page's
 conversation to join that session; the id goes to ``on_client`` as ``session``.
+Both ids must be 1 to MAX_ATTACH_ID characters from letters, digits, underscore
+and dash (``20261107_101500_ab12cd``): the session id becomes the text of a
+``/resume`` on the gateway, so any other shape is refused with an error frame
+and close code 1008 before the handler runs.
 
 ``GET /sessions?client=<page client>`` answers the session list for that
 client's conversation as JSON, from ``on_sessions``.
@@ -22,6 +26,7 @@ import contextlib
 import hmac
 import json
 import logging
+import re
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -40,6 +45,7 @@ SessionsHandler = Callable[[str], list[dict[str, Any]]]  # page client id -> its
 REPLACED_CLOSE_CODE = 4001  # another page took this conversation over
 JOIN_FAILED_CLOSE_CODE = 4002  # the session the page asked to join could not be joined
 MAX_ATTACH_ID = 256  # a longer Hermes session id is refused, never cut
+SESSION_ID_CHARS = re.compile(r"[A-Za-z0-9_-]+\Z")  # the alphabet of a Hermes session id
 DEFAULT_CLIENT = "phone"
 MAX_CLIENT_ID = 64  # a longer page client id is cut to this
 
@@ -52,6 +58,26 @@ def _query(path: str) -> tuple[str, dict[str, list[str]]]:
 def _client_id(query: dict[str, list[str]]) -> str:
     """The page client the query names, the default one when it names none."""
     return (query.get("client") or [DEFAULT_CLIENT])[0][:MAX_CLIENT_ID] or DEFAULT_CLIENT
+
+
+def _bad_session_id(kind: str, session_id: str) -> Optional[str]:
+    """Why ``session_id`` is not a Hermes session id, None when it is one.
+
+    ``kind`` names the query key in the reason ("attach" or "session")."""
+    if not session_id:
+        return f"empty {kind} id"
+    if len(session_id) > MAX_ATTACH_ID:
+        return f"{kind} id longer than {MAX_ATTACH_ID} characters"
+    if not SESSION_ID_CHARS.match(session_id):
+        return f"{kind} id has a character outside letters, digits, underscore and dash"
+    return None
+
+
+async def _refuse(connection: ServerConnection, reason: str) -> None:
+    """Tell the client why and close with 1008 (policy violation)."""
+    with contextlib.suppress(Exception):
+        await connection.send(json.dumps({"type": "error", "message": reason}))
+    await connection.close(code=1008, reason=reason)
 
 
 def _response(status: HTTPStatus, body: bytes, content_type: str) -> Response:
@@ -136,18 +162,21 @@ class VoiceServer:
         _, query = _query(connection.request.path)
         if "attach" in query and self._on_attach is not None:
             session_id = query["attach"][0]
-            if not session_id or len(session_id) > MAX_ATTACH_ID:
-                reason = ("empty attach id" if not session_id
-                          else f"attach id longer than {MAX_ATTACH_ID} characters")
-                with contextlib.suppress(Exception):
-                    await connection.send(json.dumps({"type": "error", "message": reason}))
-                await connection.close(code=1008, reason=reason)  # policy violation
+            reason = _bad_session_id("attach", session_id)
+            if reason is not None:
+                await _refuse(connection, reason)
                 return
             await self._own(connection, ("attach", session_id), self._on_attach)
             return
         client_id = _client_id(query)
-        session = (query.get("session") or [""])[0]
-        options = {"session": session} if session else {}
+        options = {}
+        if "session" in query:
+            session = query["session"][0]
+            reason = _bad_session_id("session", session)
+            if reason is not None:
+                await _refuse(connection, reason)
+                return
+            options["session"] = session
         await self._own(connection, ("client", client_id), self._on_client, **options)
 
     async def _own(self, connection: ServerConnection, key: tuple[str, str],
