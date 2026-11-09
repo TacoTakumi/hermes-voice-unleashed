@@ -652,10 +652,14 @@ header > * { flex-shrink: 0; }
         status();
         break;
       case "reply_delta":
-        // A delta the final answer already shows (it arrived late) adds nothing.
-        if (absorbing && absorbing.text.startsWith(absorbing.streamed + f.text)) {
-          absorbing.streamed += f.text;
-          break;
+        // A delta the final answer already shows (it arrived late) adds nothing. The
+        // first delta after a tool call opens with a paragraph break the final has not.
+        if (absorbing) {
+          const piece = absorbing.streamed ? f.text : f.text.trimStart();
+          if (absorbing.text.startsWith(absorbing.streamed + piece)) {
+            absorbing.streamed += piece;
+            break;
+          }
         }
         absorbing = null;
         if (!hermesTurn) hermesTurn = addTurn("hermes", "");
