@@ -546,9 +546,18 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             if self.lane_session_id(client_id) != lane_before:
                 await self._send_history(client_id)
             return
+        session_id = await self._send_history(client_id, connection)
+        if self._clients.get(client_id) is not connection:
+            # Replaced while the history was read: the lane did not move, so the live
+            # page's own history frame stands, and this connect is no voice device.
+            logger.debug("voice page %s: replaced during its history read", client_id)
+            return
         # The page is the newest voice device of its session: a UI client attached
         # to it is switched off before the page's voice starts.
-        await self._take_voice(client_id, await self._send_history(client_id, connection))
+        await self._take_voice(client_id, session_id)
+        if self._clients.get(client_id) is not connection:
+            logger.debug("voice page %s: replaced during its voice takeover", client_id)
+            return
         if new_session_failed:
             # The history frame named the old session; the page is told why.
             await self._send_to(connection, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})

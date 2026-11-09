@@ -562,6 +562,8 @@ async def test_a_second_page_gets_no_extra_history_when_the_replaced_connect_had
         second = Page(ws)
         await wait_for(lambda: second.of("ready"))
         assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE
+        live = adapter.session_for("phone")
+        assert live is not None
         release.set()
         await asyncio.sleep(0.5)  # the first page's connect runs to its end
         assert second.of("history") == [{"type": "history", "session_id": "abc", "lines": []}]
@@ -569,6 +571,10 @@ async def test_a_second_page_gets_no_extra_history_when_the_replaced_connect_had
         assert second.of("replaced") == []
         assert ws.close_code is None
         assert first.frames == [{"type": "replaced"}]
+        # The stale connect registered no session of its own: the live page keeps
+        # its session, and only one VoiceManager connection was opened.
+        assert adapter.session_for("phone") is live
+        assert len(fake_vm.connections) == 1
         second.task.cancel()
     assert adapter.messages == []
 
