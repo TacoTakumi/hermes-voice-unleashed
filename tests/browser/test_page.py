@@ -1666,3 +1666,56 @@ async def test_a_portrait_header_does_not_scroll_itself_while_the_tool_list_foll
     assert await _newest_tool_in_view(page)
     assert await page.evaluate("""() => { const t = document.getElementById('tools');
         return t.scrollHeight > t.clientHeight && t.scrollTop + t.clientHeight >= t.scrollHeight - 4; }""")
+
+
+async def test_a_header_with_no_tool_line_stays_at_its_top(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 740, "height": 360})
+    await _listening(fake, page)
+    session = sessions[0]
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["scrolls"], box
+    assert box["top"] == 0, ("join", box)
+    await session.send_page({"type": "transcript", "text": "I keep talking about this and that " * 6})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length > 200")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["scrolls"], box
+    assert box["top"] == 0, ("transcript", box)
+    await session.send_page({"type": "utterance", "text": "sideways"})
+    for i in range(10):
+        await session.send_page({"type": "reasoning_delta", "text": f"Thought {i}. "})
+    await page.wait_for_function("document.getElementById('reason-full').textContent.includes('Thought 9')")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["scrolls"], box
+    assert box["top"] == 0, ("reasoning", box)
+    assert box["window"] == 0, box
+
+
+async def test_a_header_whose_tool_list_is_hidden_stays_where_it_is(stack):
+    fake, page, sessions, utterances = stack
+    session = await _a_sideways_phone_with_a_wrapped_transcript(fake, page, sessions)
+    await session.send_page({"type": "utterance", "text": "sideways"})
+    for i in range(6):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 6")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["scrolls"] and box["top"] > 0 and box["newest"], box
+    await page.click("#fold")
+    await page.wait_for_selector("#tools[hidden]", state="attached")
+    await asyncio.sleep(0.2)
+    # The fold itself may move the header: the list is gone, so measure after it. A
+    # longer transcript then makes the header taller, which must not move it again.
+    folded = await page.evaluate("""() => { const h = document.querySelector('header');
+        return { top: h.scrollTop, height: h.scrollHeight }; }""")
+    await session.send_page({"type": "transcript", "text": "I keep talking about this and that " * 12})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length > 400")
+    await asyncio.sleep(0.2)
+    grown = await page.evaluate("document.querySelector('header').scrollHeight")
+    assert grown > folded["height"], (folded, grown)
+    box = await _header_box(page)
+    assert box["top"] == folded["top"], (folded, box)
+    assert box["window"] == 0, box

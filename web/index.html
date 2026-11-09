@@ -344,11 +344,22 @@ header > * { flex-shrink: 0; }
     headerGestureUntil = Math.max(headerGestureUntil, now + 300);
     headerAtEnd = headerEl.scrollTop + headerEl.clientHeight >= headerEl.scrollHeight - 4;
   });
+  // The header moves for one reason: to keep the newest tool line in view. With no tool
+  // line on show (before the first tool call, after the session's tools were cleared, or
+  // with the list folded away behind "Show tools") there is nothing to keep in view, and
+  // a header that scrolled to its end anyway would push the state heading out of its box.
+  // So the header stays put until a tool line is there to follow.
+  function headerHasToolToShow() {
+    return !activityEl.hidden && !toolsEl.hidden && toolsEl.querySelector(".tool") !== null;
+  }
   let headerPinQueued = false;
   function headerPinSoon() {
     if (headerPinQueued) return;
     headerPinQueued = true;
-    requestAnimationFrame(() => { headerPinQueued = false; if (headerAtEnd) headerToEnd(); });
+    requestAnimationFrame(() => {
+      headerPinQueued = false;
+      if (headerAtEnd && headerHasToolToShow()) headerToEnd();
+    });
   }
   // Anything that changes the height of the header or of what it holds (a state line, a
   // transcript that wraps, the reasoning text, the tool list, a rotation) can leave the
