@@ -306,7 +306,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if reply:
             message = f"{message}: {reply}"
         logger.info("voice page %s: %s", client_id, message)
-        await self._send_json(client_id, {"type": "join_failed", "message": message})
+        # On the connecting socket itself: another page may hold the chat id by now.
+        await self._send_to(connection, {"type": "join_failed", "message": message})
         with contextlib.suppress(Exception):
             await connection.close(code=JOIN_FAILED_CLOSE_CODE, reason="join failed")
         return False
@@ -382,11 +383,15 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         with self._session_db() as db:
             return sessions.history_lines(db, session_id)
 
-    async def _send_history(self, client_id: str) -> Optional[str]:
+    async def _send_history(self, client_id: str, connection=None) -> Optional[str]:
         """Send the page the history frame: the session its lane is on and that
         session's spoken lines. A session the lane does not have yet, or a read that
         fails, gives an empty history; the connect goes on either way. Returns the
-        session id the frame named."""
+        session id the frame named.
+
+        The frame goes on ``connection`` when given: a connecting page, which may not
+        hold the chat id any more by the time its join step is done. Without one it
+        goes to the page that holds the chat id, the live one."""
         session_id = self.lane_session_id(client_id)
         lines: list[dict[str, Any]] = []
         if session_id:
@@ -397,7 +402,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 logger.warning("voice page %s: cannot read the history of session %s",
                                client_id, session_id, exc_info=True)
                 lines = []
-        await self._send_json(client_id, {"type": "history", "session_id": session_id, "lines": lines})
+        frame = {"type": "history", "session_id": session_id, "lines": lines}
+        if connection is None:
+            await self._send_json(client_id, frame)
+        else:
+            await self._send_to(connection, frame)
         return session_id
 
     async def _start_new_session(self, client_id: str) -> None:
@@ -429,7 +438,12 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             return
         # The page is the newest voice device of its session: a UI client attached
         # to it is switched off before the page's voice starts.
-        await self._take_voice(client_id, await self._send_history(client_id))
+        await self._take_voice(client_id, await self._send_history(client_id, connection))
+        if self._clients.get(client_id) is not connection:
+            # Another page took the chat id while this one waited on its connect steps:
+            # the live page's session stays, this connection was closed as replaced.
+            logger.debug("voice page %s: replaced during its connect", client_id)
+            return
         session = self._new_session(connection, client_id)
         self._sessions[client_id] = session
         try:
@@ -439,9 +453,14 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 del self._sessions[client_id]
 
     async def _send_json(self, chat_id: str, payload: dict) -> bool:
+        """Send ``payload`` to the page that holds the chat ``chat_id``."""
         connection = self._clients.get(chat_id)
         if connection is None:
             return False
+        return await self._send_to(connection, payload)
+
+    async def _send_to(self, connection, payload: dict) -> bool:
+        """Send ``payload`` on ``connection``; False when it is gone."""
         try:
             await connection.send(json.dumps(payload))
         except Exception:

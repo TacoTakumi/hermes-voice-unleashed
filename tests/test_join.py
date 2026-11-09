@@ -415,6 +415,81 @@ async def test_a_client_attached_to_another_session_is_not_replaced_by_a_page_co
     await attach_ws.close()
 
 
+# --- a second page while the first one is still connecting ---------------------------------
+
+
+def _hold_commands(adapter):
+    """The gateway sits on every command until ``release`` is set, as a /resume that loads
+    a long transcript does; ``dispatched`` is set when the command came in."""
+    inner = adapter.handle_message
+    dispatched, release = asyncio.Event(), asyncio.Event()
+
+    async def handle_message(event):
+        if event.text.startswith("/"):
+            dispatched.set()
+            await release.wait()
+        await inner(event)
+
+    adapter.handle_message = handle_message
+    return dispatched, release
+
+
+async def test_a_second_page_during_the_first_ones_resume_keeps_its_session_and_the_stale_connect_sends_nothing(
+        adapter, fake_vm, plugin):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    dispatched, release = _hold_commands(adapter)
+    first_ws = await connect(_url(adapter, "session=abc"))
+    first = Page(first_ws)
+    await asyncio.wait_for(dispatched.wait(), 3)
+    # The same key (the default client id), a plain connect, while the first page waits.
+    async with connect(_url(adapter, "client=phone")) as ws:
+        second = Page(ws)
+        await wait_for(lambda: second.of("ready"))
+        assert await _replaced(first_ws, first) == plugin.server.REPLACED_CLOSE_CODE == 4001
+        live = adapter.session_for("phone")
+        assert live is not None
+        release.set()
+        await wait_for(lambda: len(adapter.messages) == 1)
+        await asyncio.sleep(0.5)  # the first page's connect runs to its end
+        assert first.frames == [{"type": "replaced"}]
+        assert second.of("history") == [{"type": "history", "session_id": "abc", "lines": []}]
+        assert len(second.of("ready")) == 1
+        assert second.of("replaced") == []
+        assert second.of("reply") == []
+        assert ws.close_code is None
+        assert adapter.session_for("phone") is live
+        second.task.cancel()
+    assert [m.text for m in adapter.messages] == ["/resume abc --all"]
+
+
+class FakeConnection:
+    """A page socket that records what it was sent and the code it was closed with."""
+
+    def __init__(self):
+        self.sent, self.close_code = [], None
+
+    async def send(self, text):
+        self.sent.append(json.loads(text))
+
+    async def close(self, code=None, reason=None):
+        self.close_code = code
+
+
+async def test_join_failed_goes_to_the_connecting_socket_not_to_the_second_page_that_holds_the_key(adapter, plugin):
+    adapter._session_store = FakeStore("old")
+    adapter.gateway_reply = "Session not found: abc"
+    stale, holder = FakeConnection(), FakeConnection()
+    adapter._clients["phone"] = holder
+    assert await adapter._join_session(stale, "phone", "abc") is False
+    (failed,) = stale.sent
+    assert failed["type"] == "join_failed"
+    assert "abc" in failed["message"]
+    assert stale.close_code == plugin.server.JOIN_FAILED_CLOSE_CODE
+    assert holder.sent == []
+    assert holder.close_code is None
+
+
 # --- a new session asked for by voice ------------------------------------------------------
 
 
