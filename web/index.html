@@ -689,7 +689,9 @@ header > * { flex-shrink: 0; }
         // A turn that ran streams its answer before this frame and ends with turn_done. A
         // message sent without a turn (a busy notice, a refusal) brings no turn_done, so
         // a reply with nothing streamed this turn is the whole answer: end the turn here.
-        if (busy && !turnStreamed) {
+        // Not when the server says the turn runs (a status line before the answer's
+        // first text): that turn ends with its turn_done.
+        if (busy && !turnStreamed && !f.turn_running) {
           busy = false;
           turnFold();
           reasoningDone();

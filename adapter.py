@@ -623,7 +623,14 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=None)
         # The page shows the reply's text without the say tags a Desktop voice chat's
         # replies carry; the session already spoke what it should.
-        if await self._send_json(chat_id, {"type": "reply", "text": strip_say_tags(content)}):
+        frame: dict[str, Any] = {"type": "reply", "text": strip_say_tags(content)}
+        session = self.session_for(chat_id)
+        if session is not None and session.turn_running:
+            # Text the gateway sends during a turn, a status line before the answer for
+            # one: the page must not take it for the whole answer of a turn that never
+            # ran. The turn's own turn_done frame ends it.
+            frame["turn_running"] = True
+        if await self._send_json(chat_id, frame):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")
 

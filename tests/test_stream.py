@@ -442,3 +442,17 @@ async def test_the_turn_runs_no_more_once_it_is_done_or_cancelled(rig):
     await session.cancel_reply("test")
     assert not session.turn_running
 
+
+async def test_a_reply_frame_sent_while_the_turn_runs_says_so(rig):
+    hooks, conn, page = rig
+    adapter = hooks._adapters[-1]
+    await adapter.send("voice", "The gateway is busy, try again later.")
+    await wait_for(lambda: page.of("reply"))
+    assert page.of("reply")[-1] == {"type": "reply", "text": "The gateway is busy, try again later."}
+    fire(hooks.pre_llm_call, session_id="s1")
+    await wait_for(lambda: _session(hooks).turn_running)
+    await adapter.send("voice", "Switching to the fallback provider.")
+    await wait_for(lambda: len(page.of("reply")) == 2)
+    assert page.of("reply")[-1] == {"type": "reply", "text": "Switching to the fallback provider.",
+                                    "turn_running": True}
+

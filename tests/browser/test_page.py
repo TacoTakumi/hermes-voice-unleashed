@@ -1283,6 +1283,28 @@ async def test_a_reply_frame_with_nothing_streamed_ends_the_turn_on_the_page(sta
     assert "The gateway is busy, try again later." in texts
 
 
+async def test_a_reply_frame_marked_as_sent_during_the_turn_does_not_end_it(stack):
+    """The gateway sends a status line, a provider fallback for example, before the
+    answer's first text. The turn still runs: the page stays busy, the tool lines stay
+    open, and the turn ends once, at turn_done."""
+    _, page, _, _ = stack
+    _, session, _ = await _thinking_after_an_utterance(stack)
+    await session.send_page({"type": "tool_start", "id": "c1", "name": "terminal", "summary": "ls"})
+    await session.send_page({"type": "reply", "text": "Switching to the fallback provider.",
+                             "turn_running": True})
+    await asyncio.sleep(0.5)
+    assert await page.text_content("#state") != "Listening"
+    assert await page.evaluate("document.querySelectorAll('#tools .group').length") == 0
+    assert await page.evaluate("[...document.querySelectorAll('#tools .tool')].every(li => !li.hidden)")
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert "Switching to the fallback provider." in texts
+    await session.send_page({"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 10})
+    await session.send_page({"type": "turn_done"})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'",
+                                 timeout=2000)
+    assert await page.evaluate("document.querySelectorAll('#tools .group').length") == 1
+
+
 async def test_a_reply_frame_after_streamed_text_leaves_the_turn_running(stack):
     """The final send of a streamed answer comes before turn_done: the turn is still
     running on the page until that frame."""
