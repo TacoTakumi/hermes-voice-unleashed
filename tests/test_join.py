@@ -625,6 +625,29 @@ async def test_a_page_replaced_while_its_failed_new_reply_is_sent_registers_no_s
     assert [m.text for m in adapter.messages] == ["/new"]
 
 
+async def test_a_client_that_attaches_during_a_page_connect_keeps_voice(adapter, fake_vm, plugin):
+    """The page was switched off by the attach while its /resume was held. Its connect
+    then ends as replaced: it does not take voice back from the client, and it
+    registers no session on its closed socket."""
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    dispatched, release = _hold_commands(adapter)
+    page_ws = await connect(_url(adapter, "session=abc"))
+    page = Page(page_ws)
+    await asyncio.wait_for(dispatched.wait(), 3)
+    attach_ws, client = await _attach(adapter, fake_vm, "abc")
+    assert await _replaced(page_ws, page) == plugin.server.REPLACED_CLOSE_CODE
+    release.set()
+    await asyncio.sleep(0.5)  # the page's connect runs to its end
+    assert client.of("replaced") == []
+    assert attach_ws.close_code is None
+    assert adapter.is_attached("abc")
+    assert adapter.session_for("voice") is None
+    assert page.frames == [{"type": "replaced"}]
+    client.task.cancel()
+    await attach_ws.close()
+
+
 async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_client_alone(
         adapter, fake_vm, plugin):
     """A UI client attached to the session while the first page's /resume was held, then a

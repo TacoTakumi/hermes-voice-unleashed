@@ -258,6 +258,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         for client_id, page in list(self._clients.items()):
             if self.lane_session_id(client_id) == session_id:
                 logger.info("voice page %s: a UI client took voice for session %s", client_id, session_id)
+                # Dropped here, not only at the page's own cleanup: a page still in its
+                # connect steps checks this entry to see that it was replaced.
+                del self._clients[client_id]
                 await self._replace(page)
         session = VoiceSession(connection, client_from_url(self.vm_url, self.vm_token),
                                f"attach:{session_id}", attached=True)
