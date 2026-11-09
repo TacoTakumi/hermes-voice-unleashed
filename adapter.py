@@ -29,7 +29,7 @@ from tools.approval import has_blocking_approval
 
 from . import sessions, stream_hooks
 from .server import JOIN_FAILED_CLOSE_CODE, REPLACED_CLOSE_CODE, VoiceServer
-from .session import VoiceSession, client_from_url
+from .session import VoiceSession, client_from_url, strip_say_tags
 
 logger = logging.getLogger(__name__)
 
@@ -568,7 +568,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # The reply to a command the plugin sent: it is for the plugin, not the page.
             pending.set_result(content)
             return SendResult(success=True, message_id=None)
-        if await self._send_json(chat_id, {"type": "reply", "text": content}):
+        # The page shows the reply's text without the say tags a Desktop voice chat's
+        # replies carry; the session already spoke what it should.
+        if await self._send_json(chat_id, {"type": "reply", "text": strip_say_tags(content)}):
             return SendResult(success=True, message_id=None)
         return SendResult(success=False, error="the voice page is not connected")
 

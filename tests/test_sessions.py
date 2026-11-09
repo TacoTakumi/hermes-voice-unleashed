@@ -180,3 +180,17 @@ def test_history_lines_reads_text_parts_and_skips_what_has_none(state):
         {"role": "user", "text": "look at this"},
         {"role": "hermes", "text": "a picture"},
     ]
+
+
+def test_history_lines_strip_say_tags_from_a_reply(state):
+    """A Desktop voice chat's replies start with a spoken summary in a say block."""
+    _, db = state
+    db.create_session("said", source=PLATFORM)
+    db.append_message("said", "user", "what is the plan")
+    db.append_message("said", "assistant", "<say>Two steps.</say> First build, then test.")
+    db.append_message("said", "assistant", [{"type": "text", "text": "<say>Done.</say>"}])
+    assert sessions.history_lines(db, "said") == [
+        {"role": "user", "text": "what is the plan"},
+        {"role": "hermes", "text": "Two steps. First build, then test."},
+        {"role": "hermes", "text": "Done."},
+    ]

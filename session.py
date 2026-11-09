@@ -54,6 +54,86 @@ CLOSED_KEYS_KEPT = 64  # reply keys of ended or cut-off replies an attached sess
 # line at info; any other end is a failure with a traceback.
 EXPECTED_ENDS = (ConnectionClosed, ConnectionError, vm_client.ConnectionError)
 _LAST_SPACE = re.compile(r".*\s", re.S)  # everything up to and including the last whitespace
+# A Desktop voice chat's replies start with a spoken summary in a say block, and a
+# model keeps writing them once the session's history holds some.
+SAY_OPEN = "<say>"
+SAY_CLOSE = "</say>"
+
+
+def strip_say_tags(text: str) -> str:
+    """``text`` without say tags; what was inside them stays."""
+    return text.replace(SAY_OPEN, "").replace(SAY_CLOSE, "")
+
+
+def _partial_tag_length(text: str, tag: str) -> int:
+    """The length of the longest tail of ``text`` that is the start of ``tag``."""
+    for n in range(min(len(text), len(tag) - 1), 0, -1):
+        if text.endswith(tag[:n]):
+            return n
+    return 0
+
+
+class SayCutter:
+    """Splits one reply's streamed text into what the page shows and what TTS speaks.
+
+    A reply that starts, after optional whitespace, with ``<say>`` is spoken by that
+    first block alone: the text after its closing tag is shown but not spoken. Any
+    other reply is spoken whole. Tags can be split across deltas, so a tail that could
+    still become a tag is held back and released as soon as it cannot be one; say tags
+    anywhere are dropped from the shown text. One cutter per reply."""
+
+    def __init__(self) -> None:
+        # start: only whitespace or the start of an opening tag so far; inside: in the
+        # leading say block; after: past it, shown only; plain: no leading block.
+        self._stage = "start"
+        self._held = ""
+
+    def push(self, delta: str) -> tuple[str, str]:
+        """Takes a delta; returns the text to show now and the text to speak now."""
+        self._held += delta
+        shown, spoken = [], []
+        while self._held:
+            if self._stage == "start":
+                text = self._held.lstrip()
+                if not text or SAY_OPEN.startswith(text):
+                    break  # it could still be a leading tag
+                if not text.startswith(SAY_OPEN):
+                    self._stage = "plain"
+                    continue
+                shown.append(self._held[:len(self._held) - len(text)])
+                self._held = text[len(SAY_OPEN):]
+                self._stage = "inside"
+            elif self._stage == "inside":
+                at = self._held.find(SAY_CLOSE)
+                if at >= 0:
+                    text, self._held = self._held[:at], self._held[at + len(SAY_CLOSE):]
+                    self._stage = "after"
+                else:
+                    keep = _partial_tag_length(self._held, SAY_CLOSE)
+                    text, self._held = self._held[:len(self._held) - keep], self._held[len(self._held) - keep:]
+                    shown.append(text)
+                    spoken.append(text)
+                    break
+                shown.append(text)
+                spoken.append(text)
+            else:
+                keep = max(_partial_tag_length(self._held, SAY_OPEN),
+                           _partial_tag_length(self._held, SAY_CLOSE))
+                text = strip_say_tags(self._held[:len(self._held) - keep])
+                self._held = self._held[len(self._held) - keep:]
+                shown.append(text)
+                if self._stage == "plain":
+                    spoken.append(text)
+                break
+        return "".join(shown), "".join(spoken)
+
+    def end(self) -> tuple[str, str]:
+        """The reply is complete: returns the held text to show and to speak. A tail that
+        is the start of a tag can no longer become one, unless it closes the say block."""
+        held, self._held = self._held, ""
+        if self._stage == "inside":
+            return "", ""  # at most the start of the closing tag, never shown or spoken
+        return held, "" if self._stage == "after" else held
 
 
 def client_from_url(url: str, token: str = "") -> VoiceManagerClient:
@@ -98,6 +178,7 @@ class VoiceSession:
         self.reply_request: Optional[vm_client.TTSRequest] = None
         self._last_text_at = 0.0  # loop time of the reply's last text or of its turn's end
         self._unsent = ""  # reply text after the last whitespace, not yet sent to TTS
+        self._cutter = SayCutter()  # page path: decides what of the reply's text is spoken
         self._finishing: Optional[asyncio.Task] = None
         self._flushing: Optional[asyncio.Task] = None  # sends the held text after a model response
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
@@ -228,10 +309,15 @@ class VoiceSession:
         that ended inside a word would be spoken split, and a period sent alone is
         synthesised on its own. Text up to the last whitespace goes now; the rest
         waits for more text or for the end of the reply."""
+        await self._show(text, text)
+
+    async def _show(self, shown: str, spoken: str) -> None:
+        """Show ``shown`` on the page now and queue ``spoken`` for TTS in whole words."""
         self._last_text_at = asyncio.get_running_loop().time()
         self.tracker.reply_text()
-        await self.send_page({"type": "reply_delta", "text": text})
-        self._unsent += text
+        if shown:
+            await self.send_page({"type": "reply_delta", "text": shown})
+        self._unsent += spoken
         match = _LAST_SPACE.search(self._unsent)
         if match:
             chunk, self._unsent = self._unsent[:match.end()], self._unsent[match.end():]
@@ -245,8 +331,14 @@ class VoiceSession:
         await self.reply_request.send(chunk)
 
     async def on_reply_delta(self, reply_id: str, turn_id: str, iteration: int, delta: str) -> None:
-        if self._takes(reply_id):
+        """Reply text from the stream hooks. On the page path the say cutter decides what
+        of it is spoken; an attached client's text comes as say frames, already cut."""
+        if not self._takes(reply_id):
+            return
+        if self.attached:
             await self._speak(delta)
+        else:
+            await self._show(*self._cutter.push(delta))
 
     async def on_reasoning_delta(self, reply_id: str, text: str) -> None:
         """Reasoning of the running reply's turn: shown on the page, never spoken."""
@@ -304,6 +396,11 @@ class VoiceSession:
         if not self._takes(reply_id):  # cancelled, or a newer utterance took over
             return
         self.reply_open = False
+        if not self.attached:
+            shown, spoken = self._cutter.end()
+            if shown:
+                await self.send_page({"type": "reply_delta", "text": shown})
+            self._unsent += spoken
         rest, self._unsent = self._unsent, ""
         await self._send_tts(rest)
         request = self.reply_request
@@ -471,12 +568,14 @@ class VoiceSession:
         self._retire(self.reply_key)
         self.reply_id = uuid.uuid4().hex
         self.reply_open, self.reply_request, self._unsent = True, None, ""
+        self._cutter = SayCutter()
 
     def _reopen_reply(self) -> None:
         """The running reply takes text again under its own id and key. Its old TTS
         request is gone: the cancel before this dropped it and cleared the page."""
         self._cancel_finishing()
         self.reply_open, self.reply_request, self._unsent = True, None, ""
+        self._cutter = SayCutter()
 
     def _retire(self, key: Optional[str]) -> None:
         """Remember that the reply ``key`` takes no more text."""

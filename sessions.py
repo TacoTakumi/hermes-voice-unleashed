@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from .session import strip_say_tags
+
 logger = logging.getLogger(__name__)
 
 SESSION_ROWS = 20  # the most recently active sessions the list shows
@@ -90,13 +92,14 @@ def _line(message: dict[str, Any]) -> Optional[dict[str, Any]]:
     role = _LINE_ROLES.get(message.get("role"))
     if role is None or message.get("_compressed_summary"):
         return None
-    text = _text(message.get("content")).strip()
+    text = strip_say_tags(_text(message.get("content"))).strip()
     return {"role": role, "text": text} if text else None
 
 
 def _text(content: Any) -> str:
     """The text of a stored message: a string as is, the text parts of a
-    multimodal list joined; anything else (an image alone, None) is empty."""
+    multimodal list joined; anything else (an image alone, None) is empty. The
+    say tags of a Desktop voice chat's replies are stripped by the caller."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
