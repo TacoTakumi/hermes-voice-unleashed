@@ -95,6 +95,12 @@ class Rig:
     def __init__(self, hooks, session, conn, page, messages, order):
         self.hooks, self.session, self.conn, self.page = hooks, session, conn, page
         self.messages, self.order = messages, order
+        self.segments = 0  # classic mode: segment indexes handed out so far
+
+    def next_segment(self):
+        """A segment index no utterance of this connection used before."""
+        self.segments += 1
+        return self.segments
 
     def tts(self):
         return self.conn.json_frames("tts_stream")
@@ -157,12 +163,20 @@ def _record_order(session, order):
         session._on_new_session = recording_new_session
 
 
+async def _listening(rig, turn):
+    """The session listens in classic turn ``turn``: VoiceManager got its turn_start
+    and the session got the answer."""
+    await wait_for(lambda: len(rig.conn.json_frames("turn_start")) == turn
+                   and rig.session.tracker.turn_id == turn)
+
+
 async def _heard(rig, text, refusal=None):
     """VoiceManager hears ``text`` as a finished turn: a turn_end frame with the turn
-    engine, a final transcription frame in classic mode."""
+    engine, a final transcription frame in classic mode. Each utterance is a segment
+    of its own, as VoiceManager numbers them, in the turn the session listens to."""
     if refusal:
-        await rig.conn.send({"type": "transcription", "segment_index": 1, "text": text,
-                             "endpoint": True, "is_final": True, "turn_id": 1})
+        await rig.conn.send({"type": "transcription", "segment_index": rig.next_segment(), "text": text,
+                             "endpoint": True, "is_final": True, "turn_id": rig.session.tracker.turn_id})
     else:
         await rig.conn.send({"type": "turn_end", "text": text, "turn_id": 0})
 
@@ -170,9 +184,10 @@ async def _heard(rig, text, refusal=None):
 async def _playing_reply(rig, refusal=None):
     """An utterance was answered and its reply is playing on the page."""
     if refusal:
-        await wait_for(lambda: rig.conn.json_frames("turn_start"))
-        await rig.conn.send({"type": "transcription", "segment_index": 0, "text": "tell me a story",
-                             "endpoint": True, "is_final": False, "turn_id": 1})
+        await _listening(rig, 1)
+        await rig.conn.send({"type": "transcription", "segment_index": rig.next_segment(),
+                             "text": "tell me a story", "endpoint": True, "is_final": False,
+                             "turn_id": rig.session.tracker.turn_id})
     else:
         await rig.conn.send({"type": "turn_end", "text": "tell me a story", "turn_id": 0})
     await wait_for(lambda: rig.messages)
@@ -337,9 +352,32 @@ async def test_new_session_cancels_the_playing_reply_before_the_notice(plugin, r
         assert "dragon" not in r.tts_text()
         assert not r.page.closed
         assert not r.conn.closed.is_set()
+        if refusal:
+            await _listening(r, 2)  # the command ended its turn; the next one is open
         await _heard(r, "tell me a joke", refusal)
         await wait_for(lambda: len(r.messages) == 2)
         assert r.messages[1].text == "tell me a joke"
+
+
+async def test_new_session_in_classic_mode_ends_its_turn_so_the_next_segment_starts_clean(plugin):
+    refusal = "turn_engine_unsupported"
+    async with rig(plugin, refusal) as r:
+        await _listening(r, 1)
+        await _heard(r, "start a new session", refusal)
+        await _notice_played(r, "New session")
+        await wait_for(lambda: r.page.of("session_new"))
+        # The command's turn is over: the session asks for the next listening turn and
+        # keeps nothing of the command's words.
+        await _listening(r, 2)
+        assert r.session.tracker.text == ""
+        assert r.session.tracker.dispatched_words is None
+        # The next words come in a later segment, as VoiceManager numbers them.
+        await _heard(r, "tell me a joke", refusal)
+        await wait_for(lambda: r.messages)
+        await asyncio.sleep(0.1)
+        assert [m.text for m in r.messages] == ["tell me a joke"]
+        assert [f["text"] for f in r.page.of("utterance")] == ["tell me a joke"]
+        assert not r.page.closed
 
 
 async def test_new_session_please_is_an_ordinary_utterance(plugin):

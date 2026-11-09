@@ -411,8 +411,11 @@ class VoiceSession:
             await self._on_new_session()
         else:
             await self.send_page({"type": "session_new"})
-        # The notice is no reply: the next utterance has nothing to cancel.
-        self.tracker.reply_ended()
+        # The notice is no reply: the next utterance has nothing to cancel. The
+        # command's turn is over as well: in classic mode the next listening turn
+        # opens here, so later words start clean instead of joining the command's
+        # segments. (Ending the session needs no next turn: its page closes.)
+        await self._next_turn()
 
     async def _command_notice(self, text: str, reason: str) -> Optional[vm_client.TTSRequest]:
         """Stop a running reply and speak ``text`` as a TTS request of its own, ended at
