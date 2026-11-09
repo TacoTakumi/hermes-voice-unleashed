@@ -753,7 +753,19 @@ async def test_new_session_by_voice_that_did_not_move_the_lane_tells_the_page_an
         assert [m.text for m in adapter.messages] == ["/new"]
         assert page.of("session_new") == []  # the page is not told it is on a new session
         assert len(page.of("history")) == 1  # no second history frame either
-        assert page.of("reply") == [{"type": "reply", "text": notice}]
+        # Each spoken notice streams to the page as it is spoken, and a reply frame with
+        # the line's own text ends that line: "New session" is ended before the failure
+        # streams, and the failure's reply frame follows its last delta, so the page shows
+        # two lines and no duplicate.
+        first_reply = next(i for i, f in enumerate(page.frames) if f["type"] == "reply")
+        before = [f["text"] for f in page.frames[:first_reply] if f["type"] == "reply_delta"]
+        after = [f["text"] for f in page.frames[first_reply:] if f["type"] == "reply_delta"]
+        assert "".join(before) == plugin.session.SESSION_NEW_NOTICE
+        assert "".join(after) == notice
+        assert page.of("reply") == [{"type": "reply", "text": plugin.session.SESSION_NEW_NOTICE},
+                                    {"type": "reply", "text": notice}]
+        kinds = [f["type"] for f in page.frames]
+        assert len(kinds) - 1 - kinds[::-1].index("reply") > len(kinds) - 1 - kinds[::-1].index("reply_delta")
         assert page.of("utterance") == []
         assert [f["type"] for f in page.frames].count("ready") == 1  # the page did not reconnect
         # The same socket and session take the next utterance.

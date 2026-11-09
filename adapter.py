@@ -29,7 +29,7 @@ from tools.approval import has_blocking_approval
 
 from . import sessions, stream_hooks
 from .server import JOIN_FAILED_CLOSE_CODE, REPLACED_CLOSE_CODE, VoiceServer
-from .session import VoiceSession, client_from_url, strip_say_tags
+from .session import SESSION_NEW_NOTICE, VoiceSession, client_from_url, strip_say_tags
 
 logger = logging.getLogger(__name__)
 
@@ -302,10 +302,15 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         it is told in a reply, and hears the same words, that it is still on the old
         session."""
         if not await self._start_new_session(client_id):
-            await self._send_json(client_id, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
+            # The page shows a notice as it is spoken, on the current line; a reply frame
+            # with the line's text ends the line without adding one. So the "New session"
+            # line is ended first, the failure is spoken on a line of its own, and the
+            # reply frame that follows it adds no second line.
+            await self._send_json(client_id, {"type": "reply", "text": SESSION_NEW_NOTICE})
             session = self.session_for(client_id)
             if session is not None:
                 await session.speak_notice(NEW_SESSION_FAILED_NOTICE)
+            await self._send_json(client_id, {"type": "reply", "text": NEW_SESSION_FAILED_NOTICE})
             return
         await self._send_json(client_id, {"type": "session_new", "session_id": self.lane_session_id(client_id)})
         await self._send_history(client_id)
