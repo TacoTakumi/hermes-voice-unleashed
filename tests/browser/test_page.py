@@ -1439,7 +1439,7 @@ async def test_the_header_stays_where_the_user_scrolled_it(stack):
     await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 20})
     await page.wait_for_selector("#reasoning:not([hidden])")
     await asyncio.sleep(0.2)
-    await page.evaluate("document.querySelector('header').scrollTop = 0")
+    await _scroll_the_header_by_hand(page, to_end=False)
     await session.send_page({"type": "reasoning_delta", "text": "More thought. "})
     await page.evaluate("document.getElementById('reason-fold').click()")  # no scroll into view
     await session.send_page({"type": "tool_start", "id": "c9", "name": "terminal", "summary": "step 9"})
@@ -1550,3 +1550,119 @@ async def test_a_fling_that_ends_at_the_top_of_the_tool_list_leaves_it_there(sta
     after = await _tool_list_box(page)
     assert after["height"] < before["height"], (before, after)
     assert after["top"] == 0, (before, after)
+
+
+async def _header_box(page):
+    """Where the header stands and whether its newest tool line is within its visible box."""
+    return await page.evaluate("""() => {
+        const header = document.querySelector('header');
+        const h = header.getBoundingClientRect();
+        const last = [...document.querySelectorAll('#tools .tool')].pop();
+        const li = last ? last.getBoundingClientRect() : null;
+        return { top: header.scrollTop, scrolls: header.scrollHeight > header.clientHeight,
+                 window: window.scrollY,
+                 newest: !!li && li.height > 0 && li.top >= h.top - 1 && li.bottom <= h.bottom + 1 };
+    }""")
+
+
+async def _a_sideways_phone_with_a_wrapped_transcript(fake, page, sessions):
+    """A phone held sideways: the header's rest does not fit its cap, so the header scrolls."""
+    await page.set_viewport_size({"width": 740, "height": 360})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "transcript", "text": "I keep talking about this and that " * 6})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length > 100")
+    return session
+
+
+async def test_a_header_that_scrolls_itself_follows_the_newest_tool_line(stack):
+    fake, page, sessions, utterances = stack
+    session = await _a_sideways_phone_with_a_wrapped_transcript(fake, page, sessions)
+    await session.send_page({"type": "utterance", "text": "sideways"})
+    for i in range(6):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+        await page.wait_for_function(f"document.querySelectorAll('#tools .tool').length === {i + 1}")
+        await asyncio.sleep(0.2)
+        box = await _header_box(page)
+        assert box["newest"], (i, box)
+        assert box["window"] == 0, (i, box)
+    assert box["scrolls"] and box["top"] > 0, box
+    for height in (300, 360):
+        await page.set_viewport_size({"width": 740, "height": height})
+        await asyncio.sleep(0.2)
+        box = await _header_box(page)
+        assert box["newest"], (height, box)
+        assert box["window"] == 0, (height, box)
+    await session.send_page({"type": "transcript", "text": "x" * 200})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length === 200")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["newest"], box
+    assert box["window"] == 0, box
+
+
+async def _scroll_the_header_by_hand(page, to_end):
+    """A wheel gesture on the header, then its scroll: to the top, or to its end."""
+    await page.evaluate("""(toEnd) => {
+        const header = document.querySelector('header');
+        header.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
+        header.scrollTop = toEnd ? header.scrollHeight : 0;
+    }""", to_end)
+
+
+async def test_a_header_scrolled_up_by_hand_stays_until_scrolled_back_to_its_end(stack):
+    fake, page, sessions, utterances = stack
+    session = await _a_sideways_phone_with_a_wrapped_transcript(fake, page, sessions)
+    await session.send_page({"type": "utterance", "text": "sideways"})
+    for i in range(4):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 4")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["scrolls"] and box["top"] > 0 and box["newest"], box
+    await _scroll_the_header_by_hand(page, to_end=False)
+    await asyncio.sleep(0.2)
+    for i in range(10):
+        await session.send_page({"type": "reasoning_delta", "text": f"Thought {i}. "})
+    await page.wait_for_selector("#reasoning:not([hidden])")
+    await session.send_page({"type": "tool_start", "id": "c4", "name": "terminal", "summary": "step 4"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 5")
+    await session.send_page({"type": "transcript", "text": "y" * 200})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length === 200")
+    await asyncio.sleep(0.3)
+    box = await _header_box(page)
+    assert box["top"] == 0, box
+    assert box["window"] == 0, box
+    await _scroll_the_header_by_hand(page, to_end=True)
+    await asyncio.sleep(0.2)
+    await session.send_page({"type": "tool_start", "id": "c5", "name": "terminal", "summary": "step 5"})
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 6")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["newest"], box
+    assert box["window"] == 0, box
+
+
+async def test_a_portrait_header_does_not_scroll_itself_while_the_tool_list_follows_its_end(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 390, "height": 760})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "transcript", "text": "I keep talking about this and that " * 3})
+    await session.send_page({"type": "utterance", "text": "portrait"})
+    for i in range(12):
+        await session.send_page({"type": "tool_start", "id": f"c{i}", "name": "terminal", "summary": f"step {i}"})
+        if i % 4 == 3:
+            await session.send_page({"type": "reasoning_delta", "text": "A long thought. " * 10})
+            await page.wait_for_function(f"document.querySelectorAll('#tools .tool').length === {i + 1}")
+            await asyncio.sleep(0.2)
+            assert await page.evaluate("document.querySelector('header').scrollTop") == 0, i
+            assert await _newest_tool_in_view(page), i
+    await session.send_page({"type": "transcript", "text": "z" * 120})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length === 120")
+    await asyncio.sleep(0.2)
+    box = await _header_box(page)
+    assert box["top"] == 0 and box["window"] == 0, box
+    assert await _newest_tool_in_view(page)
+    assert await page.evaluate("""() => { const t = document.getElementById('tools');
+        return t.scrollHeight > t.clientHeight && t.scrollTop + t.clientHeight >= t.scrollHeight - 4; }""")

@@ -209,7 +209,7 @@ header > * { flex-shrink: 0; }
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
   const logEl = $("log"), toggle = $("toggle"), unmuteEl = $("unmute"), meter = $("meter");
   const chooserEl = $("chooser"), sessionsEl = $("sessions"), newEl = $("new");
-  const footerEl = document.querySelector("footer");
+  const headerEl = document.querySelector("header"), footerEl = document.querySelector("footer");
   const reasoningEl = $("reasoning"), reasonFoldEl = $("reason-fold"), reasonLineEl = $("reason-line");
   const reasonFullEl = $("reason-full");
   const activityEl = $("activity"), toolsEl = $("tools"), foldEl = $("fold"), elapsedEl = $("elapsed");
@@ -324,6 +324,39 @@ header > * { flex-shrink: 0; }
     requestAnimationFrame(() => { toolsPinQueued = false; if (toolsAtEnd) toolsToEnd(); });
   }
   new ResizeObserver(toolsPinSoon).observe(toolsEl);
+  // The header follows the same rule. Where its rest does not fit its cap (a phone held
+  // sideways) the header scrolls itself, and the list's own pin cannot bring the newest
+  // tool line into the header's box: the header has to move too. It moves only while
+  // the user left it at its end; a header scrolled up to read stays there, whatever
+  // the page adds below, until the user scrolls it back to its end. A gesture on the
+  // tool list bubbles up here as well, which is right: each element reads its own
+  // scroll. Where the header does not scroll (portrait) there is nothing to move.
+  let headerAtEnd = true, headerGestureUntil = 0;
+  function headerToEnd() {
+    if (headerEl.scrollHeight > headerEl.clientHeight) headerEl.scrollTop = headerEl.scrollHeight;
+  }
+  for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+    headerEl.addEventListener(kind, () => { headerGestureUntil = Date.now() + 1000; }, { passive: true });
+  }
+  headerEl.addEventListener("scroll", () => {
+    const now = Date.now();
+    if (now > headerGestureUntil) return;
+    headerGestureUntil = Math.max(headerGestureUntil, now + 300);
+    headerAtEnd = headerEl.scrollTop + headerEl.clientHeight >= headerEl.scrollHeight - 4;
+  });
+  let headerPinQueued = false;
+  function headerPinSoon() {
+    if (headerPinQueued) return;
+    headerPinQueued = true;
+    requestAnimationFrame(() => { headerPinQueued = false; if (headerAtEnd) headerToEnd(); });
+  }
+  // Anything that changes the height of the header or of what it holds (a state line, a
+  // transcript that wraps, the reasoning text, the tool list, a rotation) can leave the
+  // newest tool line below the header's edge.
+  const headerSizes = new ResizeObserver(headerPinSoon);
+  headerSizes.observe(headerEl);
+  for (const child of headerEl.children) headerSizes.observe(child);
+  window.addEventListener("resize", headerPinSoon);
   let turnStartedAt = null, turnTools = []; // the running turn: when it began, its tool lines
   function clock(ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -406,6 +439,7 @@ header > * { flex-shrink: 0; }
     activityEl.hidden = false;
     toolsToEnd();
     toolsPinSoon();
+    headerPinSoon();
   }
   const FAILED_WORDS = { error: "failed", timeout: "timed out", blocked: "blocked", cancelled: "cancelled" };
   function toolEnd(f) {
