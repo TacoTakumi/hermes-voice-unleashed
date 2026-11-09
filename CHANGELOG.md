@@ -21,6 +21,17 @@ entry names next to its pinned commit.
 - Hermes no longer makes a TTS call of its own for a voice reply when
   `voice.auto_tts` is on or `/voice on` was given. VoiceManager speaks every
   reply, and the plugin dropped the extra audio after it was synthesized.
+- A spoken "yes" or "no" resumes the right reply when Hermes steers or queues
+  what you say during a blocked turn (`busy_input_mode` `steer` or `queue`):
+  the answer after the approval is spoken again instead of being dropped.
+- "New session" and "Session ended" no longer start with the last word of
+  the reply they cut off.
+- An approval prompt spoken on a page that reconnected during a blocked turn
+  no longer leaves a TTS request open on VoiceManager.
+- A failure of the approval check no longer ends the voice session; the word
+  goes to Hermes as an ordinary message.
+- An approval prompt for an empty command is spoken as "Approval needed. Say
+  yes or no."
 
 ## [0.2.0]
 
