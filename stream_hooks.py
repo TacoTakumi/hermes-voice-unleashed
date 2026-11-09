@@ -10,6 +10,11 @@ the session closes a reply only after its text has gone quiet.
 Routing: a hook keeps an event only when the session's platform is this
 plugin's, and finds the page by the session's chat id, read through
 ``get_session_env`` (the hooks run inside the turn's session context).
+Under multiplexed profiles each profile runs its own adapter and the pages
+share the default client id, so the turn's profile picks the adapter first:
+the one whose owner profile matches it (empty and "default" both mean the
+default profile's adapter) and has a session for the chat id. When no adapter
+matches by profile, the newest adapter with a session for the chat id wins.
 """
 
 from __future__ import annotations
@@ -43,11 +48,24 @@ def _route(surface: Optional[str]) -> Optional[tuple[Any, Any]]:
     if platform != PLATFORM or (surface and surface != PLATFORM):
         return None
     chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "")
-    for adapter in reversed(_adapters):
+    profile = _profile_name(get_session_env("HERMES_SESSION_PROFILE", ""))
+    candidates = list(reversed(_adapters))  # newest first
+    for adapter in candidates:
+        if _profile_name(getattr(adapter, "_owner_profile", None)) == profile:
+            session = adapter.session_for(chat_id)
+            if session is not None:
+                return adapter, session
+    for adapter in candidates:
         session = adapter.session_for(chat_id)
         if session is not None:
             return adapter, session
     return None
+
+
+def _profile_name(name: Any) -> Optional[str]:
+    """A profile name as the adapters store it: None for the default profile."""
+    name = (name or "").strip() if isinstance(name, str) else None
+    return None if not name or name == "default" else name
 
 
 def _post(surface: Optional[str], method: str, *args: Any) -> None:
