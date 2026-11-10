@@ -53,6 +53,9 @@ entry names next to its pinned commit.
   and it releases the microphone only then: a release while the notice
   played garbled its end. Until then the microphone is switched off inside
   the page.
+- The spoken notices are "Session ended." and "New session." with a period,
+  so that VoiceManager 0.8.3 speaks them as finished sentences. It adds a
+  comma to a text that ends on a letter.
 - When VoiceManager sends no audio for a reply (its speech engine did not
   load, for example), the page adds a note under the answer: "This was not
   spoken: the voice server sent no audio." Before, the answer was text with

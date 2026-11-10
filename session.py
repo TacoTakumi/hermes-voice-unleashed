@@ -46,8 +46,10 @@ TURN_START_TIMEOUT_S = 5.0
 # How long the session waits for VoiceManager to finish playing the "Session ended"
 # notice before it closes the page anyway.
 SESSION_END_TIMEOUT_S = 10.0
-SESSION_ENDED_NOTICE = "Session ended"
-SESSION_NEW_NOTICE = "New session"
+# Both end with a period: VoiceManager adds a comma to a text that ends on a letter,
+# and the notice would be spoken as a sentence that goes on.
+SESSION_ENDED_NOTICE = "Session ended."
+SESSION_NEW_NOTICE = "New session."
 CLOSED_KEYS_KEPT = 64  # reply keys of ended or cut-off replies an attached session remembers
 # Ends the session expects: the page's socket closed (ConnectionClosed, the replaced
 # close code included) or VoiceManager dropped the connection. They are logged in one

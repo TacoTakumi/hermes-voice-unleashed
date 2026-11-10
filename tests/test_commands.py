@@ -231,7 +231,7 @@ async def test_end_the_session_cancels_the_reply_speaks_the_notice_and_closes_th
     async with rig(plugin, refusal) as r:
         message_id, rid = await _playing_reply(r, refusal)
         await _heard(r, "End the session.", refusal)
-        notice_rid = await _notice_played(r, "Session ended")
+        notice_rid = await _notice_played(r, "Session ended.")
         await wait_for(lambda: r.page.closed)
         assert notice_rid != rid
         assert r.conn.json_frames("tts_cancel")[0]["request_id"] == rid  # the reply was cancelled
@@ -243,8 +243,8 @@ async def test_end_the_session_cancels_the_reply_speaks_the_notice_and_closes_th
         close = r.order[-1]
         assert close[0] == "closed"
         # The notice plays out before the page is told the session ended and is closed.
-        assert _sequence(r.order, ("tts", "Session ended"), ("page", "audio_end"), ("page", "session_end"),
-                         close) == [("tts", "Session ended"), ("page", "audio_end"), ("page", "session_end"), close]
+        assert _sequence(r.order, ("tts", "Session ended."), ("page", "audio_end"), ("page", "session_end"),
+                         close) == [("tts", "Session ended."), ("page", "audio_end"), ("page", "session_end"), close]
         fire(r.hooks.on_stream_delta, message_id, delta="there was a dragon", kind="text", turn_id="t1",
              iteration=1)
         await asyncio.sleep(0.1)
@@ -256,7 +256,7 @@ async def test_the_page_is_closed_when_the_notice_does_not_end_in_time(plugin, m
     monkeypatch.setattr(plugin.session, "SESSION_END_TIMEOUT_S", 0.2)
     async with rig(plugin) as r:
         await _heard(r, "end session")
-        rid = await wait_for(lambda: _request_saying(r, "Session ended"))
+        rid = await wait_for(lambda: _request_saying(r, "Session ended."))
         await wait_for(lambda: any(f["request_id"] == rid and f["done"] for f in r.tts()))
         # No audio_end came: the page is told nothing until the wait ran out.
         assert r.page.of("session_end") == []
@@ -264,8 +264,8 @@ async def test_the_page_is_closed_when_the_notice_does_not_end_in_time(plugin, m
         await wait_for(lambda: r.page.closed)
         assert r.messages == []
         assert ("page", "audio_end") not in r.order
-        assert _sequence(r.order, ("tts", "Session ended"), ("page", "session_end")) == [
-            ("tts", "Session ended"), ("page", "session_end")]
+        assert _sequence(r.order, ("tts", "Session ended."), ("page", "session_end")) == [
+            ("tts", "Session ended."), ("page", "session_end")]
         assert r.order[-2] == ("page", "session_end")
         assert r.order[-1][0] == "closed"
 
@@ -275,7 +275,7 @@ async def test_the_end_of_another_notice_does_not_end_the_wait_for_the_session_e
         await r.session.notice("An earlier notice")
         earlier = await wait_for(lambda: _request_saying(r, "An earlier notice"))
         await _heard(r, "end session")
-        ended = await wait_for(lambda: _request_saying(r, "Session ended"))
+        ended = await wait_for(lambda: _request_saying(r, "Session ended."))
         await wait_for(lambda: any(f["request_id"] == ended and f["done"] for f in r.tts()))
         await r.conn.send({"type": "audio_end", "request_id": earlier, "reason": "completed"})
         await wait_for(lambda: r.page.of("audio_end"))
@@ -292,7 +292,7 @@ async def test_end_session_now_please_is_an_ordinary_utterance(plugin):
         assert r.messages[0].text == "end session now please"
         await asyncio.sleep(0.1)
         assert r.page.of("session_end") == []
-        assert "Session ended" not in r.tts_text()
+        assert "Session ended." not in r.tts_text()
         assert not r.page.closed
 
 
@@ -303,7 +303,7 @@ def _page_kinds(page):
 async def test_new_session_speaks_the_notice_then_asks_the_adapter_and_keeps_the_page_open(plugin):
     async with rig(plugin) as r:
         await _heard(r, "New session!")
-        await _notice_played(r, "New session")
+        await _notice_played(r, "New session.")
         await wait_for(lambda: r.page.of("session_new"))
         await wait_for(lambda: len(r.page.of("history")) == 2)
         await asyncio.sleep(0.1)
@@ -312,8 +312,8 @@ async def test_new_session_speaks_the_notice_then_asks_the_adapter_and_keeps_the
         assert r.page.of("session_end") == []
         # The notice first, then the adapter is asked for the new session: it answers
         # with the session_new frame and the history of the new (here unknown) session.
-        assert _sequence(r.order, ("tts", "New session"), ("callback", "new_session"),
-                         ("page", "session_new")) == [("tts", "New session"), ("callback", "new_session")]
+        assert _sequence(r.order, ("tts", "New session."), ("callback", "new_session"),
+                         ("page", "session_new")) == [("tts", "New session."), ("callback", "new_session")]
         assert r.page.of("session_new") == [{"type": "session_new", "session_id": None}]
         assert r.page.of("history")[-1] == {"type": "history", "session_id": None, "lines": []}
         kinds = _page_kinds(r.page)
@@ -333,14 +333,14 @@ async def test_new_session_without_a_callback_sends_the_session_new_frame_itself
     async with rig(plugin) as r:
         r.session._on_new_session = None
         await _heard(r, "New session!")
-        await _notice_played(r, "New session")
+        await _notice_played(r, "New session.")
         await wait_for(lambda: r.page.of("session_new"))
         await asyncio.sleep(0.1)
         assert r.messages == []
         assert r.page.of("session_new") == [{"type": "session_new"}]
         assert len(r.page.of("history")) == 1  # only the one from the connect
-        assert _sequence(r.order, ("tts", "New session"), ("callback", "new_session"),
-                         ("page", "session_new")) == [("tts", "New session"), ("page", "session_new")]
+        assert _sequence(r.order, ("tts", "New session."), ("callback", "new_session"),
+                         ("page", "session_new")) == [("tts", "New session."), ("page", "session_new")]
         assert not r.page.closed
         await _heard(r, "tell me a joke")
         await wait_for(lambda: r.messages)
@@ -352,15 +352,15 @@ async def test_new_session_cancels_the_playing_reply_before_the_notice(plugin, r
     async with rig(plugin, refusal) as r:
         message_id, rid = await _playing_reply(r, refusal)
         await _heard(r, "start a new session", refusal)
-        notice_rid = await _notice_played(r, "New session")
+        notice_rid = await _notice_played(r, "New session.")
         await wait_for(lambda: r.page.of("session_new"))
         assert notice_rid != rid
         assert r.conn.json_frames("tts_cancel")[0]["request_id"] == rid  # the reply was cancelled
         assert r.page.of("clear")
         assert len(r.messages) == 1
         assert r.messages[0].text == "tell me a story"
-        assert _sequence(r.order, ("tts", "New session"), ("callback", "new_session")) == [
-            ("tts", "New session"), ("callback", "new_session")]
+        assert _sequence(r.order, ("tts", "New session."), ("callback", "new_session")) == [
+            ("tts", "New session."), ("callback", "new_session")]
         fire(r.hooks.on_stream_delta, message_id, delta="there was a dragon", kind="text", turn_id="t1",
              iteration=1)
         await asyncio.sleep(0.1)
@@ -382,10 +382,10 @@ async def test_the_notice_does_not_speak_the_word_the_cancelled_reply_held(plugi
         await wait_for(lambda: "Standing " in r.tts_text())
         assert r.session._unsent == "by"
         await _heard(r, "new session")
-        notice_rid = await _notice_played(r, "New session")
+        notice_rid = await _notice_played(r, "New session.")
         await wait_for(lambda: r.page.of("session_new"))
         assert notice_rid != rid
-        assert "".join(f["text"] for f in r.tts() if f["request_id"] == notice_rid) == "New session"
+        assert "".join(f["text"] for f in r.tts() if f["request_id"] == notice_rid) == "New session."
         assert all("by" not in f["text"] for f in r.tts())
 
 
@@ -394,7 +394,7 @@ async def test_new_session_in_classic_mode_ends_its_turn_so_the_next_segment_sta
     async with rig(plugin, refusal) as r:
         await _listening(r, 1)
         await _heard(r, "start a new session", refusal)
-        await _notice_played(r, "New session")
+        await _notice_played(r, "New session.")
         await wait_for(lambda: r.page.of("session_new"))
         # The command's turn is over: the session asks for the next listening turn and
         # keeps nothing of the command's words.
@@ -417,5 +417,5 @@ async def test_new_session_please_is_an_ordinary_utterance(plugin):
         assert r.messages[0].text == "new session please"
         await asyncio.sleep(0.1)
         assert r.page.of("session_new") == []
-        assert "New session" not in r.tts_text()
+        assert "New session." not in r.tts_text()
         assert not r.page.closed
