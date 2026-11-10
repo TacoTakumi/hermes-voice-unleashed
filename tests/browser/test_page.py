@@ -2173,3 +2173,19 @@ async def test_the_title_color_follows_who_is_speaking(site):
         await page.evaluate("who => { document.body.dataset.who = who; }", who)
         await page.wait_for_function(
             "c => getComputedStyle(document.getElementById('state')).color === c", arg=expected, timeout=2000)
+
+
+async def test_the_title_font_is_eb_garamond_italic_from_inside_the_page(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await page.evaluate("document.fonts.load('italic 400 44px \"EB Garamond\"')")
+    assert await page.evaluate("document.fonts.check('italic 400 44px \"EB Garamond\"')")
+    # check() is also true for a family the page never declared, so look for the face itself.
+    assert await page.evaluate(
+        "[...document.fonts].some(f => f.family.replace(/\"/g, '') === 'EB Garamond' && f.status === 'loaded')")
+    family, style, weight = await _style(page, "#state", "fontFamily", "fontStyle", "fontWeight")
+    assert family.startswith('"EB Garamond"') and style == "italic" and weight == "400"
+    html = await page.content()
+    assert not re.search(r"""(?:src|href)\s*=\s*["']?https?://""", html)
+    assert all(urlsplit(url).netloc == urlsplit(site.url).netloc for url in site.http_requests
+               if urlsplit(url).scheme in ("http", "https")), site.http_requests
