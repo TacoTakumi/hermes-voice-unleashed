@@ -245,6 +245,53 @@ async def test_an_utterance_submits_one_prompt_with_the_runtime_id(page, voice):
                         "params": {"session_id": "rt-1", "text": "what is the time", "voice_turn": True}}]
 
 
+REFRESH = {"stored": "st-1", "options": {"refreshInPlace": True}}
+
+
+async def test_an_utterance_on_an_idle_chat_refreshes_the_transcript_once(page, voice):
+    """The app shows a sent message only on its own send path, so the chat is told to
+    read the stored turn again; without it the utterance shows when the reply ends."""
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await conn.send({"type": "utterance", "text": "what is the time"})
+    await wait_for(lambda: page.evaluate("window.submits().length"))
+    assert await page.evaluate("window.opens") == []  # not before the gateway has stored it
+    await wait_for(lambda: page.evaluate("window.opens.length"))
+    await _quiet(0.5)
+    assert await page.evaluate("window.opens") == [REFRESH]
+
+
+async def test_a_redirected_utterance_does_not_refresh_the_transcript(page, voice):
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await page.evaluate("window.holdSubmits = true")
+    await conn.send({"type": "utterance", "text": "and tomorrow"})
+    await wait_for(lambda: page.evaluate("window.submits().length"))
+    await page.evaluate("window.answerSubmit({ status: 'redirected' })")
+    await _quiet(0.6)
+    assert await page.evaluate("window.opens") == []
+
+
+async def test_an_utterance_cut_by_the_next_one_refreshes_the_transcript_once(page, voice):
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await conn.send({"type": "utterance", "text": "what is the"})
+    await conn.send({"type": "utterance", "text": "what is the time"})
+    await wait_for(lambda: page.evaluate("window.submits().length == 2"))
+    await _quiet(0.6)
+    assert await page.evaluate("window.opens") == [REFRESH]
+
+
+async def test_a_chat_left_before_the_refresh_does_not_refresh_the_transcript(page, voice):
+    await _boot(page, voice)
+    conn = await _on(page, voice)
+    await conn.send({"type": "utterance", "text": "what is the time"})
+    await wait_for(lambda: page.evaluate("window.submits().length"))
+    await page.evaluate("window.host.state.focusedSessionId.set('rt-2')")
+    await _quiet(0.6)
+    assert await page.evaluate("window.opens") == []
+
+
 async def test_reply_deltas_send_only_the_say_text_with_one_reply_key(page, voice):
     await _boot(page, voice)
     conn = await _on(page, voice)

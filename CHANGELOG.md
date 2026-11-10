@@ -44,6 +44,11 @@ its server address and token once more.
 
 ### Fixed
 
+- In a Desktop or Webapp voice chat, what you say shows in the chat before
+  Hermes starts to think. It showed only when the reply was complete. The
+  Desktop half now has the chat read the turn again a moment after Hermes
+  takes the utterance. Words you say over a running reply still show with
+  that reply.
 - `plugin.yaml` declares every hook the plugin registers. `on_stream_end`,
   `pre_llm_call`, `pre_tool_call` and `post_tool_call` were missing, which
   fails the catalog's check that declared capabilities match the code.

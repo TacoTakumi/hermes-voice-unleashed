@@ -36,6 +36,7 @@
     }
 
     window.requests = []
+    window.opens = [] // host.openSession calls
     window.notices = []
     // prompt.submit answers 'streaming' at once, unless the test holds the
     // answers: then each waits until window.answerSubmit(result) settles it.
@@ -62,6 +63,7 @@
         if (method === 'prompt.submit' && window.holdSubmits) return new Promise(resolve => heldSubmits.push(resolve))
         return { status: 'streaming' }
       },
+      openSession: async (stored, options) => { window.opens.push({ stored, options }) },
       notify: notice => window.notices.push(notice),
       notifyError: notice => window.notices.push(notice),
       onEvent

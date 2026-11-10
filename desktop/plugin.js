@@ -384,6 +384,7 @@ const ID = 'voice-unleashed'
 const DEFAULTS = { address: '', token: '' }
 const MAX_ATTACH_ID = 256 // the voice server refuses longer attach ids
 const REPLACED_CLOSE = 4001 // another client took this chat's voice over
+const HEARD_REFRESH_MS = 200 // from an accepted utterance to the transcript refresh that shows it
 const KEYS_KEPT = 64 // finished and cut-off reply keys a session remembers
 const SEEN_KEPT = 64 // segments whose streamed length a session remembers
 
@@ -570,14 +571,32 @@ function createLiveVoice(ctx, prefs) {
     host.request('prompt.submit', { session_id: s.runtime, text, voice_turn: true }).then(
       result => {
         const status = result && result.status
-        if (turn && live === s && s.cuts === cuts && (status === 'redirected' || status === 'steered')) {
-          resume(s, turn, cuts)
+        if (status === 'redirected' || status === 'steered') {
+          if (turn && live === s && s.cuts === cuts) resume(s, turn, cuts)
+          return
         }
+        showInChat(s, cuts)
       },
       err => {
         if (live === s) host.notify({ kind: 'error', message: `Voice: what you said did not reach the chat: ${errorText(err)}` })
       }
     )
+  }
+
+  // The utterance started a turn of its own. The app puts a sent message into
+  // the chat only on its own send path, so one sent with prompt.submit would
+  // show when the reply ends. Have the chat read the stored turn again, once
+  // the gateway has stored the message and before the model's first output: a
+  // refresh at once finds nothing, and one that lands on the reasoning stream
+  // drops that turn's reasoning row. Not when a newer utterance cut this one,
+  // voice went off, or the chat is no longer the one in front.
+  function showInChat(s, cuts) {
+    setTimeout(() => {
+      if (live !== s || s.cuts !== cuts || host.state.focusedSessionId.get() !== s.runtime) return
+      const stored = host.state.focusedStoredSessionId.get()
+      if (!stored || typeof host.openSession !== 'function') return
+      Promise.resolve(host.openSession(stored, { refreshInPlace: true })).catch(() => {})
+    }, HEARD_REFRESH_MS)
   }
 
   // Hermes took the utterance into the cut turn: the rest of that turn answers

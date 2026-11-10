@@ -231,7 +231,8 @@ copies into its desktop plugins on load. It ships switched off.
 4. Use the voice toggle in the composer of a chat.
 
 With voice on, the microphone and the speaker are on the machine that runs
-the UI. Each finished utterance goes into the open chat as your message. The
+the UI. Each finished utterance goes into the open chat as your message, and
+shows there before Hermes starts to think. The
 reply prints as usual, and a short summary of it is spoken: the plugin asks
 the model to start each reply with a `<say>...</say>` block, and that block
 is what you hear. A message without one is not spoken. Replies to typed
