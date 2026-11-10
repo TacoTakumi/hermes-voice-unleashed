@@ -231,10 +231,14 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
 ## Things to know
 
 - The plugin registers Hermes hooks (`on_stream_delta`, `on_stream_end`,
-  `on_session_end`) to read reply text as it is written, and `pre_tool_call` and `post_tool_call` to
-  show tool calls on the page. A registered stream
+  `on_session_end`) to read reply text as it is written, and `pre_tool_call`
+  and `post_tool_call` to show tool calls on the page. A registered stream
   hook makes Hermes use streaming requests for every conversation, not only
   voice ones. Replies on other platforms do not change.
+- It also registers `pre_llm_call`. For a Desktop or Webapp chat that has
+  voice on, and only then, the hook adds one instruction to the turn: start
+  the reply with a short spoken summary inside `<say>...</say>`. That summary
+  is what is read out. No other conversation gets the instruction.
 - Hermes treats `pre_tool_call` as a guard: when a plugin's callback raises,
   or Hermes cannot run it within `plugins.hook_callback_timeout` (30 s by
   default), it blocks that tool call. The hook runs for every conversation in

@@ -14,7 +14,11 @@ description: >
 author: TacoTakumi
 provides_hooks:
   - on_stream_delta
+  - on_stream_end
   - on_session_end
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
 requires_env:
   - name: VOICE_UNLEASHED_TOKEN
     description: "Access token for the voice page and its WebSocket (put it in the page URL as ?token=...)"

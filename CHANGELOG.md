@@ -37,6 +37,13 @@ new conversation; pick an old one from the session list to go on with it.
 The Desktop half has a new plugin id, so turn its switch on again and enter
 its server address and token once more.
 
+### Fixed
+
+- `plugin.yaml` declares every hook the plugin registers. `on_stream_end`,
+  `pre_llm_call`, `pre_tool_call` and `post_tool_call` were missing, which
+  fails the catalog's check that declared capabilities match the code.
+- README: what the `pre_llm_call` hook adds to a turn, and when.
+
 ## [0.2.1]
 
 ### Changed
