@@ -6,6 +6,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.3.2]
+
+### Changed
+
+- README: HTTPS is not required for a device on the network. The section
+  "HTTPS for your device" has a part "Without HTTPS" on the browser
+  exception (Chrome's `unsafely-treat-insecure-origin-as-secure` flag), the
+  listen address it needs and what it costs in security.
+
 ## [0.3.1]
 
 ### Added

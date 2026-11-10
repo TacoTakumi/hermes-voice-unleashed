@@ -36,9 +36,11 @@ makes voice the way you run the agent:
   device that plays the reply on its own loudspeaker, run it with
   `VM_STT_ENGINE=audiocpp` and `VM_TURN_ENGINE=tyger`.
   `VM_TYGER_PREFILTER=voxlock` helps against the echo of that loudspeaker.
-- HTTPS in front of the page when the device is not the machine Hermes runs
-  on. Browsers allow the microphone only on `https://` pages or on
-  `localhost`.
+- A page the browser treats as secure, when the device is not the machine
+  Hermes runs on. Browsers allow the microphone only on `https://` pages, on
+  `localhost`, or on an address you mark as secure in the browser. So put
+  HTTPS in front of the page, or add a browser exception; see "HTTPS for
+  your device".
 
 ## Install
 
@@ -176,11 +178,31 @@ port. Two ways that work:
 
 The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
 
+### Without HTTPS
+
+HTTPS is not required. A browser can be told to treat one plain `http://`
+address as secure, and then it gives that page the microphone:
+
+1. Make the page reachable from the device: set `VOICE_UNLEASHED_HOST=0.0.0.0`
+   (or the machine's LAN address) and restart the gateway.
+2. In Chrome on the device, desktop or Android, open
+   `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, enter the
+   page's exact origin with scheme, host and port, for example
+   `http://192.168.1.20:8765`, enable the flag and relaunch the browser.
+3. Open `http://192.168.1.20:8765/?token=...`.
+
+Other browsers have their own setting for this, and some have none; use
+HTTPS there. Without HTTPS the access token and the audio cross the network
+unencrypted, so do this only on a network you trust.
+
 ## Open the page
 
 ```
 https://<your-host>/?token=<VOICE_UNLEASHED_TOKEN>
 ```
+
+With a browser exception instead of HTTPS, the address is
+`http://<host>:8765/?token=<VOICE_UNLEASHED_TOKEN>`.
 
 Tap "New session" or a session in the list, and allow the microphone. Then
 talk. The page keeps the screen on.
