@@ -154,6 +154,7 @@ class VoiceSession:
                  approval_words: Optional[Callable[[], Iterable[str]]] = None,
                  approval_pending: Optional[Callable[[], Awaitable[bool]]] = None,
                  clarify_pending: Optional[Callable[[], Awaitable[bool]]] = None,
+                 clarify_answer: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
                  on_new_session: Optional[Callable[[], Awaitable[None]]] = None) -> None:
         self.page = page
         self.client = client
@@ -169,6 +170,9 @@ class VoiceSession:
         self._approval_pending = approval_pending
         # Whether the chat waits for the answer to a question the model asked.
         self._clarify_pending = clarify_pending
+        # The form in which a spoken answer to that question goes to the gateway, when
+        # it is not the text as heard (a spoken number, a choice's name); else None.
+        self._clarify_answer = clarify_answer
         self.attached = attached  # the reply's text comes from the client's say frames
         self.reply_key: Optional[str] = None  # attached: the client's key for the running reply
         self._closed_keys: dict[str, None] = {}  # attached: keys that take no more text, oldest first
@@ -538,10 +542,13 @@ class VoiceSession:
             # as for an approval word. The same race applies: a question that times out
             # between this check and the gateway's makes the utterance a new turn, whose
             # text is then shown but not spoken.
+            # The page shows what was said; the gateway gets the answer in the form it
+            # takes as a selection when the user said a choice's number or name.
+            answer = await self._question_answer(text)
             self._reopen_reply()
             await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
             if self._on_utterance is not None:
-                await self._on_utterance(text, uuid.uuid4().hex)
+                await self._on_utterance(answer, uuid.uuid4().hex)
             return
         self._open_reply()
         await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
@@ -575,6 +582,16 @@ class VoiceSession:
             # As for the approval check: a failure must not end the voice session.
             logger.warning("voice page %s: question check failed", self.client_id, exc_info=True)
             return False
+
+    async def _question_answer(self, text: str) -> str:
+        """The text to send the gateway for the spoken answer ``text``."""
+        if self._clarify_answer is None:
+            return text
+        try:
+            return await self._clarify_answer(text) or text
+        except Exception:
+            logger.warning("voice page %s: answer mapping failed", self.client_id, exc_info=True)
+            return text
 
     async def speak_prompt(self, sentence: str, show: bool = True) -> None:
         """Speak a prompt the running turn waits on, an approval prompt or a question

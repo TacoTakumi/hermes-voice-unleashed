@@ -44,7 +44,9 @@ entry names next to its pinned commit.
   call.
 - A question the model asks before it goes on (the `clarify` tool) is spoken,
   with its choices and their numbers. Before, it was screen text only. The
-  reply after your spoken answer is spoken too; it was dropped.
+  reply after your spoken answer is spoken too; it was dropped. A spoken
+  number ("four", "number four", "the fourth one") or a spoken choice name
+  selects that choice; anything else is a free answer.
 
 ## [0.2.0]
 

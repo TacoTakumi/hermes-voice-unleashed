@@ -150,3 +150,53 @@ async def test_a_question_for_a_chat_with_no_page_is_not_spoken(rig, clarify):
     assert rig.tts_text() == spoken
     assert await rig.session._clarify_pending() is False
 
+
+COLOURS = ["Red (Recommended)", "Blue", "Green", "Black"]
+
+
+@pytest.mark.parametrize("said, sent", [
+    ("Four.", "4"), ("four", "4"), ("4", "4"), ("Number four.", "4"), ("Option 2", "2"),
+    ("choice three please", "3"), ("The fourth one.", "4"), ("the first", "1"), ("Second option", "2"),
+    ("For.", "4"), ("To", "2"), ("One", "1"),
+    ("red", "Red (Recommended)"), ("Red.", "Red (Recommended)"), ("BLACK!", "Black"),
+])
+def test_a_spoken_number_or_choice_name_becomes_a_selection(plugin, said, sent):
+    assert plugin.adapter.spoken_choice(said, COLOURS) == sent
+
+
+@pytest.mark.parametrize("said", [
+    "Five.", "zero", "number nine", "the dark one", "I like blue best", "for the dark one",
+    "four or maybe two", "", "...",
+])
+def test_any_other_answer_is_left_as_it_was_heard(plugin, said):
+    assert plugin.adapter.spoken_choice(said, COLOURS) is None
+
+
+def test_a_choice_name_wins_over_a_number_and_an_open_question_maps_nothing(plugin):
+    assert plugin.adapter.spoken_choice("Two.", ["Two", "One"]) == "Two"
+    assert plugin.adapter.spoken_choice("Four.", None) is None
+    assert plugin.adapter.spoken_choice("Four.", []) is None
+
+
+async def test_a_spoken_number_reaches_the_gateway_as_the_digit(rig, clarify):
+    reply_id = await _reply_in_progress(rig)
+    _, key = clarify("Which colour?", COLOURS)
+    await rig.adapter.send_clarify("voice", "Which colour?", COLOURS, "q1", key)
+    await wait_for(lambda: rig.tts_text().endswith("Say the number or your answer."))
+    await _heard(rig, "Four.")
+    assert rig.events[-1].text == "4"  # the gateway resolves the digit to the choice
+    assert rig.page.of("utterance")[-1]["text"] == "Four."  # the page shows what was said
+    assert rig.session.reply_id == reply_id and rig.session.reply_open
+
+
+async def test_a_free_answer_and_an_answer_to_several_choices_go_through_as_heard(rig, clarify):
+    await _reply_in_progress(rig)
+    _, key = clarify("Which colour?", COLOURS)
+    await rig.adapter.send_clarify("voice", "Which colour?", COLOURS, "q1", key)
+    await _heard(rig, "The dark one.")
+    assert rig.events[-1].text == "The dark one."
+    clarify_gateway.clear_session(key)
+    clarify_gateway.register("q2", key, "Which colours?", COLOURS, multi_select=True)
+    await _heard(rig, "Four.")
+    assert rig.events[-1].text == "Four."
+

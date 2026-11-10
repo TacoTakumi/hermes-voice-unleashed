@@ -179,6 +179,71 @@ def clarify_sentence(question: str, choices: Optional[list] = None) -> str:
     return " ".join(parts)
 
 
+_CARDINALS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve")
+_ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+             "eleventh", "twelfth")
+# What a speech recognizer writes for a number said on its own. Used only for a
+# one-word answer, where the word cannot be part of a sentence.
+_SOUND_ALIKES = {"won": 1, "to": 2, "too": 2, "for": 4, "fore": 4, "ate": 8}
+_BEFORE_A_NUMBER = ("number", "option", "choice")
+_AFTER_AN_ORDINAL = ("one", "option", "choice")
+
+
+def _spoken_words(text: str) -> list[str]:
+    """The lower-case words of ``text`` without punctuation or a note in brackets."""
+    return re.findall(r"[a-z0-9']+", re.sub(r"\([^)]*\)", " ", str(text)).lower())
+
+
+def _spoken_number(words: list[str]) -> Optional[int]:
+    """The choice number ``words`` name, said as "four", "number four", "option 4",
+    "the fourth" or "the fourth one"; None when they say anything else."""
+    if words and words[-1] == "please":
+        words = words[:-1]
+    if len(words) == 2 and words[0] in _BEFORE_A_NUMBER:
+        words = words[1:]
+        sound_alikes = {}
+    else:
+        sound_alikes = _SOUND_ALIKES
+    if len(words) == 1:
+        word = words[0]
+        if word.isdigit():
+            return int(word)
+        if word in _CARDINALS:
+            return _CARDINALS.index(word) + 1
+        if word in _ORDINALS:
+            return _ORDINALS.index(word) + 1
+        return sound_alikes.get(word)
+    if words[:1] == ["the"]:
+        words = words[1:]
+    if len(words) == 2 and words[1] in _AFTER_AN_ORDINAL:
+        words = words[:1]
+    if len(words) == 1 and words[0] in _ORDINALS:
+        return _ORDINALS.index(words[0]) + 1
+    return None
+
+
+def spoken_choice(text: str, choices: Optional[list]) -> Optional[str]:
+    """What to send the gateway for a spoken answer to a question with ``choices``, so
+    that it counts as a selection: the exact choice text when the user said a choice's
+    name, the digit when they said its number. None when the answer is neither; it
+    then goes through as it was heard, as a free answer.
+
+    The gateway matches a typed digit or the exact choice text. A speech recognizer
+    writes "Four." or "Red.", which matches neither."""
+    if not choices:
+        return None
+    words = _spoken_words(text)
+    if not words:
+        return None
+    for choice in choices:  # a name wins over a number: a choice may be called "Two"
+        if _spoken_words(choice) == words:
+            return str(choice).strip()
+    number = _spoken_number(words)
+    if number is not None and 1 <= number <= len(choices):
+        return str(number)
+    return None
+
+
 def approval_sentence(command: str) -> str:
     """The spoken form of an approval prompt: the command, cut short when long,
     and how to answer.
@@ -340,12 +405,22 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             key = self._source_session_key(self._voice_source(client_id))
             return clarify_gateway.get_pending_for_session(key, include_choice_prompts=True) is not None
 
+        async def clarify_answer(text: str) -> Optional[str]:
+            # A spoken number or choice name becomes the form the gateway takes as a
+            # selection. A question that takes several choices keeps the text as heard.
+            key = self._source_session_key(self._voice_source(client_id))
+            entry = clarify_gateway.get_pending_for_session(key, include_choice_prompts=True)
+            if entry is None or entry.multi_select:
+                return None
+            return spoken_choice(text, entry.choices)
+
         async def on_new_session() -> None:
             await self._new_session_by_voice(client_id)
 
         return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
                             on_utterance=on_utterance, approval_words=approval_words,
                             approval_pending=approval_pending, clarify_pending=clarify_pending,
+                            clarify_answer=clarify_answer,
                             on_new_session=on_new_session)
 
     async def _new_session_by_voice(self, client_id: str) -> None:
