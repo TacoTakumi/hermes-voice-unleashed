@@ -714,6 +714,11 @@ header > * { flex-shrink: 0; }
       case "clear":
         replyClear(f.request_id || null);
         break;
+      case "speech_failed":
+        // The server got no audio for text it sent to be spoken. The text is on the
+        // page; say why nothing was heard.
+        addTurn("note", "This was not spoken: the voice server sent no audio.");
+        break;
       case "replaced":
         handOver();
         break;

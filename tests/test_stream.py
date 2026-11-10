@@ -488,3 +488,54 @@ async def test_an_event_of_another_reply_does_not_start_the_turn(rig):
     assert not session.turn_running
     assert page.of("reply_delta") == [] and page.of("tool_start") == []
 
+
+async def _reply_request(hooks, conn):
+    """A reply has text at the TTS: returns its request id."""
+    fire(hooks.on_stream_delta, delta="Basic bread uses four ingredients. ", kind="text", turn_id="t1",
+         iteration=1, surface=PLATFORM)
+    frames = await wait_for(lambda: tts_frames(conn))
+    return frames[0]["request_id"]
+
+
+async def test_a_reply_that_ends_with_no_audio_tells_the_page_that_speech_failed(rig, caplog):
+    hooks, conn, page = rig
+    rid = await _reply_request(hooks, conn)
+    with caplog.at_level("WARNING"):
+        await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+        await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+        await wait_for(lambda: page.of("speech_failed"))
+    assert page.of("speech_failed") == [{"type": "speech_failed", "request_id": rid}]
+    assert any("no audio came" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_reply_with_audio_reports_no_audio_failure(rig):
+    hooks, conn, page = rig
+    rid = await _reply_request(hooks, conn)
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x11\x00" * 240)
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    await wait_for(lambda: page.of("audio_end"))
+    await asyncio.sleep(0.1)
+    assert page.of("speech_failed") == []
+
+
+async def test_a_cancelled_reply_reports_no_audio_failure(rig):
+    hooks, conn, page = rig
+    rid = await _reply_request(hooks, conn)
+    await _session(hooks).cancel_reply("test")
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "cancelled"})
+    await wait_for(lambda: page.of("audio_end"))
+    await asyncio.sleep(0.1)
+    assert page.of("speech_failed") == []
+
+
+async def test_a_notice_that_ends_with_no_audio_tells_the_page_that_speech_failed(rig):
+    hooks, conn, page = rig
+    session = _session(hooks)
+    await session.cancel_reply("test")
+    await session.notice("New session")
+    rid = (await wait_for(lambda: tts_frames(conn)))[-1]["request_id"]
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    await wait_for(lambda: page.of("speech_failed"))
+    assert page.of("speech_failed")[-1]["request_id"] == rid
+

@@ -189,6 +189,7 @@ class VoiceSession:
         self._finishing: Optional[asyncio.Task] = None
         self._flushing: Optional[asyncio.Task] = None  # sends the held text after a model response
         self._dropped: set[str] = set()  # request ids whose audio no longer goes to the page
+        self._audio_bytes: dict[str, int] = {}  # audio received per TTS request, until its audio end
         self._cleared_turn = False  # classic: the speaker was cleared for this turn's words
         self._turn_ended_at: Optional[float] = None  # loop time of the last dispatch, for the log
         # The TTS requests of notices spoken outside a reply, by request id, until
@@ -459,6 +460,7 @@ class VoiceSession:
                     logger.info("voice page %s: reply audio %.0f ms after the end of turn",
                                 self.client_id, (asyncio.get_running_loop().time() - self._turn_ended_at) * 1000)
                     self._turn_ended_at = None
+                self._audio_bytes[event[2]] = self._audio_bytes.get(event[2], 0) + len(event[1])
                 if event[2] not in self._dropped:
                     with contextlib.suppress(Exception):
                         await self.page.send(event[1])
@@ -475,8 +477,19 @@ class VoiceSession:
 
     async def _on_audio_end(self, frame: dict) -> None:
         rid = frame.get("request_id")
+        cancelled = rid in self._dropped
         self._dropped.discard(rid)
+        silent = not self._audio_bytes.pop(rid, 0)
         await self.send_page({"type": "audio_end", "request_id": rid, "reason": frame.get("reason")})
+        ours = rid in self._notice_requests or (
+            self.reply_request is not None and rid == self.reply_request.request_id)
+        if ours and silent and not cancelled and not self.attached:
+            # A request is opened only for text to speak, so an end with no audio means
+            # the speech failed (the engine did not load, for one). VoiceManager ends
+            # such a stream like any other, so the missing audio is the only sign.
+            logger.warning("voice page %s: no audio came for TTS request %s (%s)",
+                           self.client_id, rid, frame.get("reason"))
+            await self.send_page({"type": "speech_failed", "request_id": rid})
         if rid in self._notice_requests:
             ended = self._notice_requests.pop(rid)
             if ended is not None:

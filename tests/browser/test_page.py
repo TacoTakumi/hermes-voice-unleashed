@@ -1340,6 +1340,18 @@ async def test_a_reply_frame_with_nothing_streamed_ends_the_turn_on_the_page(sta
     assert "The gateway is busy, try again later." in texts
 
 
+async def test_a_speech_failed_frame_adds_a_note_under_the_answer(stack):
+    """The server got no audio for the reply: the page says why nothing was heard."""
+    _, page, _, _ = stack
+    _, session, reply_id = await _thinking_after_an_utterance(stack)
+    await session.send_page({"type": "reply_delta", "text": "Flour, water, yeast and salt."})
+    await session.send_page({"type": "speech_failed", "request_id": "r1"})
+    await page.wait_for_selector("#log .turn.note")
+    assert "not spoken" in await page.text_content("#log .turn.note")
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert texts == ["Flour, water, yeast and salt."]
+
+
 async def test_a_reply_frame_marked_as_sent_during_the_turn_does_not_end_it(stack):
     """The gateway sends a status line, a provider fallback for example, before the
     answer's first text. The turn still runs: the page stays busy, the tool lines stay
