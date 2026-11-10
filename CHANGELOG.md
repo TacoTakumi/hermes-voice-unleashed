@@ -47,6 +47,9 @@ entry names next to its pinned commit.
   reply after your spoken answer is spoken too; it was dropped. A spoken
   number ("four", "number four", "the fourth one") or a spoken choice name
   selects that choice; anything else is a free answer.
+- The spoken "Session ended" is no longer cut at its end on a phone. The page
+  left as soon as its audio clock passed the end of the notice; the sound
+  reaches the speaker later. It now waits until the notice has been heard.
 
 ## [0.2.0]
 

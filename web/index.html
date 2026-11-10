@@ -222,6 +222,7 @@ header > * { flex-shrink: 0; }
   let lastError = null;
   let ending = false; // the session ended: the notice plays out, then the chooser
   let endDrain = 0; // the timer of the wait for that notice, so a stop can cancel it
+  let audioUntil = 0; // when the last queued reply audio has left the speaker, in performance.now() ms
   // Mic samples sent on this connection, and when the last frame of them was captured.
   let micSent = 0, micAnchor = null;
   let captureLatency = 0; // ms from the mic to a frame reaching the page, read once per mic start
@@ -542,6 +543,7 @@ header > * { flex-shrink: 0; }
       heard(reply);
     }
     reply.next = at + audio.duration;
+    audioUntil = speakerPerf(reply.next);
     reply.samples += pcm.length;
     reply.sources.push(src);
     reply.chunks.push({ start: at, length: pcm.length });
@@ -594,6 +596,7 @@ header > * { flex-shrink: 0; }
     let played = 0;
     for (const c of r.chunks) played += Math.min(c.length, Math.max(0, Math.round((now - c.start) * r.rate)));
     for (const s of r.sources) { try { s.onended = null; s.stop(); } catch (e) { /* already stopped */ } }
+    audioUntil = performance.now();  // nothing of it is queued any more
     // The scheduled end of the last chunk: replyFinish clamps it to now while audio still plays.
     replyFinish(r, played, r.next);
   }
@@ -958,11 +961,15 @@ header > * { flex-shrink: 0; }
   }
   // The session ended by voice. The mic goes at once and the socket no longer counts:
   // the server closes it next, and that close must not reconnect. The reply context
-  // stays up until the notice queued on it has played (capped, should the clock stall),
-  // then the page leaves. The wait is a timer the page holds in `endDrain`: stop()
+  // stays up until the notice queued on it has been heard (capped, should the clock
+  // stall), then the page leaves. Heard means out of the speaker: that is later than
+  // the context's clock by the device's output delay, which is large on a phone, and a
+  // context closed at the clock's end cuts the notice's last part. The reply itself may
+  // be over on the clock by then, so the wait goes by the time the audio was queued to. The wait is a timer the page holds in `endDrain`: stop()
   // clears it, so a stop during the wait (a history move to another session) ends the
   // wait with it instead of leaving the new session once the notice would have played.
   const END_DRAIN_CAP_MS = 5000;
+  const END_DRAIN_MARGIN_MS = 250;  // past the reported output delay, which devices under-report
   function endSession() {
     if (ending) return;
     ending = true;
@@ -972,7 +979,8 @@ header > * { flex-shrink: 0; }
     turnAbort();
     show("Session ended", "none", "");
     const since = performance.now();
-    const drained = () => !reply || !playCtx || playCtx.currentTime >= reply.next
+    const until = audioUntil + END_DRAIN_MARGIN_MS;
+    const drained = () => !playCtx || performance.now() >= until
       || performance.now() - since > END_DRAIN_CAP_MS;
     const tick = () => { endDrain = 0; if (drained()) leave(); else endDrain = setTimeout(tick, 50); };
     tick();

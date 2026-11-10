@@ -1052,6 +1052,31 @@ async def test_the_stop_edge_is_clamped_to_the_start_edge(stack):
     assert stop["reply_sample"] == 12000
 
 
+OUTPUT_DELAY_SECONDS = 0.6
+# A device whose speaker is this far behind the audio context's clock, as a phone is.
+SLOW_SPEAKER = MIC_WAKE_LOCK_AND_CONTEXTS + f"""
+AudioContext.prototype.getOutputTimestamp = () => ({{ contextTime: 0, performanceTime: 0 }});
+Object.defineProperty(AudioContext.prototype, 'outputLatency', {{ get: () => {OUTPUT_DELAY_SECONDS}, configurable: true }});
+"""
+
+
+@pytest.mark.parametrize("site", [SLOW_SPEAKER], indirect=True)
+async def test_after_a_session_end_frame_the_page_stays_until_the_notice_has_left_a_slow_speaker(site):
+    """The audio context's clock passes the end of the notice before the sound is out
+    of the speaker. The page keeps the context until then, so the notice is not cut."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    session = site.sessions[0]
+    began_at = time.monotonic()
+    await _notice_to_the_page(session, "notice-1")
+    await session.send_page({"type": "session_end"})
+    await session.page.close()
+    await page.wait_for_selector("#chooser:not([hidden])", timeout=8000)
+    stayed = time.monotonic() - began_at
+    assert NOTICE_SECONDS + OUTPUT_DELAY_SECONDS <= stayed < 4.5, stayed
+    assert await page.evaluate("window.contextCloses") == 2
+
+
 NO_LATENCY_APIS = """
 AudioContext.prototype.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 });
 Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => undefined, configurable: true });
