@@ -150,7 +150,7 @@
           set: (key, value) => { store[key] = value }
         },
         register: c => { window.contributions.push(c); return () => {} },
-        registerSettingsPage: () => () => {},
+        registerSettingsPage: page => { window.settingsPage = page; return () => {} },
         onEvent: (type, listener) => {
           const off = onEvent(type, listener)
           window.disposers.push(off)

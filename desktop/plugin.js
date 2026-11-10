@@ -792,7 +792,7 @@ function SettingRow({ title, description, value, type, placeholder, onSave }) {
 
 export default {
   id: ID,
-  name: 'Voice',
+  name: 'Voice Unleashed',
   register(ctx) {
     const prefs = atom({ ...DEFAULTS, ...ctx.storage.get('prefs', {}) })
     const update = patch => {
@@ -811,7 +811,7 @@ export default {
 
     ctx.registerSettingsPage?.({
       id: 'settings',
-      title: 'Voice',
+      title: 'Voice Unleashed',
       icon: 'mic',
       render: function VoiceSettings() {
         const { address, token } = useValue(prefs)

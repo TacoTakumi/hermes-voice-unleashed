@@ -14,6 +14,11 @@ entry names next to its pinned commit.
   voice interface to Hermes, not only speech in and speech out, and the name
   now says so. VoiceManager is still the server it needs. Nothing else in its
   behaviour changes.
+- In Hermes Desktop and the Webapp the card and its settings page are named
+  "Voice Unleashed". They were named "Voice", which a search for the plugin
+  name did not find.
+- README: written new. It starts with what the interface does, gives one
+  setup path, and has a section for voice in Hermes Desktop and the Webapp.
 
 To upgrade from 0.2.1 or earlier: the old names are not read any more. Change
 each one, then restart the gateway:

@@ -201,6 +201,13 @@ async def _quiet(seconds=0.3):
     await asyncio.sleep(seconds)
 
 
+async def test_the_desktop_half_shows_under_the_plugin_name(page, voice):
+    await _boot(page, voice)
+    shown = await page.evaluate(
+        "({id: window.plugin.default.id, name: window.plugin.default.name, settings: window.settingsPage.title})")
+    assert shown == {"id": "voice-unleashed", "name": "Voice Unleashed", "settings": "Voice Unleashed"}
+
+
 async def test_toggle_on_attaches_with_the_stored_id_and_the_token(page, voice):
     await _boot(page, voice)
     assert (await page.evaluate("window.toggleView()"))["pressed"] is False

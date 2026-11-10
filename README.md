@@ -220,12 +220,15 @@ commands.
 The plugin folder holds a Desktop half, `desktop/plugin.js`, which Hermes
 copies into its desktop plugins on load. It ships switched off.
 
-1. Turn on its switch in Capabilities > Plugins > Voice.
-2. Open Settings > Plugins > Voice and enter the voice server address (the
-   address of the voice page, for example `ws://127.0.0.1:8765`, or the
-   `https://` address of your proxy) and the access token
-   (`VOICE_UNLEASHED_TOKEN`). They are kept in the app's plugin storage.
-3. Use the voice toggle in the composer of a chat.
+1. Open Capabilities > Plugins, click FILTERS and then "Installed". The page
+   lists the catalog first, so the card is hard to find without the filter.
+2. Open the "Voice Unleashed" card and turn on its Desktop switch.
+3. Open Settings > Plugins > Voice Unleashed and enter the voice server
+   address (the address of the voice page, for example
+   `ws://127.0.0.1:8765`, or the `https://` address of your proxy) and the
+   access token (`VOICE_UNLEASHED_TOKEN`). They are kept in the app's plugin
+   storage, for each browser.
+4. Use the voice toggle in the composer of a chat.
 
 With voice on, the microphone and the speaker are on the machine that runs
 the UI. Each finished utterance goes into the open chat as your message. The
