@@ -76,13 +76,13 @@ body[data-who="alert"] #state { color: var(--alert); }
 #activity { margin-top: 12px; }
 #activity[hidden] { display: none; }
 button.fold {
-  font: 600 14px/1 var(--type);
+  font: 500 14px/1 var(--type);
   color: var(--muted);
   background: none;
   border: 0;
   padding: 6px 0;
   min-width: 0;
-  border-radius: 0;
+  min-height: 0;
 }
 #tools {
   list-style: none;
@@ -117,15 +117,14 @@ button.row {
   width: 100%;
   min-width: 0;
   text-align: left;
-  font: 400 17px/1.35 var(--type);
+  font: 400 16px/1.35 var(--type);
   color: var(--paper);
   background: var(--ink-raised);
-  border-radius: 14px;
   padding: 12px 16px;
 }
-button.row .name { flex: 1 0 100%; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.row .name { flex: 1 0 100%; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.row .meta { color: var(--muted); font-size: 14px; }
-button.row .voice { color: var(--hermes); font-size: 14px; font-weight: 700; margin-left: auto; }
+button.row .voice { color: var(--glow); font-size: 14px; font-weight: 500; margin-left: auto; }
 footer[hidden] { display: none; }
 .turn { max-width: 34rem; overflow-wrap: anywhere; white-space: pre-wrap; }
 .turn.user { align-self: flex-end; text-align: right; color: var(--you); }
@@ -133,20 +132,28 @@ footer[hidden] { display: none; }
 .turn.note { align-self: center; color: var(--muted); font-size: 15px; }
 footer { padding: 12px var(--gutter) 20px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 /* Shown only while the browser keeps reply playback locked after a join without a tap. */
-#unmute { background: var(--hermes); }
+#unmute { background: var(--glow); }
 #unmute[hidden] { display: none; }
+/* The Hermes desktop button: soft fills, a 2.5px corner, medium weight. Sized for a thumb. */
 button {
-  font: 700 18px/1 var(--type);
+  font: 500 15px/1.2 var(--type);
   color: var(--ink);
   background: var(--paper);
   border: 0;
-  border-radius: 999px;
-  padding: 18px 32px;
+  border-radius: 2.5px;
+  padding: 12px 28px;
   min-width: 14rem;
+  min-height: 44px;
   cursor: pointer;
+  transition: background-color 100ms, box-shadow 100ms, color 100ms;
 }
-button[aria-pressed="true"] { background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 2px var(--muted); }
-button:focus-visible { outline: 3px solid var(--you); outline-offset: 3px; }
+button[aria-pressed="true"] { background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.3); }
+button:focus-visible { outline: 3px solid rgba(255, 230, 203, 0.5); outline-offset: 2px; }
+@media (hover: hover) {
+  button:not(.fold):not(.row):not([aria-pressed="true"]):hover { filter: brightness(0.92); }
+  button.row:hover { background: color-mix(in srgb, #ffe6cb 10%, #041c1c); }
+  button.fold:hover { color: var(--paper); }
+}
 /* The header never grows past its cap (set per layout below). The reasoning text and the
    tool list give up their height first and scroll inside themselves, so the newest tool
    line stays in view. Only when the rest of the header alone does not fit (a phone held

@@ -2201,3 +2201,26 @@ async def test_the_meter_paints_your_bars_in_the_you_color(stack):
     }""")
     assert rgba[3] > 200, rgba
     assert all(abs(a - b) <= 3 for a, b in zip(rgba[:3], (52, 211, 153))), rgba
+
+
+async def test_the_button_style_is_soft_rounded(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    props = ("borderTopLeftRadius", "fontWeight", "textTransform", "backgroundColor", "color", "fontSize", "minHeight")
+    for selector in ("#new", "#toggle"):
+        radius, weight, transform, background, color, size, min_height = await _style(page, selector, *props)
+        assert (radius, weight, transform) == ("2.5px", "500", "none"), selector
+        assert (background, color, size, min_height) == (CREAM, TEAL, "15px", "44px"), selector
+    assert await page.evaluate("document.getElementById('new').getBoundingClientRect().height") >= 44
+    await page.evaluate("document.getElementById('toggle').setAttribute('aria-pressed', 'true')")
+    pressed, pressed_color, ring = await _style(page, "#toggle", "backgroundColor", "color", "boxShadow")
+    assert pressed_color == CREAM and "inset" in ring
+    radius, row_fill = await _style(page, "#sessions button.row", "borderTopLeftRadius", "backgroundColor")
+    assert radius == "2.5px" and row_fill == pressed and row_fill not in (TEAL, CREAM)
+    (name_weight,) = await _style(page, "#sessions button.row .name", "fontWeight")
+    assert name_weight == "500"
+    radius, weight, fill = await _style(page, "#fold", "borderTopLeftRadius", "fontWeight", "backgroundColor")
+    assert (radius, weight, fill) == ("2.5px", "500", "rgba(0, 0, 0, 0)")
+    radius, fill = await _style(page, "#unmute", "borderTopLeftRadius", "backgroundColor")
+    assert (radius, fill) == ("2.5px", "rgb(255, 189, 56)")
