@@ -153,6 +153,7 @@ class VoiceSession:
                  attached: bool = False,
                  approval_words: Optional[Callable[[], Iterable[str]]] = None,
                  approval_pending: Optional[Callable[[], Awaitable[bool]]] = None,
+                 clarify_pending: Optional[Callable[[], Awaitable[bool]]] = None,
                  on_new_session: Optional[Callable[[], Awaitable[None]]] = None) -> None:
         self.page = page
         self.client = client
@@ -166,6 +167,8 @@ class VoiceSession:
         # whether the chat waits for one right now.
         self._approval_words = approval_words
         self._approval_pending = approval_pending
+        # Whether the chat waits for the answer to a question the model asked.
+        self._clarify_pending = clarify_pending
         self.attached = attached  # the reply's text comes from the client's say frames
         self.reply_key: Optional[str] = None  # attached: the client's key for the running reply
         self._closed_keys: dict[str, None] = {}  # attached: keys that take no more text, oldest first
@@ -528,6 +531,18 @@ class VoiceSession:
             if self._on_utterance is not None:
                 await self._on_utterance(words[0], uuid.uuid4().hex)
             return
+        if await self._answers_question():
+            # The model asked a question and its turn waits for the answer. The gateway
+            # takes this utterance as that answer and the turn resumes under its
+            # original message id, so the reply that raised the question opens again,
+            # as for an approval word. The same race applies: a question that times out
+            # between this check and the gateway's makes the utterance a new turn, whose
+            # text is then shown but not spoken.
+            self._reopen_reply()
+            await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
+            if self._on_utterance is not None:
+                await self._on_utterance(text, uuid.uuid4().hex)
+            return
         self._open_reply()
         await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
         if self._on_utterance is not None:
@@ -550,9 +565,21 @@ class VoiceSession:
         self._prompt_reply = None  # the approval was answered elsewhere or timed out
         return False
 
-    async def speak_approval_prompt(self, sentence: str) -> None:
-        """Speak an approval prompt and remember the reply that raised it: the turn
-        behind that reply is the one a spoken approval word resumes."""
+    async def _answers_question(self) -> bool:
+        """Whether the chat waits for the answer to a question the model asked."""
+        if self._clarify_pending is None:
+            return False
+        try:
+            return bool(await self._clarify_pending())
+        except Exception:
+            # As for the approval check: a failure must not end the voice session.
+            logger.warning("voice page %s: question check failed", self.client_id, exc_info=True)
+            return False
+
+    async def speak_prompt(self, sentence: str) -> None:
+        """Speak a prompt the running turn waits on, an approval prompt or a question
+        the model asks, and remember the reply that raised it: the turn behind that
+        reply is the one the user's spoken answer resumes."""
         self._prompt_reply = (self.reply_id,)
         await self.speak_notice(sentence)
 
