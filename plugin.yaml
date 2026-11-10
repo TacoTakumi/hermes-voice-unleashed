@@ -1,7 +1,7 @@
 name: voice-unleashed
 label: Voice Unleashed
 kind: platform
-version: 0.2.1
+version: 0.3.0
 requires_hermes: ">=0.22.7"
 description: >
   A voice interface to Hermes. A phone opens the page this plugin serves and
