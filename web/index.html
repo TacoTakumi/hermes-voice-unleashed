@@ -921,6 +921,12 @@ header > * { flex-shrink: 0; }
 
   // The mic and its context go. The worklet stops with the context: on a stopped track
   // alone it would go on sending frames of silence.
+  // Silence the mic without releasing it: nothing more is captured, and the device
+  // sees no change. Releasing a capture makes a phone switch its audio mode, which is
+  // heard in whatever plays at that moment.
+  function micSilence() {
+    if (micStream) for (const track of micStream.getTracks()) track.enabled = false;
+  }
   function micOff() {
     if (micStream) for (const track of micStream.getTracks()) track.stop();
     micStream = micNode = null;
@@ -964,8 +970,10 @@ header > * { flex-shrink: 0; }
     setUrlSession(null);
     showChooser(detail);
   }
-  // The session ended by voice. The mic goes at once and the socket no longer counts:
-  // the server closes it next, and that close must not reconnect. The reply context
+  // The session ended by voice. The mic is silenced at once and the socket no longer
+  // counts: the server closes it next, and that close must not reconnect. The mic is
+  // released when the page leaves, after the notice: a release while the notice plays
+  // garbles its end on a phone. The reply context
   // stays up until the notice queued on it has been heard (capped, should the clock
   // stall), then the page leaves. Heard means out of the speaker: that is later than
   // the context's clock by the device's output delay, which is large on a phone, and a
@@ -979,7 +987,7 @@ header > * { flex-shrink: 0; }
     if (ending) return;
     ending = true;
     if (ws) ws.onopen = ws.onmessage = ws.onclose = null;
-    micOff();
+    micSilence();
     busy = false;
     turnAbort();
     show("Session ended", "none", "");

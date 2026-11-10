@@ -49,7 +49,10 @@ entry names next to its pinned commit.
   selects that choice; anything else is a free answer.
 - The spoken "Session ended" is no longer cut at its end on a phone. The page
   left as soon as its audio clock passed the end of the notice; the sound
-  reaches the speaker later. It now waits until the notice has been heard.
+  reaches the speaker later. It now waits until the notice has been heard,
+  and it releases the microphone only then: a release while the notice
+  played garbled its end. Until then the microphone is switched off inside
+  the page.
 - When VoiceManager sends no audio for a reply (its speech engine did not
   load, for example), the page adds a note under the answer: "This was not
   spoken: the voice server sent no audio." Before, the answer was text with

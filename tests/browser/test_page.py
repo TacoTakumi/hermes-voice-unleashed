@@ -319,6 +319,8 @@ STATES_SEEN = """() => {
 }"""
 
 MIC_TRACK_STATES = "window.micStreams.flatMap(s => s.getAudioTracks().map(t => t.readyState))"
+# Whether each mic track still captures: a track switched off is silent but not released.
+MIC_TRACKS_ON = "window.micStreams.flatMap(s => s.getAudioTracks().map(t => t.enabled))"
 
 # With the mic streams and wake locks: how many audio contexts the page closed so far.
 # The page keeps one for the mic and one for the replies.
@@ -596,12 +598,14 @@ async def _notice_to_the_page(session, request_id, seconds=NOTICE_SECONDS):
 
 
 @pytest.mark.parametrize("site", [MIC_WAKE_LOCK_AND_CONTEXTS], indirect=True)
-async def test_a_session_end_frame_stops_the_mic_at_once_and_shows_the_chooser_once_the_notice_played(site):
+async def test_a_session_end_frame_silences_the_mic_at_once_and_shows_the_chooser_once_the_notice_played(site):
     """The user ended the session by voice. The server speaks its notice, sends the
     session_end frame once the notice's audio has all gone out, then closes. The page
-    stops the mic the moment the frame comes, lets the queued notice play to its end,
-    and only then closes its socket, lets go of the wake lock and offers the sessions
-    again, freshly listed. The server's close does not make it reconnect."""
+    silences the mic the moment the frame comes but does not release it yet (a release
+    while the notice plays garbles its end on a phone), lets the queued notice play to
+    its end, and only then releases the mic, closes its socket, lets go of the wake
+    lock and offers the sessions again, freshly listed. The server's close does not
+    make it reconnect."""
     page = site.page
     await _listening_from_the_chooser(site)
     session = site.sessions[0]
@@ -610,12 +614,13 @@ async def test_a_session_end_frame_stops_the_mic_at_once_and_shows_the_chooser_o
     sent_at = time.monotonic()
     await session.send_page({"type": "session_end"})
     await session.page.close()  # as the server does right after the frame
-    await page.wait_for_function(f"{MIC_TRACK_STATES}.every(s => s === 'ended')", timeout=2000)
+    await page.wait_for_function(f"{MIC_TRACKS_ON}.every(on => !on)", timeout=2000)
     mic_off_at = time.monotonic()
     assert mic_off_at - sent_at < 1.0, mic_off_at - sent_at
+    assert await page.evaluate(MIC_TRACK_STATES) == ["live"]  # silent, not released: the notice plays
     assert await page.is_hidden("#chooser")
     assert await page.text_content("#state") == "Session ended"
-    assert await page.evaluate("window.contextCloses") == 1  # the mic context; the replies still play
+    assert await page.evaluate("window.contextCloses") == 0  # nothing of the audio changes yet
     await page.wait_for_selector("#chooser:not([hidden])", timeout=8000)
     chooser_at = time.monotonic()
     drained = chooser_at - sent_at
@@ -654,7 +659,7 @@ async def test_a_history_move_to_a_session_while_the_end_notice_plays_joins_it_a
     sent_at = time.monotonic()
     await session.send_page({"type": "session_end"})
     await session.page.close()  # as the server does right after the frame
-    await page.wait_for_function(f"{MIC_TRACK_STATES}.every(s => s === 'ended')", timeout=2000)
+    await page.wait_for_function(f"{MIC_TRACKS_ON}.every(on => !on)", timeout=2000)
     assert await page.text_content("#state") == "Session ended"
     target = site.rows[0]["id"]
     await page.evaluate(
