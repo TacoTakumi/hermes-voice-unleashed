@@ -1126,8 +1126,10 @@ header > * { flex-shrink: 0; }
   newEl.addEventListener("click", () => choose("new"));
   if (token) { if (sessionChoice) join(sessionChoice); else showChooser(); }
 
-  // --- the meter: your level in teal, Hermes in amber ----------------------------------
+  // --- the meter: your level and Hermes in their title colors --------------------------
   const bars = 48, levels = new Array(bars).fill(0), whoHistory = new Array(bars).fill(0);
+  const tokens = getComputedStyle(document.documentElement);
+  const youColor = tokens.getPropertyValue("--you").trim(), hermesColor = tokens.getPropertyValue("--hermes").trim();
   function draw() {
     const dpr = window.devicePixelRatio || 1;
     const w = meter.clientWidth, h = meter.clientHeight;
@@ -1143,7 +1145,7 @@ header > * { flex-shrink: 0; }
     const gap = 3, bw = (w - gap * (bars - 1)) / bars;
     for (let i = 0; i < bars; i++) {
       const bh = Math.max(3, levels[i] * h);
-      g.fillStyle = whoHistory[i] ? "#f2b544" : "#7fd1c7";
+      g.fillStyle = whoHistory[i] ? hermesColor : youColor;
       g.globalAlpha = 0.35 + 0.65 * (i / bars);
       g.fillRect(i * (bw + gap), (h - bh) / 2, bw, bh);
     }

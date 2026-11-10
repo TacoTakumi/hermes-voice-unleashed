@@ -2189,3 +2189,15 @@ async def test_the_title_font_is_eb_garamond_italic_from_inside_the_page(site):
     assert not re.search(r"""(?:src|href)\s*=\s*["']?https?://""", html)
     assert all(urlsplit(url).netloc == urlsplit(site.url).netloc for url in site.http_requests
                if urlsplit(url).scheme in ("http", "https")), site.http_requests
+
+
+async def test_the_meter_paints_your_bars_in_the_you_color(stack):
+    _, page, _, _ = stack
+    await page.wait_for_selector("#meter:not([hidden])", timeout=5000)
+    await page.wait_for_timeout(300)
+    rgba = await page.evaluate("""() => {
+        const m = document.getElementById('meter'), g = m.getContext('2d');
+        return [...g.getImageData(m.width - 2, Math.floor(m.height / 2), 1, 1).data];
+    }""")
+    assert rgba[3] > 200, rgba
+    assert all(abs(a - b) <= 3 for a, b in zip(rgba[:3], (52, 211, 153))), rgba
