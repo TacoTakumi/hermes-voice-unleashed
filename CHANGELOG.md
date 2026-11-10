@@ -13,6 +13,9 @@ entry names next to its pinned commit.
 - README and the plugin description: the client is any device with a browser,
   a microphone and a speaker, not only a phone. The section "HTTPS for the
   phone" is now "HTTPS for your device". No change in behaviour.
+- README: a "Full example" section with a complete `.env` and `config.yaml`.
+  The `tool_progress` setting is written as `"off"` in quotes; a bare `off`
+  is a boolean in YAML, which Hermes also takes.
 
 ## [0.3.0]
 

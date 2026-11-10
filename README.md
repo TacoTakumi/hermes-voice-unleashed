@@ -91,6 +91,74 @@ The same settings can go in `config.yaml` under
 Restart the gateway. Its log says `voice_unleashed connected` and
 `voice page listening on <host>:<port>`.
 
+## Full example
+
+A complete setup in one place. Only the three required variables are needed;
+everything else is optional and explained in the sections below.
+
+The profile's `.env`:
+
+```sh
+# Required
+VOICE_UNLEASHED_TOKEN=pick-a-long-random-string
+VOICE_UNLEASHED_VOICEMANAGER_URL=http://127.0.0.1:8255
+VOICE_UNLEASHED_ALLOWED_USERS=owner
+
+# When VoiceManager asks for a token
+VOICE_UNLEASHED_VOICEMANAGER_TOKEN=vmp_your-token
+
+# Where the page listens (these are the defaults)
+VOICE_UNLEASHED_HOST=127.0.0.1
+VOICE_UNLEASHED_PORT=8765
+```
+
+The profile's `config.yaml`:
+
+```yaml
+plugins:
+  enabled:
+    - voice-unleashed
+  # Lets the page show the model's reasoning line.
+  stream_reasoning_deltas: true
+
+# The plugin's own settings, if you prefer config.yaml to .env. A variable
+# in .env wins over the same setting here. VOICE_UNLEASHED_ALLOWED_USERS has
+# no key here and stays in .env.
+gateway:
+  platforms:
+    voice_unleashed:
+      extra:
+        token: pick-a-long-random-string
+        voicemanager_url: http://127.0.0.1:8255
+        voicemanager_token: vmp_your-token
+        host: 127.0.0.1
+        port: 8765
+
+platforms:
+  voice_unleashed:
+    # Stops Hermes asking for a home channel in every new voice session.
+    home_channel:
+      platform: voice_unleashed
+      chat_id: voice
+      name: Voice
+
+display:
+  platforms:
+    voice_unleashed:
+      # The page shows tool calls and reasoning itself.
+      tool_progress: "off"
+      show_reasoning: false
+
+auxiliary:
+  voice_chat:
+    # Keeps the profile's own reasoning for voice turns. Leave this key out
+    # to turn reasoning off for a faster first word.
+    reasoning_effort: ""
+```
+
+Voice in Hermes Desktop and the Webapp has no file to edit: its server
+address and access token are entered in the app (see below).
+
 ## HTTPS for your device
 
 Keep `VOICE_UNLEASHED_HOST=127.0.0.1` and put a TLS proxy in front of the
@@ -308,7 +376,7 @@ reasoning in its own line; turn that off for this platform too:
 display:
   platforms:
     voice_unleashed:
-      tool_progress: off
+      tool_progress: "off"
       show_reasoning: false
 ```
 
