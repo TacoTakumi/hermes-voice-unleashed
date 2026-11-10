@@ -1,10 +1,41 @@
 # Changelog
 
-All notable changes to VoiceManager Live are documented here. The format is
+All notable changes to Voice Unleashed are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
+
+## [0.3.0]
+
+### Changed
+
+- The plugin is renamed from VoiceManager Live to Voice Unleashed. It is a
+  voice interface to Hermes, not only speech in and speech out, and the name
+  now says so. VoiceManager is still the server it needs. Nothing else in its
+  behaviour changes.
+
+To upgrade from 0.2.1 or earlier: the old names are not read any more. Change
+each one, then restart the gateway:
+
+| Where | Old | New |
+|---|---|---|
+| Plugin name (`hermes plugins`, the `plugins.enabled` list, the plugin folder) | `voicemanager-live` | `voice-unleashed` |
+| Platform id in `config.yaml` (`gateway.platforms`, `platforms`, `display.platforms`, `home_channel.platform`) | `voicemanager_live` | `voice_unleashed` |
+| `.env` | `VMLIVE_TOKEN` | `VOICE_UNLEASHED_TOKEN` |
+| `.env` | `VMLIVE_VOICEMANAGER_URL` | `VOICE_UNLEASHED_VOICEMANAGER_URL` |
+| `.env` | `VMLIVE_VOICEMANAGER_TOKEN` | `VOICE_UNLEASHED_VOICEMANAGER_TOKEN` |
+| `.env` | `VMLIVE_HOST` | `VOICE_UNLEASHED_HOST` |
+| `.env` | `VMLIVE_PORT` | `VOICE_UNLEASHED_PORT` |
+| `.env` | `VMLIVE_ALLOWED_USERS` | `VOICE_UNLEASHED_ALLOWED_USERS` |
+| Repository | `TacoTakumi/hermes-voicemanager-live` | `TacoTakumi/hermes-voice-unleashed` |
+
+The `extra` keys in `config.yaml` (`token`, `voicemanager_url`,
+`voicemanager_token`, `host`, `port`) keep their names. Sessions held under
+the old platform id stay in the Hermes state, but the page's own lane starts a
+new conversation; pick an old one from the session list to go on with it.
+The Desktop half has a new plugin id, so turn its switch on again and enter
+its server address and token once more.
 
 ## [0.2.1]
 

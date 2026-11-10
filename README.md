@@ -1,18 +1,29 @@
-# VoiceManager Live
+# Voice Unleashed
 
-Talk to Hermes hands-free from your phone, with your own speech stack.
+A voice interface to Hermes: talk to your agent hands-free, hear it answer,
+and see what it does while it works.
 
 Open a page on any phone or tablet, and Hermes listens while the page is open.
 You talk, Hermes answers out loud, and you can talk over the answer to stop it.
-The page can go on with any session of the profile, from Telegram, the CLI or
-Desktop, or start a new one. Speech recognition, speech synthesis and
-turn-taking run on your own
-[VoiceManager](https://github.com/TacoTakumi/VoiceManager) server. Any model
-Hermes can use works, local or hosted.
+Voice is the whole interface, not only speech in and speech out:
+
+- The page shows the conversation, each tool call as it runs and the model's
+  reasoning, so you know what Hermes is doing when it is silent.
+- Approvals and the model's questions are spoken. You answer "yes", "no", a
+  number or your own words.
+- The page lists the profile's sessions from every platform (Telegram, the
+  CLI, Desktop), goes on with one or starts a new one. "New session" and "end
+  session" also work as spoken commands.
+- A chat in Hermes Desktop or the Webapp gets a voice toggle, and the voice
+  moves between your devices.
+
+Speech recognition, speech synthesis and turn-taking run on your own
+[VoiceManager](https://github.com/TacoTakumi/VoiceManager) server, which this
+plugin needs. Any model Hermes can use works, local or hosted.
 
 ## How it works
 
-The plugin adds a gateway platform, `voicemanager_live`. It serves one small web
+The plugin adds a gateway platform, `voice_unleashed`. It serves one small web
 page and a WebSocket. For each open page:
 
 - The page streams its microphone (16 kHz mono) to the plugin, and the plugin
@@ -45,20 +56,20 @@ page and a WebSocket. For each open page:
 From the Hermes plugin catalog:
 
 ```sh
-hermes plugins install voicemanager-live
+hermes plugins install voice-unleashed
 ```
 
 Before the catalog lists it, install it straight from GitHub:
 
 ```sh
-hermes plugins install TacoTakumi/hermes-voicemanager-live
+hermes plugins install TacoTakumi/hermes-voice-unleashed
 ```
 
 Or from a checkout, for development:
 
 ```sh
-git clone https://github.com/TacoTakumi/hermes-voicemanager-live ~/.hermes/plugins/voicemanager-live
-hermes plugins enable voicemanager-live
+git clone https://github.com/TacoTakumi/hermes-voice-unleashed ~/.hermes/plugins/voice-unleashed
+hermes plugins enable voice-unleashed
 ```
 
 ## Set up VoiceManager
@@ -66,7 +77,7 @@ hermes plugins enable voicemanager-live
 Create a token for Hermes on the VoiceManager host:
 
 ```sh
-voicemanager user token add you hermes-voice-live
+voicemanager user token add you hermes-voice-unleashed
 ```
 
 It prints the token once. It starts with `vmp_`.
@@ -77,18 +88,18 @@ Set these in the Hermes profile's `.env` (or with `hermes config`):
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `VMLIVE_TOKEN` | yes | Access token for the page. Pick a long random string. |
-| `VMLIVE_VOICEMANAGER_URL` | yes | VoiceManager URL, for example `http://127.0.0.1:8255`. |
-| `VMLIVE_VOICEMANAGER_TOKEN` | when VoiceManager asks for one | The `vmp_` token from above. |
-| `VMLIVE_HOST` | no | Address the page listens on. Default `127.0.0.1`. |
-| `VMLIVE_PORT` | no | Port the page listens on. Default `8765`. |
-| `VMLIVE_ALLOWED_USERS` | yes | Set it to `owner`. Whoever holds the access token is the one user of this platform. |
+| `VOICE_UNLEASHED_TOKEN` | yes | Access token for the page. Pick a long random string. |
+| `VOICE_UNLEASHED_VOICEMANAGER_URL` | yes | VoiceManager URL, for example `http://127.0.0.1:8255`. |
+| `VOICE_UNLEASHED_VOICEMANAGER_TOKEN` | when VoiceManager asks for one | The `vmp_` token from above. |
+| `VOICE_UNLEASHED_HOST` | no | Address the page listens on. Default `127.0.0.1`. |
+| `VOICE_UNLEASHED_PORT` | no | Port the page listens on. Default `8765`. |
+| `VOICE_UNLEASHED_ALLOWED_USERS` | yes | Set it to `owner`. Whoever holds the access token is the one user of this platform. |
 
 The same settings can go in `config.yaml` under
-`gateway.platforms.voicemanager_live.extra` as `token`, `voicemanager_url`,
+`gateway.platforms.voice_unleashed.extra` as `token`, `voicemanager_url`,
 `voicemanager_token`, `host` and `port`. The environment wins.
 
-Restart the gateway. Its log says `voicemanager_live connected` and
+Restart the gateway. Its log says `voice_unleashed connected` and
 `voice page listening on <host>:<port>`.
 
 ### Home channel
@@ -101,9 +112,9 @@ in the profile's `config.yaml`:
 
 ```yaml
 platforms:
-  voicemanager_live:
+  voice_unleashed:
     home_channel:
-      platform: voicemanager_live
+      platform: voice_unleashed
       chat_id: voice
       name: Voice
 ```
@@ -151,7 +162,7 @@ reasoning in its own line; turn that off for this platform too:
 ```yaml
 display:
   platforms:
-    voicemanager_live:
+    voice_unleashed:
       tool_progress: off
       show_reasoning: false
 ```
@@ -159,7 +170,7 @@ display:
 ## Open the page
 
 ```
-https://<your-host>/?token=<VMLIVE_TOKEN>
+https://<your-host>/?token=<VOICE_UNLEASHED_TOKEN>
 ```
 
 The page opens on a list of sessions: a "New session" button first, then the
@@ -202,7 +213,7 @@ suppression.
 
 ## HTTPS for the phone
 
-Keep `VMLIVE_HOST=127.0.0.1` and put a TLS proxy in front of the port. Two ways
+Keep `VOICE_UNLEASHED_HOST=127.0.0.1` and put a TLS proxy in front of the port. Two ways
 that work:
 
 - Tailscale: `tailscale serve --bg 8765`, then open

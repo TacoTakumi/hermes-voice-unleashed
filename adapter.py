@@ -862,7 +862,7 @@ def register(ctx):
     ctx.register_platform(
         name=PLATFORM,
         label="Voice Unleashed",
-        dashboard_description="Full-duplex voice from a phone browser through your VoiceManager server.",
+        dashboard_description="A hands-free voice interface from a phone browser, on your VoiceManager server.",
         adapter_factory=VoiceLiveAdapter,
         check_fn=check_requirements,
         validate_config=validate_config,

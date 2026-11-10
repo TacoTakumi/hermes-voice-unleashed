@@ -4,10 +4,13 @@ kind: platform
 version: 0.2.1
 requires_hermes: ">=0.22.7"
 description: >
-  Local, always-on, full-duplex voice for any Hermes model. A phone opens
-  the page this plugin serves and talks to Hermes hands-free; speech
-  recognition, speech synthesis and turn-taking run on your own
-  VoiceManager server, and you can talk over a reply to stop it.
+  A voice interface to Hermes. A phone opens the page this plugin serves and
+  talks to any Hermes model hands-free: the page shows the conversation, the
+  tool calls and the reasoning while Hermes answers out loud, approvals and
+  questions are spoken, you pick up any session of the profile, and you can
+  talk over a reply to stop it. Hermes Desktop and Webapp chats get the same
+  voice. Speech recognition, speech synthesis and turn-taking run on your own
+  VoiceManager server.
 author: TacoTakumi
 provides_hooks:
   - on_stream_delta
