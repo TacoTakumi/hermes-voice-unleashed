@@ -38,7 +38,7 @@ def _session_rows(now):
          "last_active": now - 300, "message_count": 12, "source": "telegram", "current": False,
          "voice_attached": True},
         {"id": "sid-untitled-222", "title": None, "preview": "remind me about the dentist",
-         "last_active": now - 7200, "message_count": 1, "source": "voicemanager_live", "current": True,
+         "last_active": now - 7200, "message_count": 1, "source": "voice_unleashed", "current": True,
          "voice_attached": False},
         {"id": "sid-bare-333", "title": None, "preview": "", "last_active": now - 3 * 86400,
          "message_count": 0, "source": "cli", "current": False, "voice_attached": False},
@@ -75,9 +75,9 @@ async def _site(tmp_path, init_script=None):
     ``join_failed_message`` set, a connect gets a join_failed frame with that message and
     the join-failed close instead of a session. A session whose page connection is gone
     lands in ``ended``."""
-    plugin = sys.modules["voicemanager_live"]
-    from voicemanager_live.server import JOIN_FAILED_CLOSE_CODE, VoiceServer
-    from voicemanager_live.session import VoiceSession, client_from_url
+    plugin = sys.modules["voice_unleashed"]
+    from voice_unleashed.server import JOIN_FAILED_CLOSE_CODE, VoiceServer
+    from voice_unleashed.session import VoiceSession, client_from_url
 
     async with FakeVoiceManager() as fake:
         site = SimpleNamespace(fake=fake, sessions=[], ended=[], utterances=[], ws_requests=[], list_requests=[],
@@ -178,7 +178,7 @@ async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
     assert names[0] == "Garden plans" and names[1] == "remind me about the dentist"
     assert re.search(r"\d", names[2]) and len(names[2]) <= 40  # the last-active time, nothing else
     assert "5 min ago" in titled and "12 lines" in titled and "telegram" in titled
-    assert "2 h ago" in preview and "1 line" in preview and "1 lines" not in preview and "voicemanager_live" in preview
+    assert "2 h ago" in preview and "1 line" in preview and "1 lines" not in preview and "voice_unleashed" in preview
     assert "3 days ago" in bare and "0 lines" in bare and "cli" in bare
     assert await page.locator("#sessions [aria-current]").count() == 0
     assert "Current" not in await page.text_content("#chooser")

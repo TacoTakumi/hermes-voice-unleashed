@@ -16,9 +16,9 @@ from gateway.config import GatewayConfig, Platform
 from gateway.session import SessionSource, SessionStore
 from hermes_state import SessionDB
 
-from voicemanager_live import sessions
+from voice_unleashed import sessions
 
-PLATFORM = "voicemanager_live"
+PLATFORM = "voice_unleashed"
 OTHER = "telegram"
 BASE = 1_700_000_000.0  # a fixed epoch so recency is under the test's control
 
@@ -106,7 +106,7 @@ def test_session_rows_lists_the_twenty_most_recent_with_the_lane_current(state):
 def test_session_rows_marks_nothing_current_for_an_unknown_lane(state):
     store, db = state
     _populate(store, db)
-    rows = sessions.session_rows(store, db, "voicemanager_live:nobody")
+    rows = sessions.session_rows(store, db, "voice_unleashed:nobody")
     assert len(rows) == 20
     assert not any(r["current"] for r in rows)
 

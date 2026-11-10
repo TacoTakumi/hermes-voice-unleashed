@@ -10,7 +10,7 @@ import pytest
 
 from gateway.session_context import set_session_vars
 
-PLATFORM = "voicemanager_live"
+PLATFORM = "voice_unleashed"
 
 
 class FakeAdapter:

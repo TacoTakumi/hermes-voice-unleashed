@@ -7,7 +7,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 checkout="${HERMES_CHECKOUT:-$here/../hermes-agent}"
 python="${HERMES_PYTHON:-$checkout/.venv/bin/python}"
-scratch="$(mktemp -d -t vmlive-test.XXXXXX)"
+scratch="$(mktemp -d -t voice-unleashed-test.XXXXXX)"
 trap 'rm -r -- "$scratch"' EXIT
 cd "$here"
 HERMES_HOME="$scratch" PYTHONPATH="$checkout${PYTHONPATH:+:$PYTHONPATH}" \

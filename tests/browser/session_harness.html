@@ -144,7 +144,7 @@
       host.state.focusedStoredSessionId.set(stored)
       const store = { prefs }
       const ctx = {
-        source: 'plugin:voicemanager-live',
+        source: 'plugin:voice-unleashed',
         storage: {
           get: (key, fallback) => (key in store ? store[key] : fallback),
           set: (key, value) => { store[key] = value }

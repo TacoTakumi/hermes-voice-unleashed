@@ -1,9 +1,10 @@
 """Gateway adapter for the voice page.
 
-config.yaml ``gateway.platforms.voicemanager_live.extra`` keys: token,
+config.yaml ``gateway.platforms.voice_unleashed.extra`` keys: token,
 voicemanager_url, voicemanager_token, host (127.0.0.1), port (8765).
-The environment overrides them: VMLIVE_TOKEN, VMLIVE_VOICEMANAGER_URL,
-VMLIVE_VOICEMANAGER_TOKEN, VMLIVE_HOST, VMLIVE_PORT.
+The environment overrides them: VOICE_UNLEASHED_TOKEN,
+VOICE_UNLEASHED_VOICEMANAGER_URL, VOICE_UNLEASHED_VOICEMANAGER_TOKEN,
+VOICE_UNLEASHED_HOST, VOICE_UNLEASHED_PORT.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from .session import SESSION_NEW_NOTICE, VoiceSession, client_from_url, strip_sa
 
 logger = logging.getLogger(__name__)
 
-PLATFORM = "voicemanager_live"
+PLATFORM = "voice_unleashed"
 OWNER = "owner"  # the one gateway user: whoever holds the access token
 DEFAULT_HOST, DEFAULT_PORT = "127.0.0.1", 8765
 # The approval.inputs keys whose words answer a plain-text approval prompt, the
@@ -279,11 +280,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         # listed in the gateway's DM slash policy, not just an ungated one.
         if isinstance(getattr(config, "extra", None), dict) and not config.extra.get("allow_admin_from"):
             config.extra["allow_admin_from"] = [OWNER]
-        self.token = str(_setting(extra, "VMLIVE_TOKEN", "token"))
-        self.vm_url = str(_setting(extra, "VMLIVE_VOICEMANAGER_URL", "voicemanager_url"))
-        self.vm_token = str(_setting(extra, "VMLIVE_VOICEMANAGER_TOKEN", "voicemanager_token"))
-        self.host = str(_setting(extra, "VMLIVE_HOST", "host", DEFAULT_HOST))
-        self.port = coerce_port(_setting(extra, "VMLIVE_PORT", "port", DEFAULT_PORT), DEFAULT_PORT)
+        self.token = str(_setting(extra, "VOICE_UNLEASHED_TOKEN", "token"))
+        self.vm_url = str(_setting(extra, "VOICE_UNLEASHED_VOICEMANAGER_URL", "voicemanager_url"))
+        self.vm_token = str(_setting(extra, "VOICE_UNLEASHED_VOICEMANAGER_TOKEN", "voicemanager_token"))
+        self.host = str(_setting(extra, "VOICE_UNLEASHED_HOST", "host", DEFAULT_HOST))
+        self.port = coerce_port(_setting(extra, "VOICE_UNLEASHED_PORT", "port", DEFAULT_PORT), DEFAULT_PORT)
         self._server: Optional[VoiceServer] = None
         self._clients: dict[str, Any] = {}  # chat_id -> the page's WebSocket connection
         self._sessions: dict[str, VoiceSession] = {}  # chat_id -> its voice session
@@ -298,7 +299,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     @property
     def name(self) -> str:
-        return "VoiceManager Live"
+        return "Voice Unleashed"
 
     @property
     def bound_port(self) -> int:
@@ -306,8 +307,9 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         if not self.token or not self.vm_url:
-            self._set_fatal_error("config_missing", "VMLIVE_TOKEN and VMLIVE_VOICEMANAGER_URL must be set",
-                                  retryable=False)
+            self._set_fatal_error(
+                "config_missing", "VOICE_UNLEASHED_TOKEN and VOICE_UNLEASHED_VOICEMANAGER_URL must be set",
+                retryable=False)
             return False
         try:
             self._server = VoiceServer(self.host, self.port, self.token, self._on_client,
@@ -837,19 +839,19 @@ def check_requirements() -> bool:
 
 def validate_config(config) -> bool:
     extra = getattr(config, "extra", {}) or {}
-    return bool(_setting(extra, "VMLIVE_TOKEN", "token") and
-                _setting(extra, "VMLIVE_VOICEMANAGER_URL", "voicemanager_url"))
+    return bool(_setting(extra, "VOICE_UNLEASHED_TOKEN", "token") and
+                _setting(extra, "VOICE_UNLEASHED_VOICEMANAGER_URL", "voicemanager_url"))
 
 
 def _env_enablement() -> Optional[dict]:
-    token = get_scoped_secret("VMLIVE_TOKEN", "").strip()
-    url = get_scoped_secret("VMLIVE_VOICEMANAGER_URL", "").strip()
+    token = get_scoped_secret("VOICE_UNLEASHED_TOKEN", "").strip()
+    url = get_scoped_secret("VOICE_UNLEASHED_VOICEMANAGER_URL", "").strip()
     if not (token and url):
         return None
     seed = seed_extra_from_env((
-        ("VMLIVE_VOICEMANAGER_TOKEN", "voicemanager_token", None),
-        ("VMLIVE_HOST", "host", None),
-        ("VMLIVE_PORT", "port", int),
+        ("VOICE_UNLEASHED_VOICEMANAGER_TOKEN", "voicemanager_token", None),
+        ("VOICE_UNLEASHED_HOST", "host", None),
+        ("VOICE_UNLEASHED_PORT", "port", int),
     ))
     return {"token": token, "voicemanager_url": url, **seed}
 
@@ -859,16 +861,16 @@ def register(ctx):
     stream_hooks.register(ctx)
     ctx.register_platform(
         name=PLATFORM,
-        label="VoiceManager Live",
+        label="Voice Unleashed",
         dashboard_description="Full-duplex voice from a phone browser through your VoiceManager server.",
         adapter_factory=VoiceLiveAdapter,
         check_fn=check_requirements,
         validate_config=validate_config,
         is_connected=validate_config,
-        required_env=["VMLIVE_TOKEN", "VMLIVE_VOICEMANAGER_URL"],
+        required_env=["VOICE_UNLEASHED_TOKEN", "VOICE_UNLEASHED_VOICEMANAGER_URL"],
         install_hint="No extra packages needed",
         env_enablement_fn=_env_enablement,
-        allowed_users_env="VMLIVE_ALLOWED_USERS",
+        allowed_users_env="VOICE_UNLEASHED_ALLOWED_USERS",
         emoji="🎙",
         # The page's activity panel shows each tool call from the tool hooks; the
         # gateway's progress messages would land in the conversation log as well.

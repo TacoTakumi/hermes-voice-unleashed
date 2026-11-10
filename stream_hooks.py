@@ -27,7 +27,7 @@ from gateway.session_context import get_session_env
 
 logger = logging.getLogger(__name__)
 
-PLATFORM = "voicemanager_live"
+PLATFORM = "voice_unleashed"
 
 _adapters: list[Any] = []  # the running adapters, newest last
 

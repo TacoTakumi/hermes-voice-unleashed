@@ -1,4 +1,4 @@
-"""VoiceManager Live: a Hermes gateway platform for full-duplex voice.
+"""Voice Unleashed: a Hermes gateway platform for full-duplex voice.
 
 The plugin serves a small web page. A phone (or any browser) opens it,
 streams its microphone over a WebSocket and plays the replies. Each page

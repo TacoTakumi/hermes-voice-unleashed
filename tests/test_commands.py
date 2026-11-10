@@ -18,7 +18,7 @@ from gateway.session_context import set_session_vars
 from fake_vm import FakeVoiceManager, wait_for
 
 TOKEN = "tok"
-PLATFORM = "voicemanager_live"
+PLATFORM = "voice_unleashed"
 
 
 # --- the phrase helpers ------------------------------------------------------------------

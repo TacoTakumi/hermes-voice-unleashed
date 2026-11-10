@@ -98,6 +98,15 @@ async def test_connect_refuses_without_a_token(plugin):
     assert not await adapter.connect()
 
 
+async def test_the_variable_names_of_releases_before_the_rename_are_not_read(plugin, monkeypatch):
+    monkeypatch.setenv("VMLIVE_TOKEN", "old-token")
+    monkeypatch.setenv("VMLIVE_VOICEMANAGER_URL", "http://127.0.0.1:8255")
+    adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={}))
+    assert not await adapter.connect()
+    assert adapter.fatal_error_code == "config_missing"
+    assert plugin.adapter._env_enablement() is None
+
+
 def test_register_adds_one_platform(plugin):
     class Ctx:
         def __init__(self):
@@ -111,10 +120,10 @@ def test_register_adds_one_platform(plugin):
 
     ctx = Ctx()
     plugin.register(ctx)
-    assert [p["name"] for p in ctx.platforms] == ["voicemanager_live"]
+    assert [p["name"] for p in ctx.platforms] == ["voice_unleashed"]
     entry = ctx.platforms[0]
     assert entry["adapter_factory"] is plugin.adapter.VoiceLiveAdapter
-    assert entry["allowed_users_env"] == "VMLIVE_ALLOWED_USERS"
+    assert entry["allowed_users_env"] == "VOICE_UNLEASHED_ALLOWED_USERS"
     assert sorted(ctx.hooks) == ["on_session_end", "on_stream_delta", "on_stream_end", "post_tool_call",
                                  "pre_llm_call", "pre_tool_call"]
 
@@ -138,16 +147,16 @@ def test_gateway_tool_progress_is_off_by_default_for_the_voice_platform(plugin, 
     assert ctx.entry["display_overrides"] == {"tool_progress": "off"}
     known = {f.name for f in fields(PlatformEntry)}
     entry = PlatformEntry(**{k: v for k, v in ctx.entry.items() if k in known})
-    monkeypatch.setattr(platform_registry, "get", lambda name: entry if name == "voicemanager_live" else None)
-    assert display_config.resolve_tool_progress({}, "voicemanager_live") == ("off", False)
-    configured = {"display": {"platforms": {"voicemanager_live": {"tool_progress": "all"}}}}
-    assert display_config.resolve_tool_progress(configured, "voicemanager_live")[0] == "all"
+    monkeypatch.setattr(platform_registry, "get", lambda name: entry if name == "voice_unleashed" else None)
+    assert display_config.resolve_tool_progress({}, "voice_unleashed") == ("off", False)
+    configured = {"display": {"platforms": {"voice_unleashed": {"tool_progress": "all"}}}}
+    assert display_config.resolve_tool_progress(configured, "voice_unleashed")[0] == "all"
 
 
 # GET /sessions: the session list the page shows, answered from a callback the adapter supplies.
 
 ROWS = [{"id": "abc123", "title": None, "preview": "hello there", "last_active": 1_700_000_000.0,
-         "message_count": 2, "source": "voicemanager_live", "current": True, "voice_attached": False}]
+         "message_count": 2, "source": "voice_unleashed", "current": True, "voice_attached": False}]
 
 
 @pytest.fixture

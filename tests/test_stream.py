@@ -17,7 +17,7 @@ from gateway.session_context import set_session_vars
 from fake_vm import FakeVoiceManager, wait_for
 
 TOKEN = "tok"
-PLATFORM = "voicemanager_live"
+PLATFORM = "voice_unleashed"
 
 
 def fire(hook, platform=PLATFORM, chat_id="voice", **payload):
@@ -330,7 +330,7 @@ async def test_tool_calls_of_another_chat_or_a_closed_reply_send_nothing(rig):
 
 
 async def test_an_attached_session_gets_no_tool_frames(plugin):
-    from voicemanager_live.session import VoiceSession
+    from voice_unleashed.session import VoiceSession
 
     class Page:
         sent = []

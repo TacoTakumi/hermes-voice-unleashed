@@ -380,7 +380,7 @@ export function createVoiceAudio({ sendBinary, sendJson, onSpeaking = () => {} }
   }
 }
 
-const ID = 'voicemanager-live'
+const ID = 'voice-unleashed'
 const DEFAULTS = { address: '', token: '' }
 const MAX_ATTACH_ID = 256 // the voice server refuses longer attach ids
 const REPLACED_CLOSE = 4001 // another client took this chat's voice over

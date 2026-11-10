@@ -1,4 +1,4 @@
-"""Load the plugin as a package named ``voicemanager_live``.
+"""Load the plugin as a package named ``voice_unleashed``.
 
 The repository root is the plugin directory, and its name has dashes, so
 the tests import it through an explicit spec instead of sys.path.
@@ -14,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests import fake_vm directly
-PACKAGE = "voicemanager_live"
+PACKAGE = "voice_unleashed"
 
 
 def _load_package():
@@ -47,7 +47,7 @@ def _register_platform():
     adapter = sys.modules[PACKAGE].adapter
     if not platform_registry.is_registered(adapter.PLATFORM):
         platform_registry.register(PlatformEntry(
-            name=adapter.PLATFORM, label="VoiceManager Live",
+            name=adapter.PLATFORM, label="Voice Unleashed",
             adapter_factory=adapter.VoiceLiveAdapter, check_fn=adapter.check_requirements))
 
 
@@ -61,6 +61,7 @@ def plugin():
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for name in ("VMLIVE_TOKEN", "VMLIVE_VOICEMANAGER_URL", "VMLIVE_VOICEMANAGER_TOKEN",
-                 "VMLIVE_HOST", "VMLIVE_PORT", "VMLIVE_ALLOWED_USERS"):
+    for name in ("VOICE_UNLEASHED_TOKEN", "VOICE_UNLEASHED_VOICEMANAGER_URL",
+                 "VOICE_UNLEASHED_VOICEMANAGER_TOKEN", "VOICE_UNLEASHED_HOST", "VOICE_UNLEASHED_PORT",
+                 "VOICE_UNLEASHED_ALLOWED_USERS"):
         monkeypatch.delenv(name, raising=False)
