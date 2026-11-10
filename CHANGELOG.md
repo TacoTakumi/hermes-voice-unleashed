@@ -8,6 +8,12 @@ entry names next to its pinned commit.
 
 ## [0.3.1]
 
+### Added
+
+- `examples/SOUL.md`: a recommended `SOUL.md` section for a profile you talk
+  to, with rules for replies that are spoken as they stream. The README says
+  where to put it.
+
 ### Changed
 
 - README and the plugin description: the client is any device with a browser,

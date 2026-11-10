@@ -316,6 +316,20 @@ chat.
 
 ## More configuration
 
+### A SOUL.md for a voice profile
+
+On the page the whole reply is spoken while the model writes it, so a model
+that answers in markdown, long lists or file paths is hard to listen to.
+[examples/SOUL.md](examples/SOUL.md) is a starting point for a profile you
+talk to: lead with the answer, short sentences, nothing that only works on a
+screen. Copy it to the profile's `SOUL.md` (`~/.hermes/SOUL.md`, or
+`~/.hermes/profiles/<name>/SOUL.md`), or add its section to the one you
+have, and put your own persona around it.
+
+A profile you use only from Hermes Desktop or the Webapp needs it less:
+there the reply prints in full and only its short `<say>` summary is spoken,
+which the plugin asks for itself.
+
 ### Home channel
 
 Hermes asks every platform for a home channel, the chat where it delivers cron
