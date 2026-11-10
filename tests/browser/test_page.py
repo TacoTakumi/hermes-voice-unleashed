@@ -2234,3 +2234,29 @@ async def test_the_button_style_is_soft_rounded(site):
     assert (radius, weight, fill) == ("2.5px", "500", "rgba(0, 0, 0, 0)")
     radius, fill = await _style(page, "#unmute", "borderTopLeftRadius", "backgroundColor")
     assert (radius, fill) == ("2.5px", "rgb(255, 189, 56)")
+
+
+async def test_the_meter_paints_hermes_bars_in_the_hermes_color_while_a_reply_plays(stack):
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    await conn.send({"type": "turn_end", "text": "how is the weather", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    reply_id = utterances[0][1]
+    await sessions[0].on_reply_delta(reply_id, "t1", 1, "Sunny.")
+    await sessions[0].on_turn_done(reply_id, "t1", False)
+    frames = await wait_for(lambda: conn.json_frames("tts_stream") if any(
+        f.get("done") for f in conn.json_frames("tts_stream")) else None)
+    rid = frames[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    tone = b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 300 * i / 24000)))
+                    for i in range(72000))  # 3 s, long enough to sample the meter mid-reply
+    for start in range(0, len(tone), 4800):
+        await conn.send(tone[start:start + 4800])
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    # The newest bar, at the right edge, while the reply is heard: cream within rounding.
+    await page.wait_for_function("""() => {
+        const m = document.getElementById('meter'), g = m.getContext('2d');
+        const [r, gr, b, a] = g.getImageData(m.width - 2, Math.floor(m.height / 2), 1, 1).data;
+        return a > 200 && Math.abs(r - 255) <= 3 && Math.abs(gr - 230) <= 3 && Math.abs(b - 203) <= 3;
+    }""", timeout=8000)
