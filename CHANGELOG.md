@@ -6,6 +6,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.3.3]
+
+### Changed
+
+- The voice page has the Hermes dashboard look: cream text on dark teal, the
+  state title in EB Garamond italic, a system sans body and soft rounded
+  buttons. The title and the level meter are emerald while you speak and
+  cream while Hermes speaks. The Unmute button is warm gold. The font is
+  inside the page (SIL Open Font License 1.1), so the page still loads
+  nothing from another host.
+
 ## [0.3.2]
 
 ### Changed
