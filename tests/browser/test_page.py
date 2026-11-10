@@ -2143,3 +2143,33 @@ async def test_a_header_whose_tool_list_is_hidden_stays_where_it_is(stack):
     box = await _header_box(page)
     assert box["top"] == folded["top"], (folded, box)
     assert box["window"] == 0, box
+
+
+# --- the look: the Hermes dashboard palette, title font and button style ------------------
+
+CREAM, TEAL = "rgb(255, 230, 203)", "rgb(4, 28, 28)"
+
+
+async def _style(page, selector, *props):
+    return await page.eval_on_selector(
+        selector, "(el, props) => { const s = getComputedStyle(el); return props.map(p => s[p]); }", list(props))
+
+
+async def test_the_page_uses_the_cream_on_teal_palette_and_a_system_sans_body(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    background, color, family = await _style(page, "body", "backgroundColor", "color", "fontFamily")
+    assert (background, color) == (TEAL, CREAM)
+    assert family.startswith("system-ui")
+    assert await page.get_attribute('meta[name="theme-color"]', "content") == "#041c1c"
+    (muted,) = await _style(page, "#detail", "color")
+    assert muted == "rgba(255, 230, 203, 0.8)"
+
+
+async def test_the_title_color_follows_who_is_speaking(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    for who, expected in (("hermes", CREAM), ("you", "rgb(52, 211, 153)"), ("alert", "rgb(251, 44, 54)")):
+        await page.evaluate("who => { document.body.dataset.who = who; }", who)
+        await page.wait_for_function(
+            "c => getComputedStyle(document.getElementById('state')).color === c", arg=expected, timeout=2000)
