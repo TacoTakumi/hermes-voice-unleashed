@@ -6,6 +6,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.3.1]
+
+### Changed
+
+- README and the plugin description: the client is any device with a browser,
+  a microphone and a speaker, not only a phone. The section "HTTPS for the
+  phone" is now "HTTPS for your device". No change in behaviour.
+
 ## [0.3.0]
 
 ### Changed

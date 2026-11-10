@@ -6,9 +6,13 @@ and see what it does while it works.
 Most voice add-ons turn speech into text and text into speech. Voice Unleashed
 makes voice the way you run the agent:
 
-- **Talk and listen, full duplex.** Open a page on a phone or tablet and
-  Hermes listens while the page is open. It answers out loud while the model
-  still writes, and you talk over the answer to stop it.
+- **Talk and listen, full duplex.** Open a page on any device such as a
+  phone or tablet, and Hermes listens while the page is open. It answers out
+  loud while the model still writes, and you talk over the answer to stop it.
+- **Any device.** The client is a web page. Anything with a browser, a
+  microphone and a speaker can be the voice of your agent: a phone in your
+  pocket with one earpiece, a tablet on the kitchen wall, a spare laptop, a
+  display in the workshop.
 - **See the work.** The page shows the conversation, each tool call as it
   runs and the model's reasoning, so a silent agent is never a mystery.
 - **Decide by voice.** Approval prompts and the model's questions are spoken.
@@ -28,11 +32,11 @@ makes voice the way you run the agent:
 
 - Hermes Agent 0.22.7 or later.
 - A VoiceManager server (0.7.0 or later) that your Hermes gateway can reach.
-  See its README for the engines and the GPU it needs. For barge-in on a phone
-  speaker, run it with `VM_STT_ENGINE=audiocpp` and `VM_TURN_ENGINE=tyger`.
-  `VM_TYGER_PREFILTER=voxlock` helps when the phone plays the reply on its
-  loudspeaker.
-- HTTPS in front of the page when the phone is not the machine Hermes runs
+  See its README for the engines and the GPU it needs. For barge-in on a
+  device that plays the reply on its own loudspeaker, run it with
+  `VM_STT_ENGINE=audiocpp` and `VM_TURN_ENGINE=tyger`.
+  `VM_TYGER_PREFILTER=voxlock` helps against the echo of that loudspeaker.
+- HTTPS in front of the page when the device is not the machine Hermes runs
   on. Browsers allow the microphone only on `https://` pages or on
   `localhost`.
 
@@ -87,13 +91,13 @@ The same settings can go in `config.yaml` under
 Restart the gateway. Its log says `voice_unleashed connected` and
 `voice page listening on <host>:<port>`.
 
-## HTTPS for the phone
+## HTTPS for your device
 
 Keep `VOICE_UNLEASHED_HOST=127.0.0.1` and put a TLS proxy in front of the
 port. Two ways that work:
 
 - Tailscale: `tailscale serve --bg 8765`, then open
-  `https://<machine>.<tailnet>.ts.net/?token=...` on the phone.
+  `https://<machine>.<tailnet>.ts.net/?token=...` on the device.
 - Caddy:
 
   ```
@@ -124,7 +128,7 @@ it.
 
 The page opens on a list of sessions: a "New session" button first, then the
 profile's sessions, the most recently active first, at most 20. A session can
-come from any Hermes platform (Telegram, the CLI, Desktop...), so the phone
+come from any Hermes platform (Telegram, the CLI, Desktop...), so the page
 can pick up a conversation you started elsewhere. A conversation that Hermes
 has compacted is one row. Each row shows the session's title, else its first
 message, else its time, with how long ago it was active, its number of lines
@@ -154,7 +158,7 @@ suppression. Add `&client=<name>` to talk on another lane than `voice` (see
 ### One voice device
 
 There is one voice device per profile. When you open the page on a second
-phone or tab, that page takes the voice: the first one shows "Voice moved to
+device or tab, that page takes the voice: the first one shows "Voice moved to
 another device" with a "Sessions" button that returns to the chooser; its
 microphone is off and the screen may go to sleep. The same hand-over works
 with Hermes Desktop and the Webapp. When the page joins a session that has

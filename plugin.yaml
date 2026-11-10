@@ -4,8 +4,9 @@ kind: platform
 version: 0.3.0
 requires_hermes: ">=0.22.7"
 description: >
-  A voice interface to Hermes. A phone opens the page this plugin serves and
-  talks to any Hermes model hands-free: the page shows the conversation, the
+  A voice interface to Hermes. Any device with a browser, such as a phone or
+  a tablet, opens the page this plugin serves and talks to any Hermes model
+  hands-free: the page shows the conversation, the
   tool calls and the reasoning while Hermes answers out loud, approvals and
   questions are spoken, you pick up any session of the profile, and you can
   talk over a reply to stop it. Hermes Desktop and Webapp chats get the same
