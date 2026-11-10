@@ -24,7 +24,7 @@ from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, Send
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run_busy import approval_input_words
 from hermes_state import SessionDB
-from tools import slash_confirm
+from tools import clarify_gateway, slash_confirm
 from tools.approval import has_blocking_approval
 
 from . import sessions, stream_hooks
@@ -145,6 +145,27 @@ def approval_words() -> set[str]:
     for key in APPROVAL_INPUT_KEYS:
         words.update(approval_input_words(key))
     return words
+
+
+# The spoken number of a choice; a longer list goes on in digits.
+CHOICE_NUMBERS = ("One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine")
+
+
+def clarify_sentence(question: str, choices: Optional[list] = None) -> str:
+    """The spoken form of a question the model asks: the question and, when it comes
+    with choices, each choice with its number and how to answer."""
+    spoken = re.sub(r"\s+", " ", question or "").strip()
+    if spoken and spoken[-1] not in ".?!":
+        spoken += "."
+    if not choices:
+        return spoken
+    parts = [spoken] if spoken else []
+    for index, choice in enumerate(choices):
+        number = CHOICE_NUMBERS[index] if index < len(CHOICE_NUMBERS) else str(index + 1)
+        text = re.sub(r"\s+", " ", str(choice)).strip().rstrip(".")
+        parts.append(f"{number}: {text}.")
+    parts.append("Say the number or your answer.")
+    return " ".join(parts)
 
 
 def approval_sentence(command: str) -> str:
@@ -302,12 +323,19 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # chat maps to the same key every utterance is handled under.
             return has_blocking_approval(self._source_session_key(self._voice_source(client_id)))
 
+        async def clarify_pending() -> bool:
+            # A question the model asked waits under the same session key. The gateway
+            # takes the next message of the chat as its answer, whatever kind it is.
+            key = self._source_session_key(self._voice_source(client_id))
+            return clarify_gateway.get_pending_for_session(key, include_choice_prompts=True) is not None
+
         async def on_new_session() -> None:
             await self._new_session_by_voice(client_id)
 
         return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
                             on_utterance=on_utterance, approval_words=approval_words,
-                            approval_pending=approval_pending, on_new_session=on_new_session)
+                            approval_pending=approval_pending, clarify_pending=clarify_pending,
+                            on_new_session=on_new_session)
 
     async def _new_session_by_voice(self, client_id: str) -> None:
         """The page asked for a new session by voice: move its lane onto a fresh
@@ -676,6 +704,25 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         await self._send_json(prompt.chat_id, {"type": "reply", "text": prompt.text})
         await session.speak_prompt(approval_sentence(prompt.command))
         return SendResult(success=True, message_id=None)
+
+    async def send_clarify(self, chat_id: str, question: str, choices: Optional[list], clarify_id: str,
+                           session_key: str, metadata: Optional[dict[str, Any]] = None) -> SendResult:
+        """Show and speak a question the model asks.
+
+        The gateway's default shows the question (and its numbered choices) on the
+        page as a reply and takes the chat's next message as the answer. The question
+        is also spoken, so a user who is not looking at the page knows the turn waits
+        for them. Without a connected page only the default runs.
+        """
+        result = await super().send_clarify(chat_id, question, choices, clarify_id, session_key,
+                                            metadata=metadata)
+        session = self.session_for(chat_id)
+        if getattr(result, "success", False) and session is not None:
+            try:
+                await session.speak_prompt(clarify_sentence(question, choices))
+            except Exception:
+                logger.warning("voice page %s: the question was shown but not spoken", chat_id, exc_info=True)
+        return result
 
     def _should_auto_tts_for_chat(self, chat_id: str) -> bool:
         """Never: VoiceManager speaks every reply, so Hermes must not synthesize one too.
