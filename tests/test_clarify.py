@@ -78,6 +78,18 @@ def test_the_spoken_question_reads_the_choices_with_their_numbers(plugin):
         "Pick a colour. One: Red. Two: Blue. Say the number or your answer.")
     many = sentence("Which?", [f"c{i}" for i in range(1, 11)])
     assert "Nine: c9. 10: c10." in many
+    assert sentence("Sure", ["Really?", "No!"]) == "Sure. One: Really? Two: No! Say the number or your answer."
+
+
+def test_the_typed_skip_hint_of_the_gateway_is_not_spoken(plugin):
+    """The gateway hands the question over with a line for typed chats after it."""
+    from agent.i18n import t
+    hint = t("gateway.clarify.skip_hint")
+    sentence = plugin.adapter.clarify_sentence
+    assert sentence(f"What are we testing?\n{hint}") == "What are we testing?"
+    assert sentence(f"Pick a colour\n{hint}", ["Red", "Blue"]) == (
+        "Pick a colour. One: Red. Two: Blue. Say the number or your answer.")
+    assert sentence("First line\nsecond line?") == "First line second line?"  # only the hint goes
 
 
 @pytest.fixture
@@ -100,6 +112,9 @@ async def test_an_open_question_is_shown_and_spoken(rig, clarify):
     await wait_for(lambda: rig.page.of("reply"))
     assert QUESTION in rig.page.of("reply")[-1]["text"]
     await wait_for(lambda: rig.tts_text().endswith(QUESTION))
+    await asyncio.sleep(0.1)
+    # Shown once, by the reply frame: the spoken form adds no line of its own.
+    assert all(QUESTION not in f["text"] for f in rig.page.of("reply_delta"))
     assert rig.session._prompt_reply == (reply_id,)  # the reply that asked is remembered
     assert await rig.session._clarify_pending() is True  # wired to the gateway's waiting questions
 

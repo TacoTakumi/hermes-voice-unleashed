@@ -294,8 +294,9 @@ The proxy must pass WebSocket upgrades on `/ws`. Both of these do.
 - Questions the model asks are spoken. When Hermes asks you something before it
   goes on (its `clarify` tool), the page shows the question and speaks it; a
   question with choices is read with their numbers ("One: ... Two: ... Say the
-  number or your answer."). The next thing you say is the answer, whatever it
-  is, and the turn then goes on and its reply is spoken as usual.
+  number or your answer."). The next thing you say is the answer, and the turn
+  then goes on and its reply is spoken as usual. "Skip" skips the question;
+  "new session" and "end session" are still commands.
 - The first question after a gateway start is slow: 14 to 16 s on our test rig,
   against about 1.5 s for the questions after it. The agent and the model's prompt
   cache start cold. Ask one question after a restart before you rely on it.

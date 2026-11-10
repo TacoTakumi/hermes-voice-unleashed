@@ -576,15 +576,15 @@ class VoiceSession:
             logger.warning("voice page %s: question check failed", self.client_id, exc_info=True)
             return False
 
-    async def speak_prompt(self, sentence: str) -> None:
+    async def speak_prompt(self, sentence: str, show: bool = True) -> None:
         """Speak a prompt the running turn waits on, an approval prompt or a question
         the model asks, and remember the reply that raised it: the turn behind that
         reply is the one the user's spoken answer resumes."""
         self._prompt_reply = (self.reply_id,)
-        await self.speak_notice(sentence)
+        await self.speak_notice(sentence, show=show)
 
-    async def speak_notice(self, text: str,
-                           ended: Optional[asyncio.Event] = None) -> Optional[vm_client.TTSRequest]:
+    async def speak_notice(self, text: str, ended: Optional[asyncio.Event] = None,
+                           show: bool = True) -> Optional[vm_client.TTSRequest]:
         """Speak ``text`` now, through the running reply's TTS request or a new one.
 
         All of it goes to TTS at once, so nothing waits for more text. A word the
@@ -595,17 +595,20 @@ class VoiceSession:
         nothing stays open on VoiceManager. Its id is kept until its audio ends, so
         that end is not taken for a reply's end; ``ended`` is set then. A finished
         reply whose audio still plays keeps its own request. Returns the notice's
-        request in that case, None when the notice went through the running reply."""
+        request in that case, None when the notice went through the running reply.
+
+        With ``show`` False the text is spoken but not sent to the page as reply text:
+        the page already shows it."""
         if self.reply_open:
             held, self._unsent = self._unsent, ""
             await self._send_tts(held)
-            await self._speak(text)
+            await self._show(text if show else "", text)
             rest, self._unsent = self._unsent, ""
             await self._send_tts(rest)
             return None
         self._last_text_at = asyncio.get_running_loop().time()
         self.tracker.reply_text()
-        if text:
+        if text and show:
             await self.send_page({"type": "reply_delta", "text": text})
         if not text.strip():
             return None

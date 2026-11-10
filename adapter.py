@@ -18,6 +18,7 @@ import sqlite3
 import uuid
 from typing import Any, NamedTuple, Optional
 
+from agent.i18n import t
 from gateway.config import Platform
 from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra_from_env
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
@@ -153,8 +154,18 @@ CHOICE_NUMBERS = ("One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"
 
 def clarify_sentence(question: str, choices: Optional[list] = None) -> str:
     """The spoken form of a question the model asks: the question and, when it comes
-    with choices, each choice with its number and how to answer."""
-    spoken = re.sub(r"\s+", " ", question or "").strip()
+    with choices, each choice with its number and how to answer.
+
+    The gateway appends a line for typed chats to the question, how to skip it by
+    typing a word. That line is screen text and is not read out."""
+    lines = (question or "").splitlines()
+    try:
+        typed_hint = t("gateway.clarify.skip_hint").strip()
+    except Exception:
+        typed_hint = ""
+    while lines and (not lines[-1].strip() or lines[-1].strip() == typed_hint):
+        lines.pop()
+    spoken = re.sub(r"\s+", " ", " ".join(lines)).strip()
     if spoken and spoken[-1] not in ".?!":
         spoken += "."
     if not choices:
@@ -162,8 +173,8 @@ def clarify_sentence(question: str, choices: Optional[list] = None) -> str:
     parts = [spoken] if spoken else []
     for index, choice in enumerate(choices):
         number = CHOICE_NUMBERS[index] if index < len(CHOICE_NUMBERS) else str(index + 1)
-        text = re.sub(r"\s+", " ", str(choice)).strip().rstrip(".")
-        parts.append(f"{number}: {text}.")
+        text = re.sub(r"\s+", " ", str(choice)).strip()
+        parts.append(f"{number}: {text}" + ("" if text[-1:] in (".", "?", "!") else "."))
     parts.append("Say the number or your answer.")
     return " ".join(parts)
 
@@ -719,7 +730,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         session = self.session_for(chat_id)
         if getattr(result, "success", False) and session is not None:
             try:
-                await session.speak_prompt(clarify_sentence(question, choices))
+                # The default send above already put the question on the page.
+                await session.speak_prompt(clarify_sentence(question, choices), show=False)
             except Exception:
                 logger.warning("voice page %s: the question was shown but not spoken", chat_id, exc_info=True)
         return result
