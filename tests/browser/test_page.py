@@ -2203,6 +2203,16 @@ async def test_the_meter_paints_your_bars_in_the_you_color(stack):
     assert all(abs(a - b) <= 3 for a, b in zip(rgba[:3], (52, 211, 153))), rgba
 
 
+async def test_the_meter_draws_with_no_color_of_its_own(site):
+    """Both bar colors come from the page tokens: draw() names no color itself."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    html = await page.content()
+    body = re.search(r"function draw\(\) \{(.*?)\n  \}\n", html, re.S)
+    assert body, "draw() not found"
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", body.group(1)), body.group(1)
+
+
 async def test_the_button_style_is_soft_rounded(site):
     page = site.page
     await page.goto(f"{site.url}/?token={TOKEN}")
