@@ -42,6 +42,9 @@ entry names next to its pinned commit.
   final message and ends in whitespace, or when
   `display.interim_assistant_messages` is off and the answer follows a tool
   call.
+- A question the model asks before it goes on (the `clarify` tool) is spoken,
+  with its choices and their numbers. Before, it was screen text only. The
+  reply after your spoken answer is spoken too; it was dropped.
 
 ## [0.2.0]
 
