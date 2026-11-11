@@ -35,13 +35,14 @@ def test_an_end_phrase_is_normalized_to_lower_case_words_without_punctuation(plu
 
 
 @pytest.mark.parametrize("said", ["End the session.", "end session", "End this session!", "End of session.",
-                                  "end discussion", "End of discussion!"])
+                                  "end discussion", "End of discussion!", "In session.", "in discussion"])
 def test_the_end_phrases_match_the_end_command(plugin, said):
     assert plugin.turns.spoken_command(said) == plugin.turns.END_SESSION
 
 
 @pytest.mark.parametrize("said", ["end session now please", "please end the session", "end", "session",
                                   "that is the end of discussion", "end of discussion for now", "discussion",
+                                  "we are in session", "in discussion with the team", "in",
                                   "tell me a story"])
 def test_other_text_is_no_end_command(plugin, said):
     assert plugin.turns.spoken_command(said) is None

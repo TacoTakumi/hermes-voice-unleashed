@@ -291,7 +291,8 @@ the whole utterance, in any case and with any punctuation:
 
 - "end session", "end the session", "end this session", "end of session",
   "end discussion" or "end of discussion" stops a reply that is playing and
-  says "Session ended". The page stops the microphone at once,
+  says "Session ended". "in session" and "in discussion" do the same: the
+  speech recognizer often hears "end" as "in". The page stops the microphone at once,
   lets the notice play out under the heading "Session ended", then lets the
   screen go off and shows the session list again.
 - "new session", "start a new session" or "start new session" stops a playing

@@ -49,6 +49,9 @@ SPOKEN_COMMANDS = {
     "end of session": END_SESSION,
     "end discussion": END_SESSION,
     "end of discussion": END_SESSION,
+    # What the speech recognizer often gives for "end session" and "end discussion".
+    "in session": END_SESSION,
+    "in discussion": END_SESSION,
     "new session": NEW_SESSION,
     "start a new session": NEW_SESSION,
     "start new session": NEW_SESSION,

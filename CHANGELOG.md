@@ -21,8 +21,9 @@ entry names next to its pinned commit.
   off." while VoiceManager's turn engine learns your voice at the start
   of a session, and "Barge-in ready." when it has. It needs a VoiceManager
   that sends the `barge_state` frame.
-- Three more spoken phrases end the session: "end of session", "end
-  discussion" and "end of discussion".
+- More spoken phrases end the session: "end of session", "end
+  discussion" and "end of discussion", and the forms the speech recognizer
+  often gives for them, "in session" and "in discussion".
 
 ### Changed
 
