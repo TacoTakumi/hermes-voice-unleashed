@@ -497,7 +497,10 @@ header > * { flex-shrink: 0; }
     // from speech, so its ready comes while the user is heard: that state keeps its
     // word and takes the news in its detail line. Any other state that reports
     // something (an error, the end of the session) keeps its own line.
-    if (FLOOR_STATES.includes(stateEl.textContent)) status();
+    // A prompt that waits for the user has its own state word over a floor state, and
+    // its line names the barge state too.
+    const waits = ["Waiting for approval", "Waiting for your answer"].includes(stateEl.textContent);
+    if (waits || FLOOR_STATES.includes(stateEl.textContent)) status();
     else if (stateEl.textContent === "Hearing you" && state) {
       detailEl.textContent = state === "learning" ? "Learning your voice. Barge-in is off." : "Barge-in ready.";
     }
