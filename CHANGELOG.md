@@ -6,7 +6,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
-## [0.3.3]
+## [0.4.0] - 2026-11-11
 
 ### Added
 
@@ -21,7 +21,6 @@ entry names next to its pinned commit.
   thanks", "no, just leave it", "nope", "don't", "stop", "cancel that". An
   answer said again counts: "I said yes", "I said no". Before, only one
   bare word counted and anything else was sent to Hermes as a new message.
-
 - While an approval prompt is open, a short utterance of up to three words
   that is not an answer no longer goes to Hermes, where it cancelled the
   prompt. The page shows what it heard, the prompt stays open and you hear
