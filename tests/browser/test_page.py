@@ -3049,3 +3049,20 @@ async def test_the_url_parameter_cues_0_starts_the_page_with_the_sound_cues_off(
     assert await page.text_content("#cues") == "Sound cues: off"
     await _silent_turn(site.sessions, page)
     await _no_cue_starts(page)
+
+
+@pytest.mark.parametrize("site", [PLAYBACK_LOCKED + CUES_RECORDED], indirect=True)
+async def test_with_playback_locked_no_blip_is_scheduled_until_the_tap(site):
+    """A context that does not run keeps its clock still: every blip scheduled on it would
+    sound at the same moment, one on the other, when the tap lets the context go."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
+    await page.wait_for_function(LISTENING, timeout=10000)
+    await page.wait_for_selector("#unmute:not([hidden])", timeout=5000)
+    await _silent_turn(site.sessions, page)
+    await asyncio.sleep(2.0)
+    assert await page.evaluate(CUE_COUNT) == 0
+    await page.click("#unmute")
+    await page.wait_for_selector("#unmute", state="hidden", timeout=5000)
+    cues = await _cues(page, 2, timeout=3000)
+    assert [c["freq"] for c in cues[:2]] == [392, 329.6], cues

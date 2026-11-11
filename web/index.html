@@ -361,7 +361,10 @@ header > * { flex-shrink: 0; }
   }
   function cueWanted() {
     const silent = !(reply && (reply.playing > 0 || reply.audible));
-    return cuesOn && running && !ending && !!playCtx && silent && CUE_STATES.includes(stateEl.textContent);
+    // A context that does not run (playback still locked) keeps its clock still: blips
+    // scheduled on it would all sound at once when it is let go.
+    const plays = !!playCtx && playCtx.state === "running";
+    return cuesOn && running && !ending && plays && silent && CUE_STATES.includes(stateEl.textContent);
   }
   function cueTick() {
     cueTimer = null;
@@ -1190,7 +1193,7 @@ header > * { flex-shrink: 0; }
   // one button that resumes the context on a tap for as long as it is not running.
   // Returns the check to run once the mic is up, when the state has had time to settle.
   function unlockPlayback(ctx) {
-    const check = () => { if (playCtx === ctx) unmuteEl.hidden = ctx.state === "running"; };
+    const check = () => { if (playCtx === ctx) { unmuteEl.hidden = ctx.state === "running"; cueSync(); } };
     ctx.onstatechange = check;
     ctx.resume().then(check, check);
     return check;
@@ -1198,7 +1201,7 @@ header > * { flex-shrink: 0; }
   unmuteEl.addEventListener("click", () => {
     const ctx = playCtx;
     if (!ctx) { unmuteEl.hidden = true; return; }
-    const check = () => { if (playCtx === ctx) unmuteEl.hidden = ctx.state === "running"; };
+    const check = () => { if (playCtx === ctx) { unmuteEl.hidden = ctx.state === "running"; cueSync(); } };
     ctx.resume().then(check, check);
   });
 
