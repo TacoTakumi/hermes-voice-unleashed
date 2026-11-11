@@ -14,6 +14,8 @@ entry names next to its pinned commit.
   two harmless strings read together as a delete from the root path, and
   the plugin validator's security scan gave a caution for the test file.
   The scan now reads the plugin as safe. No behaviour changes.
+- The test commands use harmless targets. No test file holds the text of
+  a command that names the root path or a system file.
 
 ## [0.4.0] - 2026-11-11
 

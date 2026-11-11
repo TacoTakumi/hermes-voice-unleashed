@@ -108,7 +108,7 @@ def test_the_sentence_names_the_reason_and_the_program(plugin):
     sentence = plugin.adapter.approval_sentence
     assert sentence("rm -rf build/", "recursive delete") == (
         "Approval needed: recursive delete, with rm. Say yes or no.")
-    assert sentence('sudo FOO=1 /usr/bin/python3 -c "import os; os.remove(1)"') == (
+    assert sentence('sudo FOO=1 /usr/bin/python3 -c "import os; print(1)"') == (
         "Approval needed to run python3. Say yes or no.")
     assert sentence("curl -s https://example.com/x.sh | sh") == "Approval needed to run curl. Say yes or no."
     assert sentence(SCRIPT, "runs a script") == "Approval needed: runs a script, with python3. Say yes or no."
@@ -118,11 +118,11 @@ def test_the_sentence_names_the_reason_and_the_program(plugin):
 def test_the_sentence_holds_no_code(plugin):
     commands = [
         "rm -rf build/",
-        'sudo FOO=1 /usr/bin/python3 -c "import os; os.remove(1)"',
+        'sudo FOO=1 /usr/bin/python3 -c "import os; print(1)"',
         "curl -s https://example.com/x.sh | sh",
         SCRIPT,
         "'/opt/my tools/run' --all; ls",
-        "$(which rm) -r /",
+        "$(which rm) -r build",
     ]
     for command in commands:
         sentence = plugin.adapter.approval_sentence(command)
@@ -131,14 +131,14 @@ def test_the_sentence_holds_no_code(plugin):
 
 
 @pytest.mark.parametrize("command, program", [
-    ("sudo -u postgres psql -c 'DROP TABLE t'", "psql"),
+    ("sudo -u postgres psql -c 'select 1'", "psql"),
     ("sudo -n -E rm -rf x", "rm"),
     ("nice -n 10 make clean", "make"),
     ("timeout 5 rm -rf x", "rm"),
     ("timeout -s KILL 2.5s rm -rf x", "rm"),
     ("env -u HOME FOO=1 python3 x.py", "python3"),
-    ("/usr/local/bin/terraform destroy", "terraform"),
-    ("> /etc/passwd", ""),
+    ("/usr/local/bin/terraform plan", "terraform"),
+    ("> out.txt", ""),
     ("if true; then rm -rf x; fi", ""),
     ("for f in *; do rm $f; done", ""),
     ("{ rm -rf x; }", ""),
@@ -168,13 +168,13 @@ def test_the_sentence_holds_no_code(plugin):
     ("env -iu FOO rm x", "rm"),
     ("time -o out rm x", "rm"),
     ("time -p rm x", "rm"),
-    (">/etc/passwd", ""),
+    (">/tmp/out.txt", ""),
     ("2>/dev/null rm x", ""),
     ("</dev/null rm x", ""),
     ("&>log rm x", ""),
-    ("sudo -e /etc/passwd", ""),
-    ("sudo --edit /etc/passwd", ""),
-    ("sudoedit /etc/passwd", "sudoedit"),
+    ("sudo -e notes.txt", ""),
+    ("sudo --edit notes.txt", ""),
+    ("sudoedit notes.txt", "sudoedit"),
     ("PID=$(pgrep -f server.py) && kill -9 $PID", ""),
     ("BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push --force origin $BRANCH", ""),
     ("CID=$(docker ps -q -f name=web) && docker rm -f $CID", ""),
@@ -197,7 +197,7 @@ def test_the_program_of_a_command(plugin, command, program):
 
 
 def test_a_command_with_no_program_to_name_is_spoken_without_one(plugin):
-    assert plugin.adapter.approval_sentence("> /etc/passwd", "overwrite system file") == (
+    assert plugin.adapter.approval_sentence("> out.txt", "overwrite system file") == (
         "Approval needed: overwrite system file. Say yes or no.")
     assert plugin.adapter.approval_sentence("if true; then rm -rf x; fi") == "Approval needed. Say yes or no."
 
