@@ -4,6 +4,7 @@ resumes after the spoken answer is spoken too."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -236,3 +237,103 @@ async def test_a_free_answer_and_an_answer_to_several_choices_go_through_as_hear
     await _heard(rig, "Four.")
     assert rig.events[-1].text == "Four."
 
+
+
+# --- the question card: the choices as buttons on the page -------------------------------
+async def _asked_with_choices(rig, clarify, clarify_id="q1"):
+    reply_id = await _reply_in_progress(rig)
+    _, key = clarify("Which colour?", COLOURS, clarify_id)
+    await rig.adapter.send_clarify("voice", "Which colour?", COLOURS, clarify_id, key)
+    await wait_for(lambda: rig.tts_text().endswith("or your answer."))
+    return reply_id
+
+
+async def _tap(rig, number, request_id="q1"):
+    await rig.page.ws.send(json.dumps({"type": "question_answer", "request_id": request_id, "number": number}))
+
+
+async def test_a_question_with_choices_opens_a_card_with_a_button_per_choice(rig, clarify):
+    await _asked_with_choices(rig, clarify)
+    assert rig.page.of("question") == [{
+        "type": "question", "request_id": "q1", "question": "Which colour?",
+        "choices": [{"number": i + 1, "label": label} for i, label in enumerate(COLOURS)]}]
+    assert rig.page.of("question_end") == []
+
+
+async def test_a_question_without_choices_and_one_with_several_answers_open_no_buttons(rig, clarify):
+    await _reply_in_progress(rig)
+    _, key = clarify(QUESTION)
+    await rig.adapter.send_clarify("voice", QUESTION, None, "q1", key)
+    await wait_for(lambda: rig.page.of("question"))
+    assert rig.page.of("question")[-1]["choices"] == []
+    clarify_gateway.clear_session(key)
+    clarify_gateway.register("q2", key, "Which colours?", COLOURS, multi_select=True)
+    await rig.adapter.send_clarify("voice", "Which colours?", COLOURS, "q2", key)
+    await wait_for(lambda: len(rig.page.of("question")) == 2)
+    assert rig.page.of("question")[-1]["choices"] == []  # a tap takes one choice only
+
+
+async def test_a_tap_on_a_choice_answers_the_question_as_its_number_does(rig, clarify):
+    reply_id = await _asked_with_choices(rig, clarify)
+    sent = len(rig.events)
+    await _tap(rig, 2)
+    await wait_for(lambda: len(rig.events) == sent + 1)
+    assert rig.events[-1].text == "2"  # the form the gateway takes as a selection
+    assert rig.events[-1].message_id != reply_id
+    assert rig.session.reply_id == reply_id and rig.session.reply_open  # the turn that asked goes on
+    assert rig.page.of("utterance")[-1] == {"type": "utterance", "text": "Blue", "resumed": True}
+    assert rig.page.of("question_end") == [{"type": "question_end", "request_id": "q1"}]
+
+
+@pytest.mark.parametrize("frame", [
+    {"type": "question_answer", "request_id": "q0", "number": 2},   # another question's card
+    {"type": "question_answer", "request_id": "q1", "number": 9},   # no such choice
+    {"type": "question_answer", "request_id": "q1", "number": "2"},
+    {"type": "question_answer", "request_id": "q1"},
+])
+async def test_a_tap_that_fits_no_choice_of_the_open_question_answers_nothing(rig, clarify, frame):
+    await _asked_with_choices(rig, clarify)
+    sent = len(rig.events)
+    await rig.page.ws.send(json.dumps(frame))
+    await asyncio.sleep(0.2)
+    assert len(rig.events) == sent
+    assert rig.page.of("question_end") == []
+
+
+async def test_a_tap_on_a_question_that_no_longer_waits_closes_the_card_and_answers_nothing(rig, clarify):
+    await _asked_with_choices(rig, clarify)
+    key = rig.adapter._source_session_key(rig.adapter._voice_source("voice"))
+    clarify_gateway.clear_session(key)  # it timed out, or was answered on another device
+    sent = len(rig.events)
+    await _tap(rig, 2)
+    await wait_for(lambda: rig.page.of("question_end"))
+    assert len(rig.events) == sent
+
+
+async def test_a_spoken_answer_closes_the_card(rig, clarify):
+    await _asked_with_choices(rig, clarify)
+    await _heard(rig, "Number four.")
+    assert rig.events[-1].text == "4"
+    assert rig.page.of("question_end") == [{"type": "question_end", "request_id": "q1"}]
+    sent = len(rig.events)
+    await _tap(rig, 2)  # a late tap on a card that is gone
+    await asyncio.sleep(0.2)
+    assert len(rig.events) == sent
+
+
+async def test_a_newer_question_replaces_the_card_of_the_one_before(rig, clarify):
+    await _asked_with_choices(rig, clarify)
+    key = rig.adapter._source_session_key(rig.adapter._voice_source("voice"))
+    clarify_gateway.clear_session(key)
+    clarify_gateway.register("q2", key, "And which size?", ["Small", "Large"])
+    await rig.adapter.send_clarify("voice", "And which size?", ["Small", "Large"], "q2", key)
+    await wait_for(lambda: len(rig.page.of("question")) == 2)
+    kinds = [f["type"] for f in rig.page.frames if f["type"].startswith("question")]
+    assert kinds == ["question", "question_end", "question"]
+    sent = len(rig.events)
+    await _tap(rig, 1)  # the old card's id
+    await asyncio.sleep(0.2)
+    assert len(rig.events) == sent
+    await _tap(rig, 2, "q2")
+    await wait_for(lambda: len(rig.events) == sent + 1)
+    assert rig.events[-1].text == "2"

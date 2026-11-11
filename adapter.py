@@ -970,6 +970,15 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         session = self.session_for(chat_id)
         if getattr(result, "success", False) and session is not None:
             try:
+                # The page shows that the turn waits, with the choices as buttons. A
+                # question that takes several choices gets none: a tap sends one.
+                entry = clarify_gateway.get_pending_for_session(session_key, include_choice_prompts=True)
+                several = bool(entry is not None and entry.multi_select)
+                await session.open_question(clarify_id, clarify_sentence(question),
+                                            [] if several else list(choices or []))
+            except Exception:
+                logger.warning("voice page %s: the question got no card", chat_id, exc_info=True)
+            try:
                 # The default send above already put the question on the page.
                 await session.speak_prompt(clarify_sentence(question, choices), show=False)
             except Exception:

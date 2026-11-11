@@ -3230,3 +3230,80 @@ async def test_barge_in_ready_shows_when_it_comes_while_hermes_thinks(stack):
     assert "Barge-in" not in await page.text_content("#detail")  # no reply plays: speech stops the turn
     await session.send_page({"type": "barge_state", "state": "ready"})
     await page.wait_for_function(f"{DETAIL}.includes('Barge-in ready.')", timeout=2000)
+
+
+# --- the question card: a question of the model with its choices as buttons -------------
+QUESTION_FRAME = {"type": "question", "request_id": "q1", "question": "Which room sensor should I check first?",
+                  "choices": [{"number": 1, "label": "Kitchen sensor"}, {"number": 2, "label": "Bedroom sensor"},
+                              {"number": 3, "label": "Office sensor"}]}
+
+
+async def _question_buttons(page):
+    return await page.eval_on_selector_all("#question-choices button", "els => els.map(e => e.textContent)")
+
+
+async def test_the_question_card_shows_the_question_and_a_button_per_choice(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    assert await page.is_hidden("#question")
+    await session.send_page(QUESTION_FRAME)
+    await page.wait_for_selector("#question:not([hidden])", timeout=3000)
+    assert await page.text_content("#question-text") == "Which room sensor should I check first?"
+    assert await _question_buttons(page) == ["1. Kitchen sensor", "2. Bedroom sensor", "3. Office sensor"]
+    await _state_is(page, "Waiting for your answer")
+    assert await page.text_content("#detail") == "Say your answer, or tap a choice."
+
+
+async def test_a_tap_on_the_question_card_sends_the_choice_and_closes_the_card(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    sent = _page_frames(session)
+    await session.send_page(QUESTION_FRAME)
+    await page.wait_for_selector("#question:not([hidden])", timeout=3000)
+    await page.locator("#question-choices button").nth(1).click()
+    await wait_for(lambda: [f for f in sent if f.get("type") == "question_answer"], timeout=3)
+    assert [f for f in sent if f.get("type") == "question_answer"] == [
+        {"type": "question_answer", "request_id": "q1", "number": 2}]
+    assert await page.is_hidden("#question")
+    await _state_is(page, "Thinking")  # the turn goes on
+
+
+async def test_the_question_card_closes_when_the_question_ends_and_on_a_reconnect(stack):
+    fake, page, sessions, _ = stack
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page(QUESTION_FRAME)
+    await page.wait_for_selector("#question:not([hidden])", timeout=3000)
+    await session.send_page({"type": "question_end", "request_id": "q0"})  # another question's end
+    await asyncio.sleep(0.2)
+    assert await page.is_visible("#question")
+    await session.send_page({"type": "question_end", "request_id": "q1"})
+    await page.wait_for_selector("#question", state="hidden", timeout=3000)
+    await _state_is(page, "Thinking")
+    await session.send_page(QUESTION_FRAME)
+    await page.wait_for_selector("#question:not([hidden])", timeout=3000)
+    await session.page.close()
+    await fake.wait_connections(2, timeout=10)
+    await _state_is(page, "Listening", timeout=10000)
+    assert await page.is_hidden("#question")
+
+
+@pytest.mark.parametrize("stack", [CUES_RECORDED], indirect=True)
+async def test_a_question_without_choices_shows_no_card_and_the_page_waits_in_silence(stack):
+    """The turn waits for the user, not for Hermes: no card, no thinking sound."""
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "question", "request_id": "q1", "question": "What next?", "choices": []})
+    await _state_is(page, "Waiting for your answer")
+    assert await page.text_content("#detail") == "Say your answer."
+    assert await page.is_hidden("#question")
+    await _no_cue_starts(page)
+    await session.send_page({"type": "question_end", "request_id": "q1"})
+    await _state_is(page, "Thinking")
+
+
+async def test_an_approval_prompt_keeps_the_state_line_while_a_question_card_is_open(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page(QUESTION_FRAME)
+    await _state_is(page, "Waiting for your answer")
+    await session.send_page(APPROVAL)
+    await _state_is(page, "Waiting for approval")
+    assert await page.is_visible("#approval") and await page.is_visible("#question")
+    await session.send_page({"type": "approval_end", "request_id": "r1"})
+    await _state_is(page, "Waiting for your answer")

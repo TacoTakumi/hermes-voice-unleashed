@@ -234,6 +234,9 @@ class VoiceSession:
         self.turn_engine: Optional[str] = None
         # The server said that its turn engine still learns the user's voice.
         self._barge_learning = False
+        # The question of the model that the page shows a card for, and its choices.
+        self._question_id: Optional[str] = None
+        self._question_choices: list[str] = []
         self.turn_engine_refusal: Optional[str] = None
         self._tasks: list[asyncio.Task] = []
         self._failed = False  # the end was logged and the page told; later ends are silent
@@ -502,6 +505,7 @@ class VoiceSession:
         """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
         request so VoiceManager speaks the rest."""
         await self._approval_sync()
+        await self._end_question()  # a turn that is over waits for no answer
         if not self.reply_open:
             if self._turn_started and self._same_reply(reply_id):
                 # The reply was cut while its turn ran: the page waited for this end.
@@ -686,12 +690,14 @@ class VoiceSession:
             # The page shows what was said; the gateway gets the answer in the form it
             # takes as a selection when the user said a choice's number or name.
             answer = await self._question_answer(text)
+            await self._end_question()  # answered by voice: the card is over
             self._reopen_reply()
             # As for an approval word, the answer resumes the turn that waits.
             await self.send_page({"type": "utterance", "text": text, "resumed": True, **self._next_epoch()})
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
             return
+        await self._end_question()  # a card still open is of a question that waits no more
         await self._fold_cut_turn()
         self._open_reply()
         await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
@@ -755,6 +761,56 @@ class VoiceSession:
         except Exception:
             logger.warning("voice page %s: answer mapping failed", self.client_id, exc_info=True)
             return text
+
+    async def open_question(self, request_id: str, question: str, choices: list[str]) -> None:
+        """The model asked a question: the page shows that the turn waits for the user,
+        and a card with one button per choice when ``choices`` has any.
+
+        One question waits at a time, so a new one replaces the card of the one
+        before. The card stays until a ``question_end`` frame with its request id:
+        the user answered by voice or by tap, or the question waits no more."""
+        await self._end_question()
+        self._question_id, self._question_choices = request_id, [str(choice) for choice in choices]
+        await self.send_page({"type": "question", "request_id": request_id, "question": question,
+                              "choices": [{"number": number, "label": label}
+                                          for number, label in enumerate(self._question_choices, 1)]})
+
+    async def _end_question(self) -> bool:
+        """Close the question card on the page; whether one was open."""
+        if self._question_id is None:
+            return False
+        request_id, self._question_id, self._question_choices = self._question_id, None, []
+        await self.send_page({"type": "question_end", "request_id": request_id})
+        return True
+
+    async def _on_question_answer(self, frame: dict[str, Any]) -> None:
+        """The user tapped a choice of the question card.
+
+        The gateway gets the choice's number, as for a spoken "number two", and takes
+        it as the answer of the question the chat waits for. Only a tap on the card
+        that is open counts, and only while a question still waits: a late tap must
+        not go to Hermes as a message of its own."""
+        number = frame.get("number")
+        if self._question_id is None or frame.get("request_id") != self._question_id:
+            return
+        if not (isinstance(number, int) and not isinstance(number, bool)
+                and 1 <= number <= len(self._question_choices)):
+            return
+        label = self._question_choices[number - 1]
+        if not await self._answers_question():
+            await self._end_question()  # it timed out, or was answered on another device
+            return
+        logger.info("voice page %s: question answered on the page (%s)", self.client_id, number)
+        await self.cancel_reply("question answer")  # the question's audio stops, as when the user speaks
+        await self._end_question()
+        self._reopen_reply()
+        # No utterance came through the tracker for this answer, so it is told here
+        # that a reply runs: the next utterance must stop it like any other.
+        self.tracker.reply_started()
+        # The answer resumes the turn that waits: the page keeps that turn's reasoning and clock.
+        await self.send_page({"type": "utterance", "text": label, "resumed": True, **self._next_epoch()})
+        if self._on_utterance is not None:
+            await self._on_utterance(str(number), uuid.uuid4().hex)
 
     async def open_approval(self, request_id: str, sentence: str, frame: dict[str, Any]) -> None:
         """An approval prompt came: the page shows it with ``frame`` and ``sentence``
@@ -1083,6 +1139,9 @@ class VoiceSession:
             return
         if frame.get("type") == "approval_answer":
             await self._on_approval_answer(frame)
+            return
+        if frame.get("type") == "question_answer":
+            await self._on_question_answer(frame)
             return
         if frame.get("type") != "playback" or not self.turn_engine:
             return

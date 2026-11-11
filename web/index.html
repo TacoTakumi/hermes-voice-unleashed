@@ -170,6 +170,13 @@ footer { padding: 12px var(--gutter) 20px; display: flex; flex-wrap: wrap; justi
 /* The switch for the sound cues: a quiet button, on or off, beside the main one. */
 #cues { min-width: 0; padding: 12px 18px; background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.3); }
 #cues[aria-pressed="false"] { color: color-mix(in srgb, var(--paper) 60%, transparent); }
+/* A question of the model with its choices as buttons: a tap answers when speech does
+   not get through. Many choices scroll inside the card. */
+#question { flex: 1 0 100%; min-width: 0; background: var(--ink-raised); box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.3); border-radius: 2.5px; padding: 12px 14px; }
+#question[hidden] { display: none; }
+#question-text { margin: 0; font-size: 14px; line-height: 1.4; color: var(--paper); overflow-wrap: anywhere; }
+#question-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; max-height: min(15em, 36dvh); overflow-y: auto; }
+#question-choices button { flex: 1 1 8rem; min-width: 0; padding: 12px 14px; text-align: left; background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.3); }
 /* The approval prompt: above the footer buttons, where a thumb reaches it. The command
    scrolls inside itself, so a long script never pushes the choices off the screen. */
 #approval { flex: 1 0 100%; min-width: 0; background: var(--ink-raised); box-shadow: inset 0 0 0 1px var(--glow); border-radius: 2.5px; padding: 12px 14px; }
@@ -260,6 +267,10 @@ header > * { flex-shrink: 0; }
   <ol id="log" aria-live="polite"></ol>
 </main>
 <footer>
+  <section id="question" hidden aria-label="Question" aria-live="polite">
+    <p id="question-text"></p>
+    <div id="question-choices"></div>
+  </section>
   <section id="approval" hidden aria-label="Approval needed" aria-live="assertive">
     <p id="approval-reason"></p>
     <pre id="approval-command"></pre>
@@ -315,6 +326,7 @@ header > * { flex-shrink: 0; }
   let busy = false; // a Hermes turn runs: from its utterance until turn_done
   let turnStreamed = false; // this turn streamed reply text
   let approval = null; // the request id of the approval prompt that is open, in an object
+  let question = null; // the question of the model that waits for the user's answer
   // How long reply audio must be silent before the page stops showing Speaking: chunks
   // arrive paced, so the queue can run dry for a moment between two of them.
   const QUIET_MS = 600;
@@ -399,6 +411,12 @@ header > * { flex-shrink: 0; }
       state = "Waiting for approval";
       who = "hermes";
       detail = muted ? "Tap a choice." : "Say yes or no, or tap a choice.";
+    } else if (question && FLOOR_STATES.includes(state)) {
+      // The turn waits for the user's answer, not for Hermes.
+      state = "Waiting for your answer";
+      who = "hermes";
+      detail = !question.choices ? (muted ? "Your microphone is off." : "Say your answer.")
+        : muted ? "Tap a choice." : "Say your answer, or tap a choice.";
     }
     stateEl.textContent = state;
     showElapsed();
@@ -480,6 +498,38 @@ header > * { flex-shrink: 0; }
     const invite = bargeState === "learning" ? "Learning your voice. Barge-in is off."
       : bargeState === "ready" ? "Barge-in ready." : "Say something.";
     show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : invite);
+  }
+  // --- the question card: a question the model asks, one button per choice -------------
+  // The question is also spoken and its answer can be spoken. A tap sends the choice's
+  // number, the answer a spoken "number two" gives. The card is over when the server
+  // says so: answered by voice or by tap, or the question waits no more.
+  const questionEl = document.getElementById("question");
+  const questionChoices = document.getElementById("question-choices");
+  function questionOpen(f) {
+    const choices = Array.isArray(f.choices) ? f.choices : [];
+    question = { id: f.request_id || null, choices: choices.length };
+    document.getElementById("question-text").textContent = f.question || "";
+    questionChoices.textContent = "";
+    for (const c of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `${c.number}. ${c.label}`;
+      button.addEventListener("click", () => {
+        if (!question) return;
+        send({ type: "question_answer", request_id: question.id, number: c.number });
+        questionClose();
+      });
+      questionChoices.appendChild(button);
+    }
+    questionEl.hidden = !choices.length;
+    status();
+  }
+  function questionClose(restate = true) {
+    if (!question) return;
+    question = null;
+    questionEl.hidden = true;
+    questionChoices.textContent = "";
+    if (restate) status();
   }
   // --- the approval prompt: the command, why it needs approval, one button per choice ----
   const approvalEl = document.getElementById("approval");
@@ -913,6 +963,7 @@ header > * { flex-shrink: 0; }
         // The barge state is the server session's: this connection has a new one.
         clearTimeout(bargeTimer);
         bargeState = null;
+        questionClose(false);  // the card was of the connection that is gone
         listening();
         break;
       case "error":
@@ -953,6 +1004,12 @@ header > * { flex-shrink: 0; }
         // A line from the server that is nobody's speech: what it heard when it could
         // not take the words as an answer.
         if (f.text) addTurn("note", f.text);
+        break;
+      case "question":
+        questionOpen(f);
+        break;
+      case "question_end":
+        if (question && (!f.request_id || f.request_id === question.id)) questionClose();
         break;
       case "barge_state":
         if (f.state === "learning" || f.state === "ready") bargeSet(f.state);
@@ -1272,6 +1329,7 @@ header > * { flex-shrink: 0; }
     cueSync();
     clearTimeout(bargeTimer);
     bargeState = null;
+    questionClose(false);
     ending = false;
     moved = false;
     clearTimeout(endDrain);
