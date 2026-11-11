@@ -259,8 +259,11 @@ _COMMAND_PREFIXES: dict[str, frozenset[str]] = {
     "timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
     "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
     "exec": frozenset({"-a"}),
-    "nohup": frozenset(), "time": frozenset(), "command": frozenset(), "setsid": frozenset(),
+    "time": frozenset({"-o", "-f", "--output", "--format"}),
+    "nohup": frozenset(), "command": frozenset(), "setsid": frozenset(),
 }
+# Options that make a prefix word do something else than run the next program.
+_NOT_A_RUN: dict[str, frozenset[str]] = {"sudo": frozenset({"-e", "--edit", "-l", "--list", "-v", "--validate"})}
 # Long options of those words that take no value. Any other long option without "="
 # may take one, and then the program cannot be told.
 _PLAIN_LONG_OPTIONS = frozenset({"--", "--login", "--preserve-env", "--non-interactive", "--stdin", "--shell",
@@ -282,6 +285,7 @@ def command_program(command: str) -> str:
     except ValueError:  # an open quote, closed on a later line: only plain words are safe
         tokens, split_by_shell_rules = line.split(), False
     value_flags: frozenset[str] = frozenset()
+    not_a_run: frozenset[str] = frozenset()
     skip_value = prefixed = False
     for token in tokens:
         if not split_by_shell_rules and ("'" in token or '"' in token):
@@ -291,16 +295,32 @@ def command_program(command: str) -> str:
             continue
         if re.match(r"\w+=", token):
             continue
-        if prefixed and token.startswith("-"):
+        if re.match(r"\d*[<>]|&>", token):
+            return ""  # a redirect comes first: what runs is not in the first words
+        if prefixed and token.startswith("--"):
+            if token in not_a_run:
+                return ""
             if token in value_flags:
                 skip_value = True
-            elif token.startswith("--") and "=" not in token and token not in _PLAIN_LONG_OPTIONS:
+            elif "=" not in token and token not in _PLAIN_LONG_OPTIONS:
                 return ""
+            continue
+        if prefixed and token.startswith("-"):
+            # Short options, perhaps several in one word ("-iu postgres"). The first
+            # that takes a value ends the word: the value is the rest of the word,
+            # or the next word when nothing is left.
+            for at, letter in enumerate(token[1:], start=1):
+                if "-" + letter in not_a_run:
+                    return ""
+                if "-" + letter in value_flags:
+                    skip_value = at == len(token) - 1
+                    break
             continue
         if prefixed and _NUMBER_OR_DURATION.match(token):
             continue  # the duration of timeout
         if token in _COMMAND_PREFIXES:
             value_flags, prefixed = _COMMAND_PREFIXES[token], True
+            not_a_run = _NOT_A_RUN.get(token, frozenset())
             continue
         name = token.rsplit("/", 1)[-1]
         if name in _SHELL_WORDS or not _PROGRAM_NAME.match(name):

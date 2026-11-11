@@ -153,6 +153,22 @@ def test_the_sentence_holds_no_code(plugin):
     ("'/opt/my tools/wipe --all", ""),
     ("echo 'it''s' fine", "echo"),
     ("sudo --frobnicate x rm", ""),
+    ("sudo -iu postgres psql", "psql"),
+    ("sudo -Hu www-data php x", "php"),
+    ("sudo -Eu root rm x", "rm"),
+    ("sudo -upostgres psql", "psql"),
+    ("sudo -nE rm x", "rm"),
+    ("doas -nu root rm x", "rm"),
+    ("env -iu FOO rm x", "rm"),
+    ("time -o out rm x", "rm"),
+    ("time -p rm x", "rm"),
+    (">/etc/passwd", ""),
+    ("2>/dev/null rm x", ""),
+    ("</dev/null rm x", ""),
+    ("&>log rm x", ""),
+    ("sudo -e /etc/passwd", ""),
+    ("sudo --edit /etc/passwd", ""),
+    ("sudoedit /etc/passwd", "sudoedit"),
 ])
 def test_the_program_of_a_command(plugin, command, program):
     assert plugin.adapter.command_program(command) == program
