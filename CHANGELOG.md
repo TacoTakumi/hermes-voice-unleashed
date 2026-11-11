@@ -31,6 +31,11 @@ entry names next to its pinned commit.
 
 ### Fixed
 
+- The reply voice could stutter after its first words, most on a phone:
+  the first clause had played out before the audio of the rest arrived,
+  and each chunk that came a little late left a gap. Audio that arrives
+  after the page's queue ran dry now waits 200 ms, so the chunks that
+  follow join it: one short pause in place of the stutter.
 - A reply that was cut (a barge with no words after it, for one) left
   the page on "Listening" while Hermes still worked, and the turn's tool
   lines and reasoning stopped. The page now stays on the turn until the
