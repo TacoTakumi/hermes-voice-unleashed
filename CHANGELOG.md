@@ -19,7 +19,8 @@ entry names next to its pinned commit.
 - The first page says what this is: the Hermes / Voice Unleashed logo and a
   line on what the page does. The newest session leads as a Continue card
   above New session. The other sessions follow under Earlier as thin lines
-  with their source and age.
+  with their source and age. A session's source shows as the channel's
+  name (Telegram, CLI); sessions this page started carry no source tag.
 
 ## [0.3.2]
 
