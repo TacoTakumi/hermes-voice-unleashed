@@ -2557,3 +2557,26 @@ async def test_an_empty_transcript_takes_no_room_and_one_with_text_shows_as_befo
     await page.wait_for_function("document.getElementById('transcript').textContent === 'what is the weather'")
     spoken = await box()
     assert spoken["height"] > 20 and abs(spoken["gap"] - 14) <= 1, spoken
+
+
+async def test_the_log_follows_a_reply_while_the_header_gives_room_back_after_a_touch(stack):
+    """When the header gets lower the log area grows and the browser moves the log's
+    position down by itself. That move is not the user's scroll, also right after a touch
+    and when more reply text is there before the page gets the scroll event of the move."""
+    fake, page, sessions, utterances = stack
+    session = await _a_session_with_a_long_log(fake, page, sessions)
+    await session.send_page({"type": "utterance", "text": "tell me a long story"})
+    long = "I keep talking about this and that while it answers me"
+    await session.send_page({"type": "transcript", "text": long})
+    await page.wait_for_function("document.getElementById('transcript').textContent.length > 20")
+    assert (await _log_box(page))["atEnd"]
+    await page.evaluate("document.querySelector('main').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+    for i in range(40):
+        # The heard words go from two lines to one and back: the header gets lower, then higher.
+        await session.send_page({"type": "transcript", "text": "wait" if i % 2 == 0 else long})
+        await asyncio.sleep(0.010)
+        await session.send_page({"type": "reply_delta", "text": f"Part {i} of a long answer that wraps. "})
+        await asyncio.sleep(0.035)
+    await page.wait_for_function("document.getElementById('log').textContent.includes('Part 39 of')")
+    box = await _log_box(page)
+    assert box["atEnd"], box
