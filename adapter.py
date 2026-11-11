@@ -201,6 +201,16 @@ _ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", 
 _SOUND_ALIKES = {"won": 1, "to": 2, "too": 2, "for": 4, "fore": 4, "ate": 8}
 _BEFORE_A_NUMBER = ("number", "option", "choice")
 _AFTER_AN_ORDINAL = ("one", "option", "choice")
+# Words that lead into an answer said as a sentence ("I said one", "let us go with
+# blue"). An answer the recognizer gave no text for is said again like that. Only
+# these words may stand before the number or the name: "not one", "the dark one"
+# and "one more question" stay what they are, answers in the user's own words.
+_ANSWER_LEAD_INS = frozenset((
+    "i", "i'll", "ill", "i'd", "id", "said", "say", "pick", "picked", "choose", "chose", "take", "want",
+    "select", "it's", "its", "is", "my", "answer", "go", "going", "with", "let's", "lets", "let", "us",
+    "will", "would", "like", "the", "just", "okay", "ok", "yes", "um", "uh", "well", "definitely",
+    "think", "guess"))
+_MAX_ANSWER_WORDS = 5
 
 
 def _spoken_words(text: str) -> list[str]:
@@ -208,13 +218,15 @@ def _spoken_words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", re.sub(r"\([^)]*\)", " ", str(text)).lower())
 
 
-def _spoken_number(words: list[str]) -> Optional[int]:
+def _spoken_number(words: list[str], alone: bool = True) -> Optional[int]:
     """The choice number ``words`` name, said as "four", "number four", "option 4",
-    "the fourth" or "the fourth one"; None when they say anything else."""
+    "the fourth" or "the fourth one"; None when they say anything else. With
+    ``alone`` false the words are the end of a sentence, where a sound-alike ("to",
+    "for") is the word it looks like."""
     if words and words[-1] == "please":
         words = words[:-1]
-    if len(words) == 2 and words[0] in _BEFORE_A_NUMBER:
-        words = words[1:]
+    if (len(words) == 2 and words[0] in _BEFORE_A_NUMBER) or not alone:
+        words = words[1:] if len(words) == 2 and words[0] in _BEFORE_A_NUMBER else words
         sound_alikes = {}
     else:
         sound_alikes = _SOUND_ALIKES
@@ -253,6 +265,20 @@ def spoken_choice(text: str, choices: Optional[list]) -> Optional[str]:
         if _spoken_words(choice) == words:
             return str(choice).strip()
     number = _spoken_number(words)
+    if number is not None and 1 <= number <= len(choices):
+        return str(number)
+    # A short sentence that leads into the answer: what comes after the lead-in
+    # words must be a choice's name or its number, and nothing else.
+    said = words[:-1] if words[-1] == "please" else words
+    rest = list(said)
+    while rest and rest[0] in _ANSWER_LEAD_INS:
+        rest = rest[1:]
+    if not rest or len(rest) == len(said) or len(said) > _MAX_ANSWER_WORDS:
+        return None
+    for choice in choices:
+        if _spoken_words(choice) == rest:
+            return str(choice).strip()
+    number = _spoken_number(rest, alone=False)
     if number is not None and 1 <= number <= len(choices):
         return str(number)
     return None

@@ -189,6 +189,25 @@ def test_any_other_answer_is_left_as_it_was_heard(plugin, said):
     assert plugin.adapter.spoken_choice(said, COLOURS) is None
 
 
+@pytest.mark.parametrize("said, sent", [
+    ("I said one", "1"), ("I pick two.", "2"), ("Option three please", "3"), ("I'll take number four", "4"),
+    ("Let us go with three", "3"), ("My answer is two", "2"), ("the answer is 1", "1"), ("I said the first", "1"),
+    ("I said blue", "Blue"), ("Let's go with red", "Red (Recommended)"), ("I pick black please", "Black"),
+])
+def test_a_short_sentence_that_ends_in_a_number_or_a_choice_name_is_a_selection(plugin, said, sent):
+    """An answer that got no text is said again as a sentence: "I said one"."""
+    assert plugin.adapter.spoken_choice(said, COLOURS) == sent
+
+
+@pytest.mark.parametrize("said", [
+    "one more question", "the dark one", "that one", "for the dark one", "not that one",
+    "one or two", "I said one or two", "I think two of them are wrong", "blue is not the one",
+    "I really do not want to pick number one", "I said five", "I said purple", "not one", "not blue",
+])
+def test_a_sentence_that_only_holds_a_number_or_a_name_is_left_as_it_was_heard(plugin, said):
+    assert plugin.adapter.spoken_choice(said, COLOURS) is None
+
+
 def test_a_choice_name_wins_over_a_number_and_an_open_question_maps_nothing(plugin):
     assert plugin.adapter.spoken_choice("Two.", ["Two", "One"]) == "Two"
     assert plugin.adapter.spoken_choice("Four.", None) is None
