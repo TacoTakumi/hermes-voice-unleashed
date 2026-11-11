@@ -687,6 +687,9 @@ class VoiceSession:
         await self.cancel_reply("approval answer")  # the prompt's audio stops, as when the user speaks
         await self._end_approval()
         self._reopen_reply()
+        # No utterance came through the tracker for this answer, so it is told here
+        # that a reply runs: the next utterance must stop it like any other.
+        self.tracker.reply_started()
         await self.send_page({"type": "utterance", "text": word, **self._next_epoch()})
         if self._on_utterance is not None:
             await self._on_utterance(word, uuid.uuid4().hex)

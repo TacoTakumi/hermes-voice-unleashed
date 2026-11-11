@@ -576,3 +576,25 @@ async def test_a_short_utterance_with_nothing_pending_is_an_ordinary_utterance(r
     rig.wants(False)
     await _heard(rig, "Yet please")
     assert rig.events[-1].text == "Yet please" and not rig.page.of("note")
+
+
+@pytest.mark.parametrize("asked_again", [False, True])
+async def test_a_new_utterance_cancels_the_resumed_reply_after_a_tap(rig, asked_again):
+    """The reply that a tap reopened is a running reply like any other: the next
+    utterance stops it, also when a misheard answer was asked again before the tap."""
+    reply_id = await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    if asked_again:
+        await rig.conn.send({"type": "turn_end", "text": "Yet please", "turn_id": 0})
+        await wait_for(lambda: rig.page.of("note"))
+    count = len(rig.events)
+    await _tap(rig, "once")
+    await wait_for(lambda: len(rig.events) > count)
+    await rig.session.on_reply_delta(reply_id, "t1", 2, "Done. ")
+    await wait_for(lambda: rig.tts_text().endswith("Done. "))
+    resumed = rig.conn.json_frames("tts_stream")[-1]["request_id"]
+    clears, dones = len(rig.page.of("clear")), len(rig.page.of("turn_done"))
+    rig.wants(False)
+    await _heard(rig, "tell me more about it")
+    assert resumed in [f["request_id"] for f in rig.conn.json_frames("tts_cancel")]
+    assert len(rig.page.of("clear")) > clears and len(rig.page.of("turn_done")) > dones
