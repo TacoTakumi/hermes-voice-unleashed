@@ -1182,9 +1182,11 @@ async def test_the_page_shows_working_while_the_turn_runs_between_spoken_parts(s
     await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
     await conn.send(b"\x10\x00" * 4800)  # 0.2 s
     await page.wait_for_function(f"{state} === 'Speaking'", timeout=5000)
+    await session.send_page({"type": "tool_start", "id": "c1", "name": "web_search", "summary": "weather"})
     await page.wait_for_function(f"{state} === 'Working'", timeout=5000)  # the audio ran out
     await asyncio.sleep(0.5)
     assert await page.text_content("#state") == "Working"
+    await session.send_page({"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 10})
     await session.on_reply_delta(reply_id, "t1", 2, "It is sunny.")
     await session.on_turn_done(reply_id, "t1", False)
     await wait_for(lambda: any(f.get("done") for f in conn.json_frames("tts_stream")))
@@ -1521,7 +1523,11 @@ async def test_working_and_thinking_show_the_elapsed_time_and_tool_count(stack):
         return int(m) * 60 + int(s)
 
     assert secs(second) > secs(first)
-    assert await page.text_content("#state") == "Thinking"
+    assert await page.text_content("#state") == "Working"
+    for call in ("c1", "c2"):
+        await session.send_page({"type": "tool_end", "id": call, "status": "ok", "duration_ms": 10})
+    await page.wait_for_function("document.getElementById('state').textContent === 'Thinking'")
+    assert await page.is_visible("#elapsed")
     await session.send_page({"type": "turn_done"})
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'")
     assert await page.is_hidden("#elapsed")
@@ -2673,4 +2679,144 @@ async def test_a_note_frame_adds_a_note_line_and_leaves_the_approval_prompt_open
     await session.send_page({"type": "turn_done"})
     await asyncio.sleep(0.2)
     assert await page.is_visible("#approval")
+    assert await page.text_content("#state") == "Waiting for approval"
+
+
+# --- the state line during a turn: Thinking, or Working while a tool call runs ---------
+async def _state_is(page, state, timeout=3000):
+    await page.wait_for_function(f"{STATE} === {json.dumps(state)}", timeout=timeout)
+
+
+async def _turn_from_an_utterance_frame(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    await _state_is(page, "Thinking")
+    return session, page
+
+
+def _tool(call, kind="tool_start"):
+    if kind == "tool_start":
+        return {"type": "tool_start", "id": call, "name": "terminal", "summary": call}
+    return {"type": "tool_end", "id": call, "status": "ok", "duration_ms": 10}
+
+
+async def test_the_state_reads_working_while_a_tool_call_runs_and_thinking_otherwise(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page(_tool("c1"))
+    await _state_is(page, "Working")
+    assert await page.is_visible("#elapsed")
+    await session.send_page(_tool("c1", "tool_end"))
+    await _state_is(page, "Thinking")
+    assert await page.is_visible("#elapsed")
+    for call in ("c2", "c3"):
+        await session.send_page(_tool(call))
+    await _state_is(page, "Working")
+    await session.send_page(_tool("c2", "tool_end"))
+    await page.wait_for_function("document.querySelectorAll('#tools .tool.done').length === 2")
+    assert await page.text_content("#state") == "Working"  # one tool call still runs
+    await session.send_page(_tool("c3", "tool_end"))
+    await _state_is(page, "Thinking")
+
+
+async def test_a_clear_frame_without_a_turn_done_leaves_the_state_of_the_turn(stack):
+    """After a barge the server clears the reply but the turn goes on: the page shows
+    what Hermes does until the turn_done that ends it."""
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "clear", "request_id": None})
+    await asyncio.sleep(0.3)
+    assert await page.text_content("#state") == "Thinking"
+    await session.send_page(_tool("c1"))
+    await _state_is(page, "Working")
+    await session.send_page({"type": "clear", "request_id": None})
+    await asyncio.sleep(0.3)
+    assert await page.text_content("#state") == "Working"
+    await session.send_page(_tool("c1", "tool_end"))
+    await _state_is(page, "Thinking")
+    await session.send_page({"type": "turn_done"})
+    await _state_is(page, "Listening")
+    assert await page.is_hidden("#elapsed")
+
+
+async def test_words_that_lead_to_no_utterance_give_the_state_of_the_turn_back(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "transcript", "text": "hm", "final": False})
+    await _state_is(page, "Hearing you")
+    await session.send_page({"type": "transcript", "text": "", "final": True})
+    await _state_is(page, "Thinking")
+    await session.send_page(_tool("c1"))
+    await _state_is(page, "Working")
+    await session.send_page({"type": "transcript", "text": "hm", "final": False})
+    await _state_is(page, "Hearing you")
+    await session.send_page(_tool("c1", "tool_end"))  # the user still has the floor
+    await page.wait_for_function("document.querySelectorAll('#tools .tool.done').length === 1")
+    assert await page.text_content("#state") == "Hearing you"
+    await session.send_page({"type": "transcript", "text": "", "final": True})
+    await _state_is(page, "Thinking")
+    await session.send_page({"type": "turn_done"})
+    await _state_is(page, "Listening")
+    await session.send_page({"type": "transcript", "text": "hm", "final": False})
+    await _state_is(page, "Hearing you")
+    await session.send_page({"type": "transcript", "text": "", "final": True})
+    await _state_is(page, "Listening")
+
+
+def _elapsed_seconds(text):
+    m, s = re.search(r"(\d+):(\d\d)", text).groups()
+    return int(m) * 60 + int(s)
+
+
+async def test_an_utterance_that_resumes_a_turn_keeps_its_reasoning_clock_and_tool_lines(stack):
+    """The answer to an approval or a question goes on with the same turn; an ordinary
+    utterance starts a new one."""
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "reasoning_delta", "text": "Looking at the build."})
+    await session.send_page(_tool("c1"))
+    await _state_is(page, "Working")
+    await asyncio.sleep(2.2)
+    await session.send_page({"type": "utterance", "text": "yes", "resumed": True})
+    await page.wait_for_function("document.querySelectorAll('#log .turn.user').length === 2")
+    assert await page.text_content("#state") == "Working"
+    assert "Looking at the build" in await page.text_content("#reason-full")
+    assert await page.is_visible("#reasoning")
+    elapsed = await page.text_content("#elapsed")
+    assert _elapsed_seconds(elapsed) >= 2 and "1 tool" in elapsed, elapsed
+    await session.send_page({"type": "utterance", "text": "something else"})
+    await page.wait_for_function("document.querySelectorAll('#log .turn.user').length === 3")
+    await page.wait_for_function("document.getElementById('elapsed').textContent === '0:00'")
+    assert await page.text_content("#reason-full") == ""
+    assert await page.is_hidden("#reasoning")
+
+
+async def test_an_utterance_that_resumes_starts_the_clock_when_none_runs(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    await sessions[0].send_page({"type": "utterance", "text": "yes", "resumed": True})
+    await _state_is(page, "Thinking")
+    assert await page.is_visible("#elapsed")
+    assert _elapsed_seconds(await page.text_content("#elapsed")) <= 1
+
+
+async def test_a_turn_that_fails_after_streamed_text_ends_listening(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "reply_delta", "text": "Let me check. "})
+    await session.send_page({"type": "reply", "text": "The model did not answer: connection refused."})
+    await session.send_page({"type": "turn_done"})
+    await _state_is(page, "Listening")
+    assert await page.is_hidden("#elapsed")
+    texts = await page.eval_on_selector_all("#log .turn.hermes", "els => els.map(e => e.textContent)")
+    assert texts == ["Let me check. ", "The model did not answer: connection refused."]
+
+
+async def test_tool_frames_leave_waiting_for_approval_while_a_prompt_is_open(stack):
+    page = stack[1]
+    session, _ = await _blocked_turn(stack)
+    await session.send_page(APPROVAL)
+    await _state_is(page, "Waiting for approval", 5000)
+    await session.send_page(_tool("c2"))
+    await page.wait_for_function("document.querySelectorAll('#tools .tool').length === 2")
+    assert await page.text_content("#state") == "Waiting for approval"
+    await session.send_page(_tool("c2", "tool_end"))
+    await page.wait_for_function("document.querySelectorAll('#tools .tool.done').length === 1")
     assert await page.text_content("#state") == "Waiting for approval"

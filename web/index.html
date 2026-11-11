@@ -418,13 +418,25 @@ header > * { flex-shrink: 0; }
     approvalChoices.textContent = "";
     if (restate) status();
   }
+  // What Hermes does in the turn that runs: Working while one of its tool calls runs,
+  // Thinking otherwise.
+  function turnState() {
+    const tool = turnTools.some((li) => li.classList.contains("running"));
+    const detail = tool ? "Hermes is still working." : "Hermes is working on it.";
+    show(tool ? "Working" : "Thinking", "hermes", muted ? detail : detail + " Speaking now stops it.");
+  }
   // What the page shows when nobody is talking: Hermes speaking, Hermes still at work, or
   // waiting for the user.
   function status() {
     if (!running || ending) return;
     if (reply && reply.audible) show("Speaking", "hermes", "Talk over it to stop it.");
-    else if (busy) show("Working", "hermes", muted ? "Hermes is still working." : "Hermes is still working. Speaking now stops it.");
+    else if (busy) turnState();
     else listening();
+  }
+  // A tool call began or ended: the state line follows when it shows what Hermes does.
+  // Any other state (the user or the reply has the floor, a prompt, an alert) stays.
+  function toolChanged() {
+    if (busy && ["Thinking", "Working"].includes(stateEl.textContent)) status();
   }
 
   // --- the reasoning line: the newest sentence, the whole text on a tap ------------------
@@ -790,6 +802,8 @@ header > * { flex-shrink: 0; }
       case "transcript":
         transcriptEl.textContent = f.text || "";
         if (f.text && !(reply && reply.audible)) show("Hearing you", "you");
+        // The words are gone and no utterance took them: the floor goes back.
+        else if (!f.text && stateEl.textContent === "Hearing you") status();
         break;
       case "utterance":
         transcriptEl.textContent = "";
@@ -798,9 +812,15 @@ header > * { flex-shrink: 0; }
         absorbing = null;
         busy = true;
         turnStreamed = false;
-        turnBegin();
-        reasoningClear();
-        show("Thinking", "hermes", "Hermes is working on it.");
+        // An answer to an approval or a question goes on with the same turn: its
+        // reasoning, clock and tool lines stay.
+        if (!f.resumed) {
+          turnBegin();
+          reasoningClear();
+        } else if (turnStartedAt === null) {
+          turnStartedAt = Date.now();
+        }
+        turnState();
         break;
       case "approval":
         approvalOpen(f);
@@ -818,9 +838,11 @@ header > * { flex-shrink: 0; }
         break;
       case "tool_start":
         toolStart(f);
+        toolChanged();
         break;
       case "tool_end":
         toolEnd(f);
+        toolChanged();
         break;
       case "turn_done":
         busy = false;
