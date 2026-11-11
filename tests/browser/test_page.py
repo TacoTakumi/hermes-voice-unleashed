@@ -149,8 +149,8 @@ async def site(tmp_path, request):
 
 
 async def _chooser_rows(page):
-    await page.wait_for_function("document.querySelectorAll('#sessions .session').length === 3", timeout=5000)
-    return await page.eval_on_selector_all("#sessions .session", "els => els.map(e => e.textContent)")
+    await page.wait_for_function("document.querySelectorAll('#chooser .session').length === 3", timeout=5000)
+    return await page.eval_on_selector_all("#chooser .session", "els => els.map(e => e.textContent)")
 
 
 def _list_queries(site):
@@ -158,7 +158,7 @@ def _list_queries(site):
     return [parse_qs(urlsplit(url).query) for url in site.http_requests if urlsplit(url).path == "/sessions"]
 
 
-async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
+async def test_the_chooser_shows_the_rows_as_received(site):
     """The page has one voice: the session list is asked for without a client lane, no
     row is marked current, and the row a UI client has voice attached to says so."""
     page = site.page
@@ -168,21 +168,18 @@ async def test_the_chooser_shows_new_first_then_the_rows_as_received(site):
     assert site.list_requests == ["voice"]  # the server's default lane: the page named none
     (query,) = _list_queries(site)
     assert query["token"] == [TOKEN] and "client" not in query
-    assert await page.evaluate(
-        "document.getElementById('new').compareDocumentPosition(document.getElementById('sessions'))"
-        " & Node.DOCUMENT_POSITION_FOLLOWING")
     titled, preview, bare = texts
     assert "Garden plans" in titled and "what should I plant" not in titled
     assert "remind me about the dentist" in preview
-    names = await page.eval_on_selector_all("#sessions .session .name", "els => els.map(e => e.textContent)")
+    names = await page.eval_on_selector_all("#chooser .session .name", "els => els.map(e => e.textContent)")
     assert names[0] == "Garden plans" and names[1] == "remind me about the dentist"
     assert re.search(r"\d", names[2]) and len(names[2]) <= 40  # the last-active time, nothing else
     assert "5 min ago" in titled and "12 lines" in titled and "telegram" in titled
-    assert "2 h ago" in preview and "1 line" in preview and "1 lines" not in preview and "voice_unleashed" in preview
-    assert "3 days ago" in bare and "0 lines" in bare and "cli" in bare
-    assert await page.locator("#sessions [aria-current]").count() == 0
+    assert "2 h ago" in preview and "voice_unleashed" in preview
+    assert "3 days ago" in bare and "cli" in bare
+    assert await page.locator("#chooser [aria-current]").count() == 0
     assert "Current" not in await page.text_content("#chooser")
-    voice = await page.eval_on_selector_all("#sessions .session", "els => els.map(e => e.querySelector('.voice')?.textContent ?? null)")
+    voice = await page.eval_on_selector_all("#chooser .session", "els => els.map(e => e.querySelector('.voice')?.textContent ?? null)")
     assert voice == ["Voice on Desktop", None, None]
     assert "Voice on Desktop" in titled and "Voice on Desktop" not in preview and "Voice on Desktop" not in bare
     for text in texts:
@@ -194,7 +191,7 @@ async def test_tapping_a_chooser_row_connects_with_that_session_and_no_client(si
     page = site.page
     await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
-    await page.click("#sessions .session:nth-child(2) button")
+    await page.locator("#chooser .session button").nth(1).click()
     await site.fake.wait_connections(1, timeout=10)
     assert site.ws_requests[0]["session"] == ["sid-untitled-222"]
     assert "client" not in site.ws_requests[0]
@@ -275,7 +272,7 @@ async def test_the_history_frame_shows_its_lines_once_per_connect(site):
     await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     await page.evaluate(TURNS_AT_LISTENING)
-    await page.click("#sessions .session:nth-child(1) button")
+    await page.locator("#chooser .session button").nth(0).click()
     await site.fake.wait_connections(1, timeout=10)
     assert site.ws_requests[0]["session"] == ["sid-titled-111"]
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
@@ -352,7 +349,7 @@ async def test_tapping_a_row_puts_the_session_in_the_url_without_a_navigation(si
     await _chooser_rows(page)
     assert _url_session(page.url) is None
     await page.evaluate("window.samePage = true")
-    await page.click("#sessions .session:nth-child(2) button")
+    await page.locator("#chooser .session button").nth(1).click()
     await site.fake.wait_connections(1, timeout=10)
     await page.wait_for_function(LISTENING, timeout=10000)
     assert _url_session(page.url) == "sid-untitled-222"
@@ -370,7 +367,7 @@ async def test_back_returns_to_the_chooser_with_the_mic_off_and_no_session_in_th
     page = site.page
     await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
-    await page.click("#sessions .session:nth-child(2) button")
+    await page.locator("#chooser .session button").nth(1).click()
     await site.fake.wait_connections(1, timeout=10)
     await page.wait_for_function(LISTENING, timeout=10000)
     await page.evaluate(STATES_SEEN)
@@ -2226,7 +2223,7 @@ async def test_the_button_style_is_soft_rounded(site):
     await page.evaluate("document.getElementById('toggle').setAttribute('aria-pressed', 'true')")
     pressed, pressed_color, ring = await _style(page, "#toggle", "backgroundColor", "color", "boxShadow")
     assert pressed_color == CREAM and "inset" in ring
-    radius, row_fill = await _style(page, "#sessions button.row", "borderTopLeftRadius", "backgroundColor")
+    radius, row_fill = await _style(page, "#latest button.row", "borderTopLeftRadius", "backgroundColor")
     assert radius == "2.5px" and row_fill == pressed and row_fill not in (TEAL, CREAM)
     (name_weight,) = await _style(page, "#sessions button.row .name", "fontWeight")
     assert name_weight == "500"
@@ -2287,3 +2284,38 @@ async def test_the_chooser_shows_the_logo_and_what_this_is_instead_of_the_state(
     await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
     assert await page.is_hidden("#brand") and await page.is_hidden("#intro")
     assert await page.is_visible("#state")
+
+
+async def test_the_chooser_leads_with_a_continue_card_then_new_then_the_earlier_rows(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    order = await page.evaluate("[...document.getElementById('chooser').children].map(e => e.id)")
+    assert order == ["latest", "new", "earlier", "sessions"], order
+    assert await page.is_visible("#earlier") and await page.text_content("#earlier") == "Earlier"
+    card = page.locator("#latest .session")
+    assert await card.count() == 1
+    assert await card.locator(".label").text_content() == "Continue"
+    assert await card.locator(".name").text_content() == "Garden plans"
+    assert await card.locator(".tag").text_content() == "telegram"
+    assert await card.locator(".voice").text_content() == "Voice on Desktop"
+    meta = await card.locator(".meta").text_content()
+    assert "5 min ago" in meta and "12 lines" in meta
+    rows = page.locator("#sessions .session")
+    assert await rows.count() == 2
+    assert await rows.nth(0).locator(".name").text_content() == "remind me about the dentist"
+    assert [await rows.nth(i).locator(".tag").text_content() for i in range(2)] == ["voice_unleashed", "cli"]
+    assert await rows.nth(0).locator(".voice").count() == 0
+    assert "2 h ago" in await rows.nth(0).locator(".when").text_content()
+
+
+async def test_the_chooser_with_one_session_has_no_earlier_label(site):
+    page = site.page
+    site.rows[:] = site.rows[:1]
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await page.wait_for_selector("#latest .session", timeout=5000)
+    assert await page.is_hidden("#earlier")
+    assert await page.locator("#sessions .session").count() == 0
+    await page.click("#latest .session button")
+    await site.fake.wait_connections(1, timeout=10)
+    assert site.ws_requests[0]["session"] == ["sid-titled-111"]

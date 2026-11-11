@@ -59,7 +59,9 @@ header { padding: 28px var(--gutter) 8px; min-width: 0; }
    widths in this font. */
 #brand, #intro { display: none; }
 body:has(#chooser:not([hidden])) #brand, body:has(#chooser:not([hidden])) #intro { display: block; }
-body:has(#chooser:not([hidden])) #state { display: none; }
+body:has(#chooser:not([hidden])) #state,
+body:has(#chooser:not([hidden])) #transcript,
+body:has(#chooser:not([hidden])) #detail:empty { display: none; }
 #brand { margin: 0; font: italic 400 clamp(64px, 20vw, 96px)/0.95 "EB Garamond", Georgia, serif; color: var(--paper); }
 #brand span { display: block; width: max-content; }
 #brand span + span { font-size: 0.4797em; margin-top: 0.12em; }
@@ -118,7 +120,19 @@ main { overflow-y: auto; padding: 8px var(--gutter) 16px; }
 #chooser { margin: 0 auto; max-width: 40rem; display: flex; flex-direction: column; gap: 10px; }
 #chooser[hidden] { display: none; }
 #new { width: 100%; min-width: 0; margin-bottom: 8px; }
-#sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+/* The newest session leads as a card to go on with; the rest are thin lines under Earlier. */
+.sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+#earlier { margin: 14px 0 0; font: 500 12px/1 var(--type); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 230, 203, 0.55); }
+#earlier[hidden] { display: none; }
+button.row .tag { border: 1px solid rgba(255, 230, 203, 0.15); border-radius: 2.5px; padding: 0 6px; font-size: 12px; line-height: 18px; color: var(--muted); white-space: nowrap; }
+button.row.card { padding: 16px; box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.15); gap: 4px 10px; align-items: center; }
+button.row.card .label { flex: 1 0 100%; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--you); }
+button.row.card .name { font: italic 400 30px/1.15 "EB Garamond", Georgia, serif; }
+button.row.card .meta { font-size: 14px; }
+button.row.line { flex-wrap: nowrap; align-items: baseline; gap: 10px; background: none; padding: 11px 0; border-radius: 0; border-bottom: 1px solid rgba(255, 230, 203, 0.15); }
+button.row.line .name { flex: 1 1 auto; min-width: 0; }
+button.row.line .voice { margin-left: 0; font-size: 12px; white-space: nowrap; }
+button.row.line .when { color: rgba(255, 230, 203, 0.55); font-size: 13px; white-space: nowrap; }
 button.row {
   display: flex;
   flex-wrap: wrap;
@@ -213,8 +227,10 @@ header > * { flex-shrink: 0; }
 </header>
 <main>
   <section id="chooser" hidden aria-label="Sessions">
+    <ol id="latest" class="sessions"></ol>
     <button id="new" type="button">New session</button>
-    <ol id="sessions"></ol>
+    <p id="earlier" hidden>Earlier</p>
+    <ol id="sessions" class="sessions"></ol>
   </section>
   <ol id="log" aria-live="polite"></ol>
 </main>
@@ -242,6 +258,7 @@ header > * { flex-shrink: 0; }
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
   const logEl = $("log"), toggle = $("toggle"), unmuteEl = $("unmute"), meter = $("meter");
   const chooserEl = $("chooser"), sessionsEl = $("sessions"), newEl = $("new");
+  const latestEl = $("latest"), earlierEl = $("earlier");
   const headerEl = document.querySelector("header"), footerEl = document.querySelector("footer");
   const reasoningEl = $("reasoning"), reasonFoldEl = $("reason-fold"), reasonLineEl = $("reason-line");
   const reasonFullEl = $("reason-full");
@@ -1053,7 +1070,7 @@ header > * { flex-shrink: 0; }
     status();
   });
 
-  // --- the chooser: New session first, then the lane's sessions ---------------------
+  // --- the chooser: the newest session to go on with, New session, then the rest ------
   // Shown on load when the page URL names no session. A row shows the session's title,
   // else its preview, else when it was last active; never its id, which stays in the
   // row's click handler. A row whose session has voice on a UI client (the Desktop or the
@@ -1073,23 +1090,30 @@ header > * { flex-shrink: 0; }
     if (!epoch) return "Unknown time";
     return new Date(epoch * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
-  function sessionRow(row) {
+  // The newest session is a card (`card` true): Continue, its name, age and length, its
+  // source. The others are lines: name, source, age.
+  function sessionRow(row, card) {
     const li = document.createElement("li");
     li.className = "session";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "row";
+    button.className = card ? "row card" : "row line";
+    if (card) button.append(part("label", "Continue"));
     button.append(part("name", row.title || row.preview || when(row.last_active)));
-    const n = row.message_count || 0;
-    const meta = [ago(row.last_active), n === 1 ? "1 line" : n + " lines", row.source].filter(Boolean);
-    button.append(part("meta", meta.join(", ")));
+    if (card) {
+      const n = row.message_count || 0;
+      button.append(part("meta", [ago(row.last_active), n === 1 ? "1 line" : n + " lines"].filter(Boolean).join(" \u00b7 ")));
+    }
+    if (row.source) button.append(part("tag", row.source));
     if (row.voice_attached) button.append(part("voice", "Voice on Desktop"));
+    if (!card) button.append(part("when", ago(row.last_active)));
     button.addEventListener("click", () => choose(row.id));
     li.appendChild(button);
     return li;
   }
   async function showChooser(detail) {
-    sessionsEl.textContent = "";
+    sessionsEl.textContent = latestEl.textContent = "";
+    earlierEl.hidden = true;
     chooserEl.hidden = false;
     logEl.hidden = meter.hidden = footerEl.hidden = true;
     show("Sessions", "none", detail || "");
@@ -1102,7 +1126,8 @@ header > * { flex-shrink: 0; }
       detailEl.textContent = "The session list did not load. You can still start a new one.";
       return;
     }
-    for (const row of rows) sessionsEl.appendChild(sessionRow(row));
+    rows.forEach((row, i) => (i ? sessionsEl : latestEl).appendChild(sessionRow(row, i === 0)));
+    earlierEl.hidden = rows.length < 2;
     if (!rows.length) detailEl.textContent = "No sessions yet. Start a new one.";
   }
   // Go on with the session `id` ("new" for a fresh one): the connect asks for it and the
