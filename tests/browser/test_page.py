@@ -2326,7 +2326,7 @@ async def test_an_earlier_row_keeps_its_title_readable_on_a_narrow_screen(site):
     """On a phone the source tag, the Voice on Desktop mark and the age go under the
     title rather than squeeze it; on a wide screen the row stays one line."""
     page = site.page
-    site.rows[1]["voice_attached"] = True
+    site.rows[1].update(voice_attached=True, source="telegram")  # the widest row: tag, mark and age
     await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     row = "#sessions .session:first-child button"
@@ -2348,10 +2348,33 @@ async def test_a_source_the_page_does_not_know_shows_as_words(site):
     assert await page.locator("#sessions .session").nth(1).locator(".tag").text_content() == "Home assistant"
 
 
-async def test_sessions_from_the_old_platform_name_carry_no_tag_either(site):
+async def test_sessions_with_the_old_platform_source_carry_no_tag_either(site):
     """Sessions this page started before the plugin's rename keep the old source id."""
     page = site.page
     site.rows[2]["source"] = "voicemanager_live"
     await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     assert await page.locator("#sessions .session").nth(1).locator(".tag").count() == 0
+
+
+async def test_a_long_source_keeps_the_row_details_inside_the_row(site):
+    page = site.page
+    await page.set_viewport_size({"width": 320, "height": 640})
+    site.rows[2]["source"] = "a_very_long_gateway_platform_name_from_a_plugin"
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    edges = await page.evaluate("""() => { const b = document.querySelectorAll('#sessions .session button')[1];
+        const r = b.getBoundingClientRect().right;
+        return [r, ...['.tag', '.when'].map(c => b.querySelector(c).getBoundingClientRect().right)]; }""")
+    row, tag, when = edges
+    assert tag <= row + 0.5 and when <= row + 0.5, edges
+    assert await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+async def test_the_hermes_ui_sources_show_readable_names(site):
+    page = site.page
+    for source, name in (("tui", "TUI"), ("acp", "ACP"), ("webui", "Web UI")):
+        site.rows[2]["source"] = source
+        await page.goto(f"{site.url}/?token={TOKEN}")
+        await _chooser_rows(page)
+        assert await page.locator("#sessions .session").nth(1).locator(".tag").text_content() == name

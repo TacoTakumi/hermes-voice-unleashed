@@ -132,7 +132,8 @@ button.row.card .meta { font-size: 14px; }
 button.row.line { flex-wrap: wrap; align-items: baseline; gap: 2px 10px; background: none; padding: 11px 0; border-radius: 0; border-bottom: 1px solid rgba(255, 230, 203, 0.15); }
 /* The title takes the line; on a narrow screen the source, mark and age go under it. */
 button.row.line .name { flex: 1 1 14rem; min-width: 0; }
-button.row.line .info { display: flex; align-items: baseline; gap: 10px; margin-left: auto; }
+button.row.line .info { display: flex; align-items: baseline; gap: 10px; margin-left: auto; min-width: 0; max-width: 100%; }
+button.row.line .tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 button.row.line .voice { margin-left: 0; font-size: 12px; white-space: nowrap; }
 button.row.line .when { color: rgba(255, 230, 203, 0.55); font-size: 13px; white-space: nowrap; }
 button.row {
@@ -1097,7 +1098,7 @@ header > * { flex-shrink: 0; }
   const OWN_SOURCES = new Set(["voice_unleashed", "voicemanager_live"]);
   const SOURCE_NAMES = { telegram: "Telegram", discord: "Discord", slack: "Slack", whatsapp: "WhatsApp",
     signal: "Signal", matrix: "Matrix", email: "Email", sms: "SMS", cli: "CLI", api_server: "API",
-    webhook: "Webhook", cron: "Cron" };
+    webhook: "Webhook", cron: "Cron", tui: "TUI", acp: "ACP", webui: "Web UI" };
   function sourceName(source) {
     if (!source || OWN_SOURCES.has(source)) return "";
     if (SOURCE_NAMES[source]) return SOURCE_NAMES[source];
