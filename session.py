@@ -762,7 +762,7 @@ class VoiceSession:
         """A turn ended on the server with no words. With ``speech`` true its
         recognizer heard speech and gave no text: an answer of one short word is lost
         like that. The user is told, a moment later, when the turn waits for them."""
-        if frame.get("speech") is not True or self.attached:
+        if frame.get("speech") is not True or self.attached or not self.turn_engine:
             return
         if self._not_caught is not None and not self._not_caught.done():
             return
@@ -775,6 +775,8 @@ class VoiceSession:
     async def _say_not_caught(self) -> None:
         await asyncio.sleep(NOT_CAUGHT_WAIT_S)
         try:
+            if self._prompt_request is not None:
+                return  # the prompt is still being spoken: the notice must not cut it
             approval = self._approval_id is not None
             if not approval and not await self._answers_question():
                 return  # nothing waits for the user: a noise needs no answer

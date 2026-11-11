@@ -367,6 +367,15 @@ EMPTY = {"type": "turn_empty", "mic_sample": 1000, "by": "silence", "speech": Tr
 NOT_CAUGHT = "I did not catch that."
 
 
+async def _prompt_audio_ended(rig):
+    """The audio of the spoken question or approval prompt has all come: it no longer
+    counts as being spoken."""
+    request_id = rig.session._prompt_request.request_id
+    await rig.conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+    await rig.conn.send({"type": "audio_end", "request_id": request_id, "reason": "complete"})
+    await wait_for(lambda: rig.session._prompt_request is None)
+
+
 @pytest.fixture
 def quick_notice(plugin, monkeypatch):
     """The wait before the notice, short for a test."""
@@ -377,6 +386,7 @@ async def test_a_turn_empty_while_a_question_waits_is_answered_with_a_notice(rig
     """The recognizer gave no text for the answer. Hermes says so, and the question
     and its card stay open."""
     await _asked_with_choices(rig, clarify)
+    await _prompt_audio_ended(rig)
     sent = len(rig.events)
     await rig.conn.send(EMPTY)
     await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
@@ -391,8 +401,10 @@ async def test_a_turn_empty_while_a_question_waits_is_answered_with_a_notice(rig
 
 async def test_a_second_turn_empty_soon_after_gets_no_second_notice(rig, clarify, quick_notice):
     await _asked_with_choices(rig, clarify)
+    await _prompt_audio_ended(rig)
     await rig.conn.send(EMPTY)
     await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
+    await _prompt_audio_ended(rig)  # the notice itself has been spoken
     await rig.conn.send(EMPTY)
     await rig.conn.send(EMPTY)
     await asyncio.sleep(0.4)
@@ -405,6 +417,7 @@ async def test_a_second_turn_empty_soon_after_gets_no_second_notice(rig, clarify
 ])
 async def test_a_turn_empty_without_speech_gets_no_notice(rig, clarify, quick_notice, frame):
     await _asked_with_choices(rig, clarify)
+    await _prompt_audio_ended(rig)
     await rig.conn.send(frame)
     await asyncio.sleep(0.4)
     assert NOT_CAUGHT not in rig.tts_text() and not rig.page.of("note")
@@ -421,6 +434,7 @@ async def test_a_turn_empty_with_nothing_waiting_gets_no_notice(rig, quick_notic
 async def test_a_turn_empty_while_an_approval_waits_asks_for_yes_or_no(rig, quick_notice):
     await _reply_in_progress(rig)
     await _prompt_open(rig)
+    await _prompt_audio_ended(rig)
     sent = len(rig.events)
     await rig.conn.send(EMPTY)
     await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say yes or no."))
@@ -432,7 +446,30 @@ async def test_words_that_arrive_after_a_turn_empty_stop_the_notice(rig, clarify
     """An utterance can be cut in two: the first part ends empty and the words follow."""
     monkeypatch.setattr(plugin.session, "NOT_CAUGHT_WAIT_S", 0.4)
     await _asked_with_choices(rig, clarify)
+    await _prompt_audio_ended(rig)
     await rig.conn.send(EMPTY)
     await rig.conn.send({"type": "transcription", "segment_index": 7, "text": "number", "is_final": False})
     await asyncio.sleep(0.8)
+    assert NOT_CAUGHT not in rig.tts_text()
+
+
+async def test_a_turn_empty_while_the_question_is_still_spoken_does_not_cut_it(rig, clarify, quick_notice):
+    """A noise or a word while the question plays must not replace the choices with
+    a notice. Once the question has been spoken, the notice comes as usual."""
+    await _asked_with_choices(rig, clarify)
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
+    assert NOT_CAUGHT not in rig.tts_text() and not rig.page.of("note")
+    assert rig.conn.json_frames("tts_cancel") == []  # the question's audio goes on
+    await _prompt_audio_ended(rig)
+    await rig.conn.send(EMPTY)  # not held back by the one before: nothing was said then
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
+
+
+async def test_a_turn_empty_without_the_turn_engine_gets_no_notice(rig, clarify, quick_notice):
+    await _asked_with_choices(rig, clarify)
+    await _prompt_audio_ended(rig)
+    rig.session.turn_engine = None
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
     assert NOT_CAUGHT not in rig.tts_text()
