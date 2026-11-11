@@ -264,10 +264,11 @@ There is one voice device per profile. When you open the page on a second
 device or tab, that page takes the voice: the first one shows "Voice moved to
 another device" with a "Sessions" button that returns to the chooser; its
 microphone is off and the screen may go to sleep. The same hand-over works
-with Hermes Desktop and the Webapp. When the page joins a session that has
-voice on there, the voice toggle on that client goes off and the chat stays;
-when you turn voice on there for the session the page is on, the page shows
-the moved screen.
+with Hermes Desktop and the Webapp, whatever session each is on. When the
+page starts while voice is on there, the voice toggle on that client goes
+off and the chat stays; when you turn voice on there, the page shows the
+moved screen. Two open microphones would both hear you, and each would hear
+the other's reply as speech.
 
 ### What you see while Hermes works
 

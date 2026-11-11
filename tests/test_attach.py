@@ -225,18 +225,20 @@ async def test_stream_hooks_never_reach_an_attached_session(attached, plugin):
     assert client.of("reply_delta") == []
 
 
-async def test_a_page_and_an_attached_client_with_the_same_id_both_stay(adapter, fake_vm):
-    async with connect(_url(adapter, f"client={SESSION_ID}")) as page_ws, \
-            connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
-        page, client = Client(page_ws), Client(attach_ws)
-        await wait_for(lambda: page.of("ready") and client.of("ready"))
-        await fake_vm.wait_connections(2)
-        await asyncio.sleep(0.1)
-        assert page.of("replaced") == [] and client.of("replaced") == []
-        assert adapter.is_attached(SESSION_ID)
-        assert adapter.session_for(SESSION_ID) is not None  # the page's own session
+async def test_an_attached_client_takes_the_voice_from_a_page_whose_lane_has_its_id(adapter, fake_vm):
+    """A lane name and a session id are different things, also when they are spelled the
+    same: the page is a voice device like any other and is switched off."""
+    async with connect(_url(adapter, f"client={SESSION_ID}")) as page_ws:
+        page = Client(page_ws)
+        await wait_for(lambda: page.of("ready"))
+        async with connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
+            client = Client(attach_ws)
+            await wait_for(lambda: client.of("ready"))
+            await wait_for(lambda: page.of("replaced"))
+            assert client.of("replaced") == []
+            assert adapter.is_attached(SESSION_ID)
+            client.task.cancel()
         page.task.cancel()
-        client.task.cancel()
 
 
 async def test_a_page_ignores_say_frames(adapter, fake_vm):
@@ -532,16 +534,33 @@ async def test_an_attach_takes_the_session_from_the_page_on_it(adapter, fake_vm,
         page.task.cancel()
 
 
-async def test_a_page_on_another_session_is_not_replaced_by_an_attach(adapter, fake_vm):
+async def test_an_attach_takes_the_voice_from_a_page_on_another_session(adapter, fake_vm, plugin):
+    """One voice device at a time, whatever session each is on."""
     adapter._session_store = LaneStore("another")
-    async with connect(_url(adapter, "client=voice")) as page_ws, \
-            connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
-        page, client = Client(page_ws), Client(attach_ws)
-        await wait_for(lambda: page.of("ready") and client.of("ready"))
-        await asyncio.sleep(0.2)
-        assert page.of("replaced") == []
-        assert not page.task.done()
-        assert adapter.session_for("voice") is not None
-        assert adapter.is_attached(SESSION_ID)
+    async with connect(_url(adapter, "client=voice")) as page_ws:
+        page = Client(page_ws)
+        await wait_for(lambda: page.of("ready"))
+        async with connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
+            client = Client(attach_ws)
+            await wait_for(lambda: client.of("ready"))
+            await wait_for(lambda: page.of("replaced"))
+            await asyncio.wait_for(page_ws.wait_closed(), 3)
+            assert page_ws.close_code == plugin.server.REPLACED_CLOSE_CODE == 4001
+            await wait_for(lambda: adapter.session_for("voice") is None)
+            assert adapter.is_attached(SESSION_ID) and client.of("replaced") == []
+            client.task.cancel()
         page.task.cancel()
-        client.task.cancel()
+
+
+async def test_a_second_attach_takes_the_voice_from_a_client_attached_to_another_session(adapter, fake_vm, plugin):
+    async with connect(_url(adapter, "attach=first-session")) as first_ws:
+        first = Client(first_ws)
+        await wait_for(lambda: first.of("ready"))
+        async with connect(_url(adapter, f"attach={SESSION_ID}")) as second_ws:
+            second = Client(second_ws)
+            await wait_for(lambda: second.of("ready"))
+            await wait_for(lambda: first.of("replaced"))
+            await wait_for(lambda: not adapter.is_attached("first-session"))
+            assert adapter.is_attached(SESSION_ID) and second.of("replaced") == []
+            second.task.cancel()
+        first.task.cancel()

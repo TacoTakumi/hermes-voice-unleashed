@@ -419,20 +419,22 @@ async def test_a_page_connect_takes_the_session_from_the_attached_client(adapter
     _one_history_frame_before_ready(page)
 
 
-async def test_a_client_attached_to_another_session_is_not_replaced_by_a_page_connect(adapter, fake_vm):
+async def test_a_page_connect_takes_the_voice_from_a_client_attached_to_another_session(adapter, fake_vm, plugin):
+    """One voice device at a time: a page that starts on any session switches off a UI
+    client whose voice is on, also on another session. Two open microphones in one room
+    both hear the user, and each hears the other's reply as speech."""
     adapter._session_store = FakeStore("abc")
     _with_db(adapter, FakeDB())
     attach_ws, client = await _attach(adapter, fake_vm, "other")
     async with connect(_url(adapter, "client=tablet")) as ws:
         page = Page(ws)
         await wait_for(lambda: page.of("ready"))
-        await asyncio.sleep(0.2)
-        assert client.of("replaced") == []
-        assert not client.task.done()
-        assert adapter.is_attached("other")
+        assert await _replaced(attach_ws, client) == plugin.server.REPLACED_CLOSE_CODE == 4001
+        assert client.of("replaced") == [{"type": "replaced"}]
+        await wait_for(lambda: not adapter.is_attached("other"))
+        assert adapter.session_for("tablet") is not None
+        assert page.of("replaced") == []
         page.task.cancel()
-    client.task.cancel()
-    await attach_ws.close()
 
 
 # --- a second page while the first one is still connecting ---------------------------------
@@ -648,12 +650,12 @@ async def test_a_client_that_attaches_during_a_page_connect_keeps_voice(adapter,
     await attach_ws.close()
 
 
-async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_client_alone(
+async def test_a_replaced_connect_whose_resume_lands_late_tells_the_live_page_where_its_lane_is(
         adapter, fake_vm, plugin):
     """A UI client attached to the session while the first page's /resume was held, then a
-    second page took the chat id. The late /resume moves the lane onto the client's
-    session, but the replaced connect is no voice device any more: it does not switch
-    the client off, and the live page is told where its lane is now."""
+    second page took the chat id, and with it the voice from the UI client. The late
+    /resume moves the lane; the replaced connect is no voice device any more and sends
+    nothing but the live page's fresh history."""
     adapter._session_store = FakeStore("old")
     _with_db(adapter, FakeDB())
     _move_on_resume(adapter, "abc")
@@ -669,10 +671,9 @@ async def test_a_replaced_connect_whose_resume_lands_late_leaves_an_attached_cli
         release.set()
         await wait_for(lambda: len(second.of("history")) == 2)
         await asyncio.sleep(0.2)  # the first page's connect runs to its end
-        assert client.of("replaced") == []
-        assert not client.task.done()
-        assert attach_ws.close_code is None
-        assert adapter.is_attached("abc")
+        assert client.of("replaced") == [{"type": "replaced"}]  # once, by the live page
+        assert not adapter.is_attached("abc")
+        assert second.of("replaced") == [] and adapter.session_for("voice") is not None
         assert second.of("history")[-1] == {"type": "history", "session_id": "abc", "lines": []}
         assert first.frames == [{"type": "replaced"}]
         second.task.cancel()

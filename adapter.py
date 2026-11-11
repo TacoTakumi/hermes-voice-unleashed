@@ -501,15 +501,16 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
         Each finished utterance goes to the client only (it submits it to the chat),
         and the reply's text comes back from the client, not from the stream hooks.
-        One voice device per session: a page whose lane is on the session is switched
-        off first."""
+        One voice device at a time: every page and every other UI client with voice
+        on is switched off first, whatever session it is on. Two open microphones
+        both hear the user, and each hears the other's reply as speech."""
         for client_id, page in list(self._clients.items()):
-            if self.lane_session_id(client_id) == session_id:
-                logger.info("voice page %s: a UI client took voice for session %s", client_id, session_id)
-                # Dropped here, not only at the page's own cleanup: a page still in its
-                # connect steps checks this entry to see that it was replaced.
-                del self._clients[client_id]
-                await self._replace(page)
+            logger.info("voice page %s: a UI client took voice for session %s", client_id, session_id)
+            # Dropped here, not only at the page's own cleanup: a page still in its
+            # connect steps checks this entry to see that it was replaced.
+            del self._clients[client_id]
+            await self._replace(page)
+        await self._detach_all(f"a UI client on session {session_id}")
         session = VoiceSession(connection, client_from_url(self.vm_url, self.vm_token),
                                f"attach:{session_id}", attached=True)
         self._attached[session_id] = session
@@ -531,15 +532,19 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             await connection.close(code=REPLACED_CLOSE_CODE, reason="replaced")
 
     async def _take_voice(self, client_id: str, session_id: Optional[str]) -> None:
-        """The page ``client_id`` is on the session ``session_id`` now: a UI client with
-        voice attached to it is switched off. Dropped from the attached sessions at once,
-        so the session list does not show it attached until its own cleanup runs."""
-        session = self._attached.get(session_id) if session_id else None
-        if session is None:
-            return
-        logger.info("voice page %s: took voice for session %s from a UI client", client_id, session_id)
-        del self._attached[session_id]
-        await self._replace(session.page)
+        """The page ``client_id`` is the voice device now, on the session ``session_id``:
+        every UI client with voice on is switched off, also one on another session.
+        One voice device at a time, as for two pages."""
+        await self._detach_all(f"voice page {client_id} on session {session_id}")
+
+    async def _detach_all(self, taker: str) -> None:
+        """Switch off every UI client that has voice attached. Each is dropped from the
+        attached sessions at once, so the session list does not show it attached until
+        its own cleanup runs."""
+        for attached_id, session in list(self._attached.items()):
+            logger.info("%s took voice from the UI client on session %s", taker, attached_id)
+            del self._attached[attached_id]
+            await self._replace(session.page)
 
     def _new_session(self, connection, client_id: str) -> VoiceSession:
         async def on_utterance(text: str, message_id: str) -> None:

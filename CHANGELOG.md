@@ -50,6 +50,11 @@ entry names next to its pinned commit.
 
 ### Fixed
 
+- A voice page that started on one session did not switch off the voice of
+  Hermes Desktop or the Webapp on another session, and the reverse. Both
+  microphones stayed open: each heard the user, and each heard the other's
+  reply as speech. The device that takes the voice now switches off every
+  other one, whatever session it is on.
 - The reply voice could stutter after its first words, most on a phone:
   the first clause had played out before the audio of the rest arrived,
   and each chunk that came a little late left a gap. Audio that arrives
