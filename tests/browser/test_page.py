@@ -2346,3 +2346,12 @@ async def test_a_source_the_page_does_not_know_shows_as_words(site):
     await page.goto(f"{site.url}/?token={TOKEN}")
     await _chooser_rows(page)
     assert await page.locator("#sessions .session").nth(1).locator(".tag").text_content() == "Home assistant"
+
+
+async def test_sessions_from_the_old_platform_name_carry_no_tag_either(site):
+    """Sessions this page started before the plugin's rename keep the old source id."""
+    page = site.page
+    site.rows[2]["source"] = "voicemanager_live"
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    assert await page.locator("#sessions .session").nth(1).locator(".tag").count() == 0

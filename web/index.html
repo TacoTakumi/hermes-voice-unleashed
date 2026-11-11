@@ -1093,13 +1093,13 @@ header > * { flex-shrink: 0; }
     return new Date(epoch * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
   // A session's source is the channel that started it. This page's own sessions need no
-  // tag; others show a readable name.
-  const OWN_SOURCE = "voice_unleashed";
+  // tag, under the plugin's name today or the one it had before; others show a readable name.
+  const OWN_SOURCES = new Set(["voice_unleashed", "voicemanager_live"]);
   const SOURCE_NAMES = { telegram: "Telegram", discord: "Discord", slack: "Slack", whatsapp: "WhatsApp",
     signal: "Signal", matrix: "Matrix", email: "Email", sms: "SMS", cli: "CLI", api_server: "API",
     webhook: "Webhook", cron: "Cron" };
   function sourceName(source) {
-    if (!source || source === OWN_SOURCE) return "";
+    if (!source || OWN_SOURCES.has(source)) return "";
     if (SOURCE_NAMES[source]) return SOURCE_NAMES[source];
     const words = source.replace(/_/g, " ");
     return words.charAt(0).toUpperCase() + words.slice(1);
