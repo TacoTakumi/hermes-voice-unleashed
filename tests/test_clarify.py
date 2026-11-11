@@ -209,6 +209,18 @@ def test_a_sentence_that_only_holds_a_number_or_a_name_is_left_as_it_was_heard(p
     assert plugin.adapter.spoken_choice(said, COLOURS) is None
 
 
+@pytest.mark.parametrize("said, choices, sent", [
+    ("I said yes", ["Yes", "No"], "Yes"),
+    ("I pick OK", ["OK", "Cancel"], "OK"),
+    ("I said go ahead", ["Go ahead", "Stop"], "Go ahead"),
+    ("I pick the short version", ["The long version", "The short version"], "The short version"),
+    ("I said the first one", ["The last one", "The first one"], "The first one"),
+    ("I said the first one", ["Red", "Blue"], "1"),
+])
+def test_a_choice_name_that_begins_with_a_lead_in_word_is_still_found_in_a_sentence(plugin, said, choices, sent):
+    assert plugin.adapter.spoken_choice(said, choices) == sent
+
+
 def test_a_choice_name_wins_over_a_number_and_an_open_question_maps_nothing(plugin):
     assert plugin.adapter.spoken_choice("Two.", ["Two", "One"]) == "Two"
     assert plugin.adapter.spoken_choice("Four.", None) is None

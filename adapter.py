@@ -270,17 +270,23 @@ def spoken_choice(text: str, choices: Optional[list]) -> Optional[str]:
     # A short sentence that leads into the answer: what comes after the lead-in
     # words must be a choice's name or its number, and nothing else.
     said = words[:-1] if words[-1] == "please" else words
-    rest = list(said)
-    while rest and rest[0] in _ANSWER_LEAD_INS:
-        rest = rest[1:]
-    if not rest or len(rest) == len(said) or len(said) > _MAX_ANSWER_WORDS:
+    if len(said) > _MAX_ANSWER_WORDS:
         return None
-    for choice in choices:
-        if _spoken_words(choice) == rest:
-            return str(choice).strip()
-    number = _spoken_number(rest, alone=False)
-    if number is not None and 1 <= number <= len(choices):
-        return str(number)
+    # Every place the lead-in can end is tried, the shortest lead-in first: a choice's
+    # own name may begin with a lead-in word ("Yes", "The short version").
+    ends = []
+    for index, word in enumerate(said[:-1]):
+        if word not in _ANSWER_LEAD_INS:
+            break
+        ends.append(said[index + 1:])
+    for rest in ends:  # a name wins over a number here too
+        for choice in choices:
+            if _spoken_words(choice) == rest:
+                return str(choice).strip()
+    for rest in ends:
+        number = _spoken_number(rest, alone=False)
+        if number is not None and 1 <= number <= len(choices):
+            return str(number)
     return None
 
 
