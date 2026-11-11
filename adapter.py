@@ -177,8 +177,20 @@ def clarify_sentence(question: str, choices: Optional[list] = None) -> str:
         number = CHOICE_NUMBERS[index] if index < len(CHOICE_NUMBERS) else str(index + 1)
         text = re.sub(r"\s+", " ", str(choice)).strip()
         parts.append(f"{number}: {text}" + ("" if text[-1:] in (".", "?", "!") else "."))
-    parts.append("Say the number or your answer.")
+    parts.append(_answer_hint(len(choices)))
     return " ".join(parts)
+
+
+def _answer_hint(count: int) -> str:
+    """How to answer a question with ``count`` choices, as its last spoken sentence.
+
+    It names "number one", not "one": a speech recognizer often gives no text at
+    all for one short word said alone, and two words get through."""
+    if count > 4:
+        return "Say the number of a choice, for example number one, or your answer."
+    names = [f"number {CHOICE_NUMBERS[i].lower()}" for i in range(count)]
+    listed = names[0] if count == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+    return f"Say {listed}, or your answer."
 
 
 _CARDINALS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve")

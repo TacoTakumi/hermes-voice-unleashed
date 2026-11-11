@@ -77,10 +77,25 @@ def test_the_spoken_question_reads_the_choices_with_their_numbers(plugin):
     sentence = plugin.adapter.clarify_sentence
     assert sentence("What are we  testing\nthis cycle?") == "What are we testing this cycle?"
     assert sentence("Pick a colour", ["Red", "Blue."]) == (
-        "Pick a colour. One: Red. Two: Blue. Say the number or your answer.")
+        "Pick a colour. One: Red. Two: Blue. Say number one or number two, or your answer.")
     many = sentence("Which?", [f"c{i}" for i in range(1, 11)])
     assert "Nine: c9. 10: c10." in many
-    assert sentence("Sure", ["Really?", "No!"]) == "Sure. One: Really? Two: No! Say the number or your answer."
+    assert sentence("Sure", ["Really?", "No!"]) == (
+        "Sure. One: Really? Two: No! Say number one or number two, or your answer.")
+
+
+def test_the_spoken_hint_asks_for_the_long_form_of_a_number(plugin):
+    """A number said alone is the answer a speech recognizer loses most: the hint
+    names the form with a word before it."""
+    sentence = plugin.adapter.clarify_sentence
+    assert sentence("Which?", ["a", "b", "c"]).endswith(
+        " Say number one, number two or number three, or your answer.")
+    assert sentence("Which?", ["a", "b", "c", "d"]).endswith(
+        " Say number one, number two, number three or number four, or your answer.")
+    long_hint = " Say the number of a choice, for example number one, or your answer."
+    assert sentence("Which?", list("abcde")).endswith(long_hint)
+    assert sentence("Which?", [f"c{i}" for i in range(1, 11)]).endswith(long_hint)
+    assert "Say" not in sentence("Which one do you want?")
 
 
 def test_the_typed_skip_hint_of_the_gateway_is_not_spoken(plugin):
@@ -90,7 +105,7 @@ def test_the_typed_skip_hint_of_the_gateway_is_not_spoken(plugin):
     sentence = plugin.adapter.clarify_sentence
     assert sentence(f"What are we testing?\n{hint}") == "What are we testing?"
     assert sentence(f"Pick a colour\n{hint}", ["Red", "Blue"]) == (
-        "Pick a colour. One: Red. Two: Blue. Say the number or your answer.")
+        "Pick a colour. One: Red. Two: Blue. Say number one or number two, or your answer.")
     assert sentence("First line\nsecond line?") == "First line second line?"  # only the hint goes
 
 
@@ -127,8 +142,8 @@ async def test_a_question_with_choices_speaks_them_and_keeps_the_text_answer_arm
     assert not entry.awaiting_text
     result = await rig.adapter.send_clarify("voice", "Pick a colour", ["Red", "Blue"], "q1", key)
     assert result.success
-    await wait_for(lambda: rig.tts_text().endswith("Say the number or your answer."))
-    assert "Pick a colour. One: Red. Two: Blue. Say the number or your answer." in rig.tts_text()
+    await wait_for(lambda: rig.tts_text().endswith("or your answer."))
+    assert "Pick a colour. One: Red. Two: Blue. Say number one or number two, or your answer." in rig.tts_text()
     shown = rig.page.of("reply")[-1]["text"]
     assert "Red" in shown and "Blue" in shown
     assert entry.awaiting_text  # the next utterance is taken as the answer
@@ -184,7 +199,7 @@ async def test_a_spoken_number_reaches_the_gateway_as_the_digit(rig, clarify):
     reply_id = await _reply_in_progress(rig)
     _, key = clarify("Which colour?", COLOURS)
     await rig.adapter.send_clarify("voice", "Which colour?", COLOURS, "q1", key)
-    await wait_for(lambda: rig.tts_text().endswith("Say the number or your answer."))
+    await wait_for(lambda: rig.tts_text().endswith("or your answer."))
     await _heard(rig, "Four.")
     assert rig.events[-1].text == "4"  # the gateway resolves the digit to the choice
     assert rig.page.of("utterance")[-1]["text"] == "Four."  # the page shows what was said
