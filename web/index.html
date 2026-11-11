@@ -326,12 +326,13 @@ header > * { flex-shrink: 0; }
   // --- the thinking sound ---------------------------------------------------------
   // While a turn runs and no reply audio plays the page would be silent, and a user who
   // does not look at it cannot tell work from a dead turn. A quiet blip repeats for that
-  // time. It is the thinking sound of Hermes Desktop and of the Hermes CLI voice mode,
-  // with their values: apps/desktop/src/lib/thinking-sound.ts in hermes-agent, MIT
-  // License, Copyright (c) 2025 Nous Research. It plays on the reply's context, so the
+  // time. It is the thinking sound of Hermes Desktop and of the Hermes CLI voice mode
+  // (apps/desktop/src/lib/thinking-sound.ts in hermes-agent, MIT License, Copyright (c)
+  // 2025 Nous Research), a little louder: their level was low on a phone. It plays on the reply's context, so the
   // browser's echo canceller knows it, and the server is told nothing: it is no reply.
   const CUE_STATES = ["Thinking", "Working"];
   const CUE_PITCHES = [392, 329.6]; // G4 and E4, in turn
+  const CUE_GAIN = 0.12; // the peak of a blip; Hermes Desktop has 0.08
   let cueTimer = null, cueCount = 0, cueVoice = null;
   // The user's switch for the cues. On unless the URL says cues=0 or the browser holds an
   // earlier "off"; a tap on the button changes it at once and the browser keeps it.
@@ -352,7 +353,7 @@ header > * { flex-shrink: 0; }
     osc.frequency.setValueAtTime(freq, t0);
     osc.frequency.exponentialRampToValueAtTime(freq * 0.72, t0 + dur);
     env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(0.08, t0 + 0.02);
+    env.gain.exponentialRampToValueAtTime(CUE_GAIN, t0 + 0.02);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     osc.connect(env).connect(playCtx.destination);
     osc.start(t0);

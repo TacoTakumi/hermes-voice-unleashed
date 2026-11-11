@@ -2932,7 +2932,7 @@ async def test_the_thinking_sound_plays_while_a_turn_runs_in_silence(stack):
     gaps = [b["at"] - a["at"] for a, b in zip(cues, cues[1:4])]
     assert all(780 <= gap <= 1350 for gap in gaps), gaps
     gains = await page.evaluate("window.cueGains")
-    assert max(gains) == pytest.approx(0.08), gains
+    assert max(gains) == pytest.approx(0.12), gains
     assert not [f for f in sent if f.get("type") == "playback"], sent
 
 
