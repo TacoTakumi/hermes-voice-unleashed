@@ -53,6 +53,9 @@ APPROVAL_REPEAT_NOTICE = "Say yes or no."
 NOT_CAUGHT_NOTICE = "I did not catch that."
 NOT_CAUGHT_EVERY_S = 5.0
 NOT_CAUGHT_WAIT_S = 1.0
+# How long after the last audio of a prompt came the page may still play it, when the
+# page reports no end of its playback: a prompt's audio arrives faster than it plays.
+PROMPT_PLAY_MAX_S = 30.0
 # The bare word the gateway takes for each choice of an approval prompt.
 APPROVAL_CHOICE_WORDS = {"once": "yes", "session": "session", "always": "always", "deny": "no"}
 # How long the reply must be quiet after its Hermes turn ended before its TTS request is
@@ -242,6 +245,9 @@ class VoiceSession:
         self.turn_engine: Optional[str] = None
         # The server said that its turn engine still learns the user's voice.
         self._barge_learning = False
+        # The prompt whose audio has all come and which the page may still play: its
+        # request id and when its audio ended.
+        self._prompt_playing: Optional[tuple[str, float]] = None
         # The wait before the notice that an answer was not caught, and when it was last said.
         self._not_caught: Optional[asyncio.Task] = None
         self._not_caught_at = float("-inf")
@@ -601,11 +607,15 @@ class VoiceSession:
 
     async def _on_audio_end(self, frame: dict) -> None:
         rid = frame.get("request_id")
-        if self._prompt_request is not None and rid == self._prompt_request.request_id:
+        prompt_ended = self._prompt_request is not None and rid == self._prompt_request.request_id
+        if prompt_ended:
             self._prompt_request = None
         cancelled = rid in self._dropped
         self._dropped.discard(rid)
         silent = not self._audio_bytes.pop(rid, 0)
+        if prompt_ended and not silent and not cancelled:
+            # The page has the prompt's audio and plays it out: it is still being spoken.
+            self._prompt_playing = (rid, asyncio.get_running_loop().time())
         await self.send_page({"type": "audio_end", "request_id": rid, "reason": frame.get("reason")})
         ours = rid in self._notice_requests or (
             self.reply_request is not None and rid == self.reply_request.request_id)
@@ -775,6 +785,16 @@ class VoiceSession:
         # then leaves no coroutine behind that was never awaited.
         self._not_caught = asyncio.create_task(self._say_not_caught())
 
+    def _prompt_plays(self) -> bool:
+        """Whether the page may still play a prompt whose audio has all come. The
+        page's playback stop ends that; a page that reports none is given a time."""
+        if self._prompt_playing is None:
+            return False
+        if asyncio.get_running_loop().time() - self._prompt_playing[1] > PROMPT_PLAY_MAX_S:
+            self._prompt_playing = None
+            return False
+        return True
+
     def _not_caught_notice(self, approval: bool) -> str:
         """The notice, with what to say next. The answer that got no words was most
         likely one short word, and said again it is lost again: the notice names
@@ -791,7 +811,7 @@ class VoiceSession:
     async def _say_not_caught(self) -> None:
         await asyncio.sleep(NOT_CAUGHT_WAIT_S)
         try:
-            if self._prompt_request is not None:
+            if self._prompt_request is not None or self._prompt_plays():
                 return  # the prompt is still being spoken: the notice must not cut it
             approval = self._approval_id is not None
             if not approval and not await self._answers_question():
@@ -1229,6 +1249,8 @@ class VoiceSession:
         if frame.get("event") == "start":
             await self.duplex.playback_start(request_id, mic_sample)
         elif frame.get("event") == "stop":
+            if self._prompt_playing is not None and request_id == self._prompt_playing[0]:
+                self._prompt_playing = None  # the prompt has been heard to its end, or was cut
             reply_sample = frame.get("reply_sample")
             if isinstance(reply_sample, int) and not isinstance(reply_sample, bool) and reply_sample >= 0:
                 await self.duplex.playback_stop(request_id, mic_sample, reply_sample=reply_sample)

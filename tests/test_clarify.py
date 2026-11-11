@@ -506,3 +506,47 @@ def test_the_not_caught_notice_names_one_example_for_a_long_list_of_choices(plug
     assert forms(2) == "number one or number two"
     assert forms(4) == "number one, number two, number three or number four"
     assert forms(5) is None and forms(0) is None
+
+
+# --- the notice and a prompt that the page still plays -------------------------------------
+async def _prompt_audio_sent(rig) -> str:
+    """All audio of the spoken prompt has come from the server and gone to the page,
+    which still plays it. Returns the prompt's request id."""
+    request_id = rig.session._prompt_request.request_id
+    await rig.conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+    await rig.conn.send(b"\x11\x00" * 2400)
+    await rig.conn.send({"type": "audio_end", "request_id": request_id, "reason": "complete"})
+    await wait_for(lambda: rig.session._prompt_request is None)
+    return request_id
+
+
+async def _page_played(rig, request_id: str) -> None:
+    await rig.page.ws.send(json.dumps({"type": "playback", "event": "stop", "request_id": request_id,
+                                       "mic_sample": 4000, "reply_sample": 2400}))
+    await wait_for(lambda: rig.session._prompt_playing is None)
+
+
+async def test_a_turn_empty_while_the_page_still_plays_the_question_does_not_cut_it(rig, clarify, quick_notice):
+    """The server has sent all of the question's audio and the page has not played it
+    out: a notice now would clear the page and take the choices away."""
+    await _asked_with_choices(rig, clarify)
+    request_id = await _prompt_audio_sent(rig)
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
+    assert NOT_CAUGHT not in rig.tts_text() and not rig.page.of("note")
+    assert rig.page.of("clear") == []  # the page goes on playing the question
+    await _page_played(rig, request_id)
+    await rig.conn.send(EMPTY)
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT_FOUR))
+
+
+async def test_a_page_that_never_reports_the_end_of_the_question_holds_the_notice_for_a_time_only(
+        rig, clarify, quick_notice, plugin, monkeypatch):
+    monkeypatch.setattr(plugin.session, "PROMPT_PLAY_MAX_S", 0.2)
+    await _asked_with_choices(rig, clarify)
+    await _prompt_audio_sent(rig)
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
+    assert NOT_CAUGHT not in rig.tts_text()
+    await rig.conn.send(EMPTY)  # past the bound: the page is taken to be done with it
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT_FOUR))
