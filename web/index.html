@@ -167,6 +167,16 @@ footer { padding: 12px var(--gutter) 20px; display: flex; flex-wrap: wrap; justi
 /* Shown only while the browser keeps reply playback locked after a join without a tap. */
 #unmute { background: var(--glow); }
 #unmute[hidden] { display: none; }
+/* The approval prompt: above the footer buttons, where a thumb reaches it. The command
+   scrolls inside itself, so a long script never pushes the choices off the screen. */
+#approval { flex: 1 0 100%; min-width: 0; background: var(--ink-raised); box-shadow: inset 0 0 0 1px var(--glow); border-radius: 2.5px; padding: 12px 14px; }
+#approval[hidden] { display: none; }
+#approval-reason { margin: 0 0 6px; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--glow); }
+#approval-command { margin: 0; max-height: min(9em, 22dvh); overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--paper); }
+#approval-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#approval-choices button { flex: 1 1 8rem; min-width: 0; padding: 12px 14px; background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.3); }
+#approval-choices button[data-style="primary"] { background: var(--paper); color: var(--ink); box-shadow: none; }
+#approval-choices button[data-style="danger"] { background: var(--alert); color: #fff; box-shadow: none; }
 /* The Hermes desktop button: soft fills, a 2.5px corner, medium weight. Sized for a thumb. */
 button {
   font: 500 15px/1.2 var(--type);
@@ -247,6 +257,11 @@ header > * { flex-shrink: 0; }
   <ol id="log" aria-live="polite"></ol>
 </main>
 <footer>
+  <section id="approval" hidden aria-label="Approval needed" aria-live="assertive">
+    <p id="approval-reason"></p>
+    <pre id="approval-command"></pre>
+    <div id="approval-choices"></div>
+  </section>
   <button id="toggle" type="button" aria-pressed="false">Start talking</button>
   <button id="unmute" type="button" hidden>Tap for sound</button>
 </footer>
@@ -295,12 +310,22 @@ header > * { flex-shrink: 0; }
   let absorbing = null;  // a final answer shown in place while its late deltas still arrive
   let busy = false; // a Hermes turn runs: from its utterance until turn_done
   let turnStreamed = false; // this turn streamed reply text
+  let approval = null; // the request id of the approval prompt that is open, in an object
   // How long reply audio must be silent before the page stops showing Speaking: chunks
   // arrive paced, so the queue can run dry for a moment between two of them.
   const QUIET_MS = 600;
 
   // --- what the page shows --------------------------------------------------------
+  // While an approval prompt is open the turn waits for the user, whatever else is true:
+  // the states that only say who has the floor give way to that. A state that reports
+  // something new (the user's speech is heard, an error) still shows.
+  const FLOOR_STATES = ["Listening", "Muted", "Thinking", "Working", "Speaking"];
   function show(state, who, detail) {
+    if (approval && FLOOR_STATES.includes(state)) {
+      state = "Waiting for approval";
+      who = "hermes";
+      detail = muted ? "Tap a choice." : "Say yes or no, or tap a choice.";
+    }
     stateEl.textContent = state;
     showElapsed();
     document.body.dataset.who = who;
@@ -359,6 +384,39 @@ header > * { flex-shrink: 0; }
   function listening() {
     if (!running || ending) return;
     show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : "Say something.");
+  }
+  // --- the approval prompt: the command, why it needs approval, one button per choice ----
+  const approvalEl = document.getElementById("approval");
+  const approvalChoices = document.getElementById("approval-choices");
+  function approvalOpen(f) {
+    approval = { id: f.request_id || null };
+    document.getElementById("approval-reason").textContent =
+      f.reason ? `Approval needed: ${f.reason}` : "Approval needed";
+    document.getElementById("approval-command").textContent = f.command || "";
+    approvalChoices.textContent = "";
+    for (const c of f.choices || []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = c.label || c.choice;
+      button.dataset.choice = c.choice;
+      button.dataset.style = c.style || "";
+      button.addEventListener("click", () => {
+        if (!approval) return;
+        send({ type: "approval_answer", request_id: approval.id, choice: c.choice });
+        approvalClose();
+      });
+      approvalChoices.appendChild(button);
+    }
+    approvalEl.hidden = false;
+    status();
+  }
+  // The prompt is over: answered here or by voice, withdrawn or timed out.
+  function approvalClose(restate = true) {
+    if (!approval) return;
+    approval = null;
+    approvalEl.hidden = true;
+    approvalChoices.textContent = "";
+    if (restate) status();
   }
   // What the page shows when nobody is talking: Hermes speaking, Hermes still at work, or
   // waiting for the user.
@@ -744,6 +802,12 @@ header > * { flex-shrink: 0; }
         reasoningClear();
         show("Thinking", "hermes", "Hermes is working on it.");
         break;
+      case "approval":
+        approvalOpen(f);
+        break;
+      case "approval_end":
+        if (approval && (!f.request_id || f.request_id === approval.id)) approvalClose();
+        break;
       case "reasoning_delta":
         reasoningDelta(f.text);
         break;
@@ -840,6 +904,7 @@ header > * { flex-shrink: 0; }
         // onto a fresh session itself; its history frame comes next and starts the log
         // over. The turn that was running belonged to the old session.
         busy = false;
+        approvalClose(false);
         turnAbort();
         hermesTurn = null;
         transcriptEl.textContent = "";
@@ -876,6 +941,7 @@ header > * { flex-shrink: 0; }
     ws.onclose = (ev) => {
       ws = null;
       busy = false;
+      approvalClose(false); // a prompt cannot be answered over a closed socket
       turnAbort();
       replyClear(null);
       // The replaced and join_failed frames come before these closes and already did the
@@ -895,6 +961,7 @@ header > * { flex-shrink: 0; }
     const sock = ws;
     ws = null;
     busy = false;
+    approvalClose(false);
     turnAbort();
     replyClear(null);
     if (!sock) return;

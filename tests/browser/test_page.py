@@ -2580,3 +2580,83 @@ async def test_the_log_follows_a_reply_while_the_header_gives_room_back_after_a_
     await page.wait_for_function("document.getElementById('log').textContent.includes('Part 39 of')")
     box = await _log_box(page)
     assert box["atEnd"], box
+
+
+STATE = "document.getElementById('state').textContent"
+APPROVAL = {"type": "approval", "request_id": "r1", "command": "rm -rf build/", "reason": "recursive delete",
+            "choices": [{"choice": "once", "label": "Allow Once", "style": "primary"},
+                        {"choice": "session", "label": "Session", "style": ""},
+                        {"choice": "always", "label": "Always", "style": ""},
+                        {"choice": "deny", "label": "Deny", "style": "danger"}]}
+
+
+async def _blocked_turn(stack):
+    """A turn runs and its tool waits for an approval. Returns the session and the
+    list of JSON frames the page sends from now on."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await page.wait_for_function(f"{STATE} === 'Listening'", timeout=10000)
+    await conn.send({"type": "turn_end", "text": "clean the build", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await page.wait_for_function(f"{STATE} === 'Thinking'", timeout=5000)
+    await session.on_tool_start(reply_id, "c1", "terminal", "rm -rf build/")
+    sent = []
+
+    async def on_page_frame(frame, keep=session.on_page_frame):
+        sent.append(frame)
+        await keep(frame)
+
+    session.on_page_frame = on_page_frame
+    return session, sent
+
+
+async def _buttons(page):
+    return await page.eval_on_selector_all("#approval-choices button", "els => els.map(e => e.textContent)")
+
+
+async def test_an_approval_frame_shows_the_command_the_reason_and_a_button_per_choice(stack):
+    page = stack[1]
+    session, _ = await _blocked_turn(stack)
+    assert await page.is_hidden("#approval")
+    await session.send_page(APPROVAL)
+    await page.wait_for_selector("#approval:not([hidden])", timeout=5000)
+    assert await page.text_content("#approval-command") == "rm -rf build/"
+    assert "recursive delete" in await page.text_content("#approval-reason")
+    assert await _buttons(page) == ["Allow Once", "Session", "Always", "Deny"]
+    two = dict(APPROVAL, request_id="r2", choices=[APPROVAL["choices"][0], APPROVAL["choices"][3]])
+    await session.send_page(two)
+    await page.wait_for_function("document.querySelectorAll('#approval-choices button').length === 2", timeout=5000)
+    assert await _buttons(page) == ["Allow Once", "Deny"]
+    # The prompt is not a line of the log.
+    texts = await page.eval_on_selector_all("#log .turn", "els => els.map(e => e.textContent)")
+    assert texts == ["clean the build"]
+
+
+async def test_the_page_waits_for_approval_until_the_approval_prompt_ends(stack):
+    page = stack[1]
+    session, _ = await _blocked_turn(stack)
+    await session.send_page(APPROVAL)
+    await page.wait_for_function(f"{STATE} === 'Waiting for approval'", timeout=5000)
+    await session.send_page({"type": "turn_done"})
+    await asyncio.sleep(0.3)
+    assert await page.text_content("#state") == "Waiting for approval"
+    await session.send_page({"type": "approval_end", "request_id": "r0"})  # an earlier prompt's end
+    await asyncio.sleep(0.2)
+    assert await page.is_visible("#approval")
+    await session.send_page({"type": "approval_end", "request_id": "r1"})  # withdrawn or timed out
+    await page.wait_for_selector("#approval", state="hidden", timeout=5000)
+    assert await page.text_content("#state") == "Listening"
+
+
+async def test_a_tap_on_an_approval_choice_sends_the_answer_and_removes_the_prompt(stack):
+    page = stack[1]
+    session, sent = await _blocked_turn(stack)
+    await session.send_page(APPROVAL)
+    await page.wait_for_selector("#approval:not([hidden])", timeout=5000)
+    await page.click("#approval-choices button[data-choice='deny']")
+    await wait_for(lambda: [f for f in sent if f.get("type") == "approval_answer"], timeout=5)
+    assert [f for f in sent if f.get("type") == "approval_answer"] == [
+        {"type": "approval_answer", "request_id": "r1", "choice": "deny"}]
+    assert await page.is_hidden("#approval")
+    assert await page.text_content("#state") != "Waiting for approval"
