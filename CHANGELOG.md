@@ -21,6 +21,16 @@ entry names next to its pinned commit.
   above New session. The other sessions follow under Earlier as thin lines
   with their source and age. A session's source shows as the channel's
   name (Telegram, CLI); sessions this page started carry no source tag.
+- In a session the level meter is a low strip and the time of a running
+  turn sits beside the state word, so the log gets more of the screen and
+  the page moves less when a turn starts and ends.
+
+### Fixed
+
+- The log stays at its end while a reply streams in and when the tool list
+  or the reasoning text takes room from it. Before, a long reply ended
+  below the edge of the screen. A log you scrolled up to read stays where
+  you left it until you scroll back to its end.
 
 ## [0.3.2]
 
