@@ -768,21 +768,29 @@ class VoiceSession:
             return
         if asyncio.get_running_loop().time() - self._not_caught_at < NOT_CAUGHT_EVERY_S:
             return
-        self._not_caught = asyncio.create_task(self._guarded(self._say_not_caught()))
+        # The task runs the coroutine itself: one cancelled before its first step
+        # then leaves no coroutine behind that was never awaited.
+        self._not_caught = asyncio.create_task(self._say_not_caught())
 
     async def _say_not_caught(self) -> None:
         await asyncio.sleep(NOT_CAUGHT_WAIT_S)
-        approval = self._approval_id is not None
-        if not approval and not await self._answers_question():
-            return  # nothing waits for the user: a noise needs no answer
-        self._not_caught_at = asyncio.get_running_loop().time()
-        logger.info("voice page %s: speech with no words while a prompt waits, said so", self.client_id)
-        await self.send_page({"type": "note", "text": NOT_CAUGHT_NOTICE})
-        if self.reply_open or self.reply_request is not None:
-            await self.cancel_reply("answer not caught")
-        notice = f"{NOT_CAUGHT_NOTICE} {APPROVAL_REPEAT_NOTICE}" if approval else NOT_CAUGHT_NOTICE
-        self._prompt_request = await self.speak_notice(notice, show=False)
-        await self._next_turn()
+        try:
+            approval = self._approval_id is not None
+            if not approval and not await self._answers_question():
+                return  # nothing waits for the user: a noise needs no answer
+            self._not_caught_at = asyncio.get_running_loop().time()
+            logger.info("voice page %s: speech with no words while a prompt waits, said so", self.client_id)
+            await self.send_page({"type": "note", "text": NOT_CAUGHT_NOTICE})
+            if self.reply_open or self.reply_request is not None:
+                await self.cancel_reply("answer not caught")
+            notice = f"{NOT_CAUGHT_NOTICE} {APPROVAL_REPEAT_NOTICE}" if approval else NOT_CAUGHT_NOTICE
+            self._prompt_request = await self.speak_notice(notice, show=False)
+            await self._next_turn()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # The notice is a courtesy: its failure must not end the voice session.
+            logger.warning("voice page %s: the not-caught notice failed", self.client_id, exc_info=True)
 
     async def _answers_question(self) -> bool:
         """Whether the chat waits for the answer to a question the model asked."""
