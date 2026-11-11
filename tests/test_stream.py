@@ -428,7 +428,7 @@ async def test_an_event_of_another_platform_does_not_start_the_turn(rig):
     assert not session.turn_running
 
 
-async def test_the_turn_runs_no_more_once_it_is_done_or_cancelled(rig):
+async def test_the_turn_runs_until_it_is_done_also_when_its_reply_is_cut(rig):
     hooks, conn, page = rig
     session = _session(hooks)
     fire(hooks.pre_llm_call, session_id="s1")
@@ -441,7 +441,9 @@ async def test_the_turn_runs_no_more_once_it_is_done_or_cancelled(rig):
     fire(hooks.pre_llm_call, session_id="s1")
     await wait_for(lambda: session.turn_running)
     await session.cancel_reply("test")
-    assert not session.turn_running
+    assert session.turn_running  # the cut stops the reply, not the Hermes turn
+    fire(hooks.on_session_end, turn_id="t1", interrupted=False, platform=PLATFORM)
+    await wait_for(lambda: not session.turn_running)
 
 
 async def test_a_reply_frame_sent_while_the_turn_runs_says_so(rig):

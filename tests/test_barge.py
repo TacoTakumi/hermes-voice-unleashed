@@ -7,6 +7,7 @@ import contextlib
 import contextvars
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 from websockets.asyncio.client import connect
@@ -194,3 +195,101 @@ async def test_audio_start_of_a_reply_cancelled_before_its_audio_is_not_forwarde
         assert [f for f in page.of("audio_start") if f["request_id"] == rid] == []
         assert page.pcm_after_first("clear") == []
         assert rid not in session._dropped
+
+
+async def _barged_reply(hooks, conn, page, messages):
+    """A reply cut by a barge while its Hermes turn still runs; returns its message id."""
+    await conn.send({"type": "turn_end", "text": "tell me a story", "turn_id": 0})
+    await wait_for(lambda: messages)
+    message_id, rid = await _start_reply(hooks, conn, page, messages)
+    await conn.send({"type": "barge", "request_id": rid, "onset_mic_sample": 10, "mic_sample": 20})
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "interrupted"})
+    await wait_for(lambda: page.of("clear") and page.of("audio_end"))
+    return message_id
+
+
+async def test_a_barge_on_a_running_turn_leaves_the_page_busy_until_the_turn_ends(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        message_id = await _barged_reply(hooks, conn, page, messages)
+        session = hooks._adapters[-1].session_for("voice")
+        await asyncio.sleep(0.2)
+        assert page.of("turn_done") == []  # Hermes still works: the page must not show Listening
+        assert session.turn_running and not session.reply_open
+        fire(hooks.on_session_end, message_id, turn_id="t1", interrupted=False)
+        await wait_for(lambda: page.of("turn_done"))
+        assert not session.turn_running
+        fire(hooks.on_session_end, message_id, turn_id="t1", interrupted=False)
+        await asyncio.sleep(0.2)
+        assert len(page.of("turn_done")) == 1
+
+
+async def test_a_barge_on_the_tail_of_a_finished_turn_ends_the_turn_on_the_page_at_once(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        await conn.send({"type": "turn_end", "text": "tell me a story", "turn_id": 0})
+        await wait_for(lambda: messages)
+        message_id, rid = await _start_reply(hooks, conn, page, messages)
+        fire(hooks.on_session_end, message_id, turn_id="t1", interrupted=False)
+        await wait_for(lambda: any(f["request_id"] == rid and f["done"] for f in tts(conn)))
+        assert page.of("turn_done") == []  # the reply's audio still plays
+        await conn.send({"type": "barge", "request_id": rid, "onset_mic_sample": 10, "mic_sample": 20})
+        await wait_for(lambda: page.of("clear") and page.of("turn_done"))
+
+
+async def test_a_running_turn_still_shows_its_work_after_a_barge_and_speaks_no_more(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        message_id = await _barged_reply(hooks, conn, page, messages)
+        sent, shown = len(tts(conn)), len(page.of("reply_delta"))
+        fire(hooks.on_stream_delta, message_id, delta="Let me look.", kind="reasoning", turn_id="t1",
+             iteration=2)
+        fire(hooks.pre_tool_call, message_id, tool_name="terminal", args={"command": "ls"},
+             tool_call_id="c1")
+        fire(hooks.post_tool_call, message_id, tool_call_id="c1", status="ok", duration_ms=12)
+        fire(hooks.on_stream_delta, message_id, delta=" there was a dragon. ", kind="text", turn_id="t1",
+             iteration=2)
+        fire(hooks.on_stream_end, message_id)
+        await wait_for(lambda: page.of("tool_end"))
+        assert page.of("reasoning_delta") == [{"type": "reasoning_delta", "text": "Let me look."}]
+        assert page.of("tool_start") == [{"type": "tool_start", "id": "c1", "name": "terminal", "summary": "ls"}]
+        assert page.of("tool_end") == [{"type": "tool_end", "id": "c1", "status": "ok", "duration_ms": 12}]
+        await asyncio.sleep(0.5)  # longer than the quiet window after a stream end
+        assert len(tts(conn)) == sent  # the cut reply's text stays unspoken
+        assert len(page.of("reply_delta")) == shown
+        assert page.of("turn_done") == []
+
+
+async def test_a_turn_that_a_newer_utterance_replaced_shows_nothing_more(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        old_id = await _barged_reply(hooks, conn, page, messages)
+        assert page.of("turn_done") == []
+        await conn.send({"type": "turn_end", "text": "stop, a different one", "turn_id": 0})
+        await wait_for(lambda: len(messages) == 2)
+        new_id = messages[1].message_id
+        # The gateway interrupts the old turn for the new message: its lines end on the
+        # page before the new utterance's lines start.
+        kinds = [f["type"] for k, f in page.log if k == "json"]
+        assert kinds.count("turn_done") == 1
+        assert kinds.index("turn_done") < len(kinds) - 1 - kinds[::-1].index("utterance")
+        fire(hooks.on_stream_delta, old_id, delta="Old thought.", kind="reasoning", turn_id="t1", iteration=2)
+        fire(hooks.pre_tool_call, old_id, tool_name="terminal", args={"command": "ls"}, tool_call_id="c1")
+        fire(hooks.post_tool_call, old_id, tool_call_id="c1", status="cancelled", duration_ms=5)
+        fire(hooks.on_stream_delta, old_id, delta=" still talking. ", kind="text", turn_id="t1", iteration=2)
+        fire(hooks.on_session_end, old_id, turn_id="t1", interrupted=True)
+        fire(hooks.pre_llm_call, new_id, session_id="s1")
+        session = hooks._adapters[-1].session_for("voice")
+        await wait_for(lambda: session.turn_running)
+        await asyncio.sleep(0.2)
+        assert page.of("reasoning_delta") == [] and page.of("tool_start") == [] and page.of("tool_end") == []
+        assert [f["text"] for f in tts(conn)] == ["Once upon a "]
+        assert len(page.of("turn_done")) == 1  # the new turn still runs
+
+
+async def test_a_turn_that_fails_after_a_barge_ends_on_the_page(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        message_id = await _barged_reply(hooks, conn, page, messages)
+        adapter = hooks._adapters[-1]
+        assert page.of("turn_done") == []
+        # No end-of-turn hook follows a turn that raised.
+        event = SimpleNamespace(source=adapter._voice_source("voice"), message_id=message_id)
+        await adapter._notify_turn_error(event, RuntimeError("the handler raised"))
+        await wait_for(lambda: page.of("turn_done"))
+        assert not adapter.session_for("voice").turn_running

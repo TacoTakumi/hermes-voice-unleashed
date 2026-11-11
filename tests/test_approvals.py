@@ -117,7 +117,8 @@ async def _resumed_turn_is_spoken(rig, reply_id: str) -> None:
     kinds = [f["type"] for f in rig.page.frames]
     word = len(kinds) - 1 - kinds[::-1].index("utterance")  # the frame with the approval word
     assert rig.page.frames[word]["text"] == "yes"
-    assert kinds.index("clear") < kinds.index("turn_done") < word
+    cleared = kinds.index("clear")
+    assert cleared < word and "turn_done" not in kinds[cleared:word]  # the same turn goes on
     assert rig.session.reply_id == reply_id and rig.session.reply_open
     assert rig.events[-1].text == "yes" and rig.events[-1].message_id != reply_id
     first_request = rig.conn.json_frames("tts_stream")[0]["request_id"]

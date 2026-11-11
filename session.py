@@ -220,7 +220,10 @@ class VoiceSession:
         self._approval_prompts: dict[str, tuple[str, dict[str, Any]]] = {}
         # The TTS request of the last spoken prompt while its audio may still play.
         self._prompt_request: Optional[vm_client.TTSRequest] = None
-        self._turn_started = False  # a hook event of the open reply's turn was seen
+        # The Hermes turn of the reply ``reply_id`` runs: a hook event of it was seen
+        # and its end was not. A cut reply does not end it: the gateway stops the turn
+        # only for the next utterance, so it stays true after the reply closed.
+        self._turn_started = False
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -320,7 +323,8 @@ class VoiceSession:
             # them again with the new words.
             self._cleared_turn = False
             self.tracker.turn_over()
-        await self._send_turn_done()
+        if not self._turn_started:  # a turn that still runs ends on the page at its own end
+            await self._send_turn_done()
         if not self.turn_engine:
             self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
 
@@ -328,9 +332,10 @@ class VoiceSession:
 
     @property
     def turn_running(self) -> bool:
-        """Whether the open reply's Hermes turn runs: it started (a hook event of it
-        was seen) and the reply is not over. Such a turn ends with a turn_done frame."""
-        return self.reply_open and self._turn_started
+        """Whether the Hermes turn of the last reply runs: it started (a hook event of
+        it was seen) and its end was not seen. A cut reply's turn runs on, and the page
+        still shows it at work. Such a turn ends with a turn_done frame."""
+        return self._turn_started
 
     def _in_turn(self, reply_id: str) -> bool:
         """Whether a hook event for ``reply_id`` belongs to the running reply; if so,
@@ -346,16 +351,37 @@ class VoiceSession:
         self._in_turn(reply_id)
 
     def turn_failed(self) -> None:
-        """The open reply's turn raised: it runs no more, and no end-of-turn hook comes."""
+        """The reply's turn raised: it runs no more, and no end-of-turn hook comes."""
+        if self._turn_started and not self.reply_open:
+            # The reply was cut and the page still waits for the end of its turn.
+            self._tasks.append(asyncio.create_task(self._guarded(self._send_turn_done())))
         self._turn_started = False
 
-    def _takes(self, reply_id: str) -> bool:
-        """Whether hook text for ``reply_id`` belongs to the running reply.
+    def _same_reply(self, reply_id: str) -> bool:
+        """Whether a hook event for ``reply_id`` names the last reply.
 
-        An empty id (a turn context without a message id) falls back to the
-        running reply. A reply without an id of its own (a page that reconnected
+        An empty id (a turn context without a message id) falls back to that
+        reply. A reply without an id of its own (a page that reconnected
         while a turn was blocked on an approval) takes any id."""
-        return self.reply_open and (not reply_id or self.reply_id is None or reply_id == self.reply_id)
+        return not reply_id or self.reply_id is None or reply_id == self.reply_id
+
+    def _takes(self, reply_id: str) -> bool:
+        """Whether hook text for ``reply_id`` belongs to the running reply."""
+        return self.reply_open and self._same_reply(reply_id)
+
+    def _shows(self, reply_id: str) -> bool:
+        """Whether the page shows the work of the turn behind a hook event for
+        ``reply_id``: the running reply's turn, or the turn of a cut reply that
+        still runs. A turn that a newer utterance replaced has another id."""
+        return self._in_turn(reply_id) or (self._turn_started and self._same_reply(reply_id))
+
+    async def _fold_cut_turn(self) -> None:
+        """The reply was cut and its turn_done frame waits for the end of its turn.
+        The page folds a turn's lines at that frame and starts new ones at an utterance
+        frame, so the frame goes out here, before an utterance that starts a new turn
+        is shown. An answer that resumes the turn sends none: the same turn goes on."""
+        if self._turn_started and not self.reply_open:
+            await self._send_turn_done()
 
     async def _speak(self, text: str) -> None:
         """Show ``text`` on the page now; send it to TTS in whole words.
@@ -403,12 +429,12 @@ class VoiceSession:
 
     async def on_reasoning_delta(self, reply_id: str, text: str) -> None:
         """Reasoning of the running reply's turn: shown on the page, never spoken."""
-        if not self.attached and self._in_turn(reply_id):
+        if not self.attached and self._shows(reply_id):
             await self.send_page({"type": "reasoning_delta", "text": text})
 
     async def on_tool_start(self, reply_id: str, call_id: str, name: str, summary: str) -> None:
         """A tool call of the running reply's turn started: show it on the page."""
-        if not self.attached and self._in_turn(reply_id):
+        if not self.attached and self._shows(reply_id):
             await self.send_page({"type": "tool_start", "id": call_id, "name": name, "summary": summary})
 
     async def on_tool_end(self, reply_id: str, call_id: str, status: str, duration_ms: int) -> None:
@@ -416,7 +442,7 @@ class VoiceSession:
         # the gateway withdrew it or it timed out, and also for a turn whose reply a
         # newer utterance replaced.
         await self._approval_sync()
-        if not self.attached and self._in_turn(reply_id):
+        if not self.attached and self._shows(reply_id):
             await self.send_page({"type": "tool_end", "id": call_id, "status": status,
                                   "duration_ms": duration_ms})
 
@@ -444,7 +470,16 @@ class VoiceSession:
         """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
         request so VoiceManager speaks the rest."""
         await self._approval_sync()
-        if not self._takes(reply_id) or self._finishing is not None:
+        if not self.reply_open:
+            if self._turn_started and self._same_reply(reply_id):
+                # The reply was cut while its turn ran: the page waited for this end.
+                self._turn_started = False
+                await self._send_turn_done()
+            return
+        if not self._takes(reply_id):
+            return
+        self._turn_started = False  # the turn is over; the reply's audio may still play
+        if self._finishing is not None:
             return
         self._last_text_at = asyncio.get_running_loop().time()
         self._finishing = asyncio.create_task(self._guarded(self._finish_when_quiet(reply_id)))
@@ -462,6 +497,7 @@ class VoiceSession:
         if not self._takes(reply_id):  # cancelled, or a newer utterance took over
             return
         self.reply_open = False
+        self._turn_started = False  # a reply that ends here was not cut: no turn end is awaited
         if not self.attached:
             shown, spoken = self._cutter.end()
             if shown:
@@ -616,6 +652,7 @@ class VoiceSession:
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
             return
+        await self._fold_cut_turn()
         self._open_reply()
         await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
         if self._on_utterance is not None:
@@ -843,6 +880,7 @@ class VoiceSession:
         and takes the next utterance; nothing reconnects."""
         logger.info("voice page %s: new session by voice", self.client_id)
         self._prompt_reply = None
+        self._turn_started = False  # the old session's turn is not this page's to show
         await self._command_notice(SESSION_NEW_NOTICE, "new session")
         if self._on_new_session is not None:
             await self._on_new_session()
@@ -885,7 +923,7 @@ class VoiceSession:
         self._retire(self.reply_key)
         self.reply_id = uuid.uuid4().hex
         self.reply_open, self.reply_request, self._unsent = True, None, ""
-        self._turn_started = False
+        self._turn_started = False  # the gateway interrupts the old turn for the new message
         self._cutter = SayCutter()
 
     def _reopen_reply(self) -> None:
@@ -923,10 +961,12 @@ class VoiceSession:
 
         The Hermes turn itself stops when the user's next utterance arrives: the
         gateway interrupts a running turn for a new voice message (its default
-        busy_input_mode)."""
+        busy_input_mode). Until then it runs, and the page shows it at work: its
+        turn_done frame goes out when the turn ends, or before the next new turn's utterance."""
         request = await self._close_reply(reason, send_cancel)
         await self._send_clear(request.request_id if request else None)
-        await self._send_turn_done()
+        if not self._turn_started:
+            await self._send_turn_done()
 
     async def _close_reply(self, reason: str, send_cancel: bool = True) -> Optional[vm_client.TTSRequest]:
         """Close the running reply: no more of its text, its TTS request dropped and
