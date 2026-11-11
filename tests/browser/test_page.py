@@ -3198,3 +3198,35 @@ async def test_barge_in_off_is_gone_after_a_reconnect_that_says_nothing_of_it(st
     await sessions[0].page.close()
     await fake.wait_connections(2, timeout=10)
     await _detail_is(page, "Say something.", timeout=10000)
+
+
+async def test_barge_in_ready_shows_when_it_comes_while_the_user_is_heard(stack):
+    """The server learns the voice from speech, so its ready comes while the page reads
+    Hearing you or just after, when the turn has begun."""
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await session.send_page({"type": "transcript", "text": "what is the airspeed"})
+    await _state_is(page, "Hearing you")
+    assert await page.text_content("#detail") == LEARNING  # still true
+    await session.send_page({"type": "barge_state", "state": "ready"})
+    await _detail_is(page, "Barge-in ready.")
+    assert await page.text_content("#state") == "Hearing you"
+    await session.send_page({"type": "utterance", "text": "what is the airspeed of a swallow"})
+    await _state_is(page, "Thinking")
+    assert "Barge-in ready." in await page.text_content("#detail")
+    await page.wait_for_function(f"{DETAIL}.includes('Speaking now stops it.')", timeout=4000)
+    assert "Barge-in" not in await page.text_content("#detail")
+
+
+async def test_barge_in_ready_shows_when_it_comes_while_hermes_thinks(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    await _state_is(page, "Thinking")
+    assert "Barge-in" not in await page.text_content("#detail")  # no reply plays: speech stops the turn
+    await session.send_page({"type": "barge_state", "state": "ready"})
+    await page.wait_for_function(f"{DETAIL}.includes('Barge-in ready.')", timeout=2000)

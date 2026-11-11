@@ -466,9 +466,14 @@ header > * { flex-shrink: 0; }
     clearTimeout(bargeTimer);
     bargeState = state;
     if (state === "ready") bargeTimer = setTimeout(() => bargeSet(null), BARGE_READY_MS);
-    // Only a line that says who has the floor is written again: a state that reports
-    // something (the user is heard, an error) keeps its own.
+    // A line that says who has the floor is written again. The server learns the voice
+    // from speech, so its ready comes while the user is heard: that state keeps its
+    // word and takes the news in its detail line. Any other state that reports
+    // something (an error, the end of the session) keeps its own line.
     if (FLOOR_STATES.includes(stateEl.textContent)) status();
+    else if (stateEl.textContent === "Hearing you" && state) {
+      detailEl.textContent = state === "learning" ? "Learning your voice. Barge-in is off." : "Barge-in ready.";
+    }
   }
   function listening() {
     if (!running || ending) return;
@@ -516,7 +521,8 @@ header > * { flex-shrink: 0; }
     const detail = tool ? "Hermes is still working." : "Hermes is working on it.";
     // Speech stops the turn, but while reply audio plays that is a barge.
     const deaf = bargeState === "learning" && reply && reply.audible;
-    const stops = deaf ? " Barge-in is off: still learning your voice." : " Speaking now stops it.";
+    const stops = deaf ? " Barge-in is off: still learning your voice."
+      : bargeState === "ready" ? " Barge-in ready." : " Speaking now stops it.";
     show(tool ? "Working" : "Thinking", "hermes", muted ? detail : detail + stops);
   }
   function toolRuns() {
