@@ -6,7 +6,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
-## [0.4.2]
+## [0.5.0]
+
+### Added
+
+- Sound cues: while a turn runs and no reply audio plays, the page plays
+  a quiet repeating blip, the thinking sound of Hermes Desktop and the
+  Hermes CLI voice mode. It stops when reply audio starts, the turn ends,
+  you are heard or an approval prompt opens. A "Sound cues" button turns
+  it off and on and the browser keeps the choice; `cues=0` in the page
+  URL starts with it off.
 
 ### Changed
 

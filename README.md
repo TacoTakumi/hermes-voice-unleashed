@@ -245,6 +245,12 @@ same rule. Add `&aec=0` to turn off the browser's echo cancellation and noise
 suppression. Add `&client=<name>` to talk on another lane than `voice` (see
 "Home channel").
 
+While a turn runs and no reply audio plays, the page plays a quiet repeating
+blip, so you can tell without the screen that Hermes still works. It is the
+thinking sound of Hermes Desktop and the Hermes CLI voice mode. The "Sound
+cues" button turns it off and on, and the browser keeps the choice. Add
+`&cues=0` to the URL to start with it off.
+
 ### One voice device
 
 There is one voice device per profile. When you open the page on a second
