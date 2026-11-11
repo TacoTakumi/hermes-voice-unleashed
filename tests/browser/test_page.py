@@ -2468,3 +2468,13 @@ async def test_the_log_stays_where_the_user_scrolled_it_and_follows_again_from_i
     await page.wait_for_function("document.getElementById('log').textContent.includes('Later part 29')")
     box = await _log_box(page)
     assert box["atEnd"] and box["top"] > 0, box
+
+
+async def test_the_meter_is_a_low_strip_at_every_screen_size(stack):
+    fake, page, sessions, utterances = stack
+    await _listening(fake, page)
+    for width, height in ((390, 844), (390, 600), (1280, 800)):
+        await page.set_viewport_size({"width": width, "height": height})
+        style = await page.evaluate("""() => { const s = getComputedStyle(document.getElementById('meter'));
+            return [s.height, s.marginTop]; }""")
+        assert style == ["32px", "10px"], (width, height, style)
