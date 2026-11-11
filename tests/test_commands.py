@@ -422,3 +422,51 @@ async def test_new_session_please_is_an_ordinary_utterance(plugin):
         assert r.page.of("session_new") == []
         assert "New session." not in r.tts_text()
         assert not r.page.closed
+
+
+# --- the end command as the last words of a turn ------------------------------------------
+async def _finals_then_turn_end(r, *finals):
+    """The recognizer gives each of ``finals`` as a segment of its own, and the turn
+    engine then ends one turn that holds them all."""
+    for text in finals:
+        await r.conn.send({"type": "transcription", "segment_index": r.next_segment(), "text": text,
+                           "is_final": True})
+    await r.conn.send({"type": "turn_end", "text": " ".join(finals), "turn_id": 0})
+
+
+@pytest.mark.parametrize("finals", [
+    ("End session", "End session"),            # said again before the turn ended
+    ("I didn't say", "End session"),           # other words first, then the command
+    ("Oh come on", "end the session."),
+])
+async def test_a_turn_whose_last_words_are_the_end_command_ends_the_session(plugin, finals):
+    """A command that did not act at once is said again, or after a remark, and the
+    turn engine joins it all into one turn. The last thing said decides."""
+    async with rig(plugin) as r:
+        await _playing_reply(r)
+        sent = len(r.messages)
+        await _finals_then_turn_end(r, *finals)
+        await _notice_played(r, "Session ended.")
+        await wait_for(lambda: r.page.closed)
+        assert len(r.messages) == sent  # nothing of it went to Hermes
+
+
+@pytest.mark.parametrize("finals", [
+    ("End session", "no wait"),                # the last words are no command
+    ("please do not end session",),            # one sentence that only holds the phrase
+    ("I was in session", "all day"),
+])
+async def test_a_turn_whose_last_words_are_no_command_goes_to_hermes(plugin, finals):
+    async with rig(plugin) as r:
+        await _playing_reply(r)
+        sent = len(r.messages)
+        await _finals_then_turn_end(r, *finals)
+        await wait_for(lambda: len(r.messages) == sent + 1)
+        assert r.messages[-1].text == " ".join(finals)
+        assert not r.page.closed
+
+
+def test_this_session_is_the_end_command_too(plugin):
+    """What the recognizer gave for "end session" on a phone."""
+    assert plugin.turns.spoken_command("This session.") == plugin.turns.END_SESSION
+    assert plugin.turns.spoken_command("this session is over") is None

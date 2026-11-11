@@ -665,6 +665,10 @@ class VoiceSession:
         if self._not_caught is not None:
             self._not_caught.cancel()  # words came: there is nothing to say sorry for
         command = spoken_command(text) if not self.attached else None
+        if command is None and not self.attached and self.turn_engine:
+            # The turn holds more than the command: the user said it again because it
+            # did not act at once, or said something before it. The last words decide.
+            command = spoken_command(self.tracker.last_final)
         if command == END_SESSION:
             await self._end_session()
             return

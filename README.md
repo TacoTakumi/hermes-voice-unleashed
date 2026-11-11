@@ -292,8 +292,8 @@ the whole utterance, in any case and with any punctuation:
 
 - "end session", "end the session", "end this session", "end of session",
   "end discussion" or "end of discussion" stops a reply that is playing and
-  says "Session ended". "in session" and "in discussion" do the same: the
-  speech recognizer often hears "end" as "in". The page stops the microphone at once,
+  says "Session ended". "in session", "in discussion" and "this session" do
+  the same: the speech recognizer often hears "end" as "in" or "this". The page stops the microphone at once,
   lets the notice play out under the heading "Session ended", then lets the
   screen go off and shows the session list again.
 - "new session", "start a new session" or "start new session" stops a playing
@@ -301,7 +301,10 @@ the whole utterance, in any case and with any punctuation:
   clears the page's log. The microphone stays on and nothing reconnects. An
   empty session is kept, as above.
 
-Anything else ("end the session now") reaches Hermes as a message.
+Anything else ("end the session now") reaches Hermes as a message. One
+exception: when you say a command again because it did not act at once, or
+say something and then the command, the last thing you said decides ("I did
+not say that. End session.").
 
 ### Approvals
 

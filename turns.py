@@ -52,6 +52,7 @@ SPOKEN_COMMANDS = {
     # What the speech recognizer often gives for "end session" and "end discussion".
     "in session": END_SESSION,
     "in discussion": END_SESSION,
+    "this session": END_SESSION,
     "new session": NEW_SESSION,
     "start a new session": NEW_SESSION,
     "start new session": NEW_SESSION,
@@ -126,6 +127,7 @@ class TurnTracker:
 
     def _reset(self) -> None:
         self.segments: dict[int, str] = {}
+        self.last_final = ""  # the last final text of the turn that just ended (turn engine)
         self.dispatched_words: Optional[list[str]] = None
         self._dispatched_keys: set[int] = set()
         self._answered_keys: set[int] = set()
@@ -209,6 +211,10 @@ class TurnTracker:
         if not self.turn_engine:
             return
         text = (frame.get("text") or self.text).strip()
+        # The last thing the recognizer gave in this turn, on its own: a command said
+        # again, or after a remark, is one turn with the words before it.
+        finals = [self.segments[k] for k in sorted(self.segments) if heard_words(self.segments[k])]
+        self.last_final = finals[-1] if finals else ""
         self.segments = {}
         words = heard_words(text)
         if not words:
