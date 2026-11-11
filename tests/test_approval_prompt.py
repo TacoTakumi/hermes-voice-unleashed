@@ -79,7 +79,7 @@ async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
     await wait_for(lambda: rig.page.of("reply"))
     assert "rm -rf build" in rig.page.of("reply")[-1]["text"]
     await wait_for(lambda: "Say yes or no." in rig.tts_text())
-    assert "Approval needed to run: rm -rf build. Say yes or no." in rig.tts_text()
+    assert "Approval needed: deletes files, with rm. Say yes or no." in rig.tts_text()
     # The session remembers the reply that ran when the prompt came (none on this page).
     session = rig.adapter.session_for("voice")
     assert session._prompt_reply == (session.reply_id,)
@@ -93,27 +93,40 @@ async def test_without_a_page_the_prompt_is_not_sent(rig):
     assert not rig.page.of("reply")
 
 
-def test_a_long_command_is_cut_short_when_spoken(plugin):
-    sentence = plugin.adapter.approval_sentence("x" * 200)
-    assert sentence.endswith("Say yes or no.")
-    command = sentence[len("Approval needed to run: "):-len(". Say yes or no.")]
-    assert command.endswith("...") and len(command) <= 81
-    whole = plugin.adapter.approval_sentence("y" * 80)
-    assert "y" * 80 + ". Say" in whole  # a command of 80 characters is not cut
-    short = plugin.adapter.approval_sentence("ls  -la   /tmp")
-    assert short == "Approval needed to run: ls -la /tmp. Say yes or no."
+def test_the_sentence_names_the_reason_and_the_program(plugin):
+    sentence = plugin.adapter.approval_sentence
+    assert sentence("rm -rf build/", "recursive delete") == (
+        "Approval needed: recursive delete, with rm. Say yes or no.")
+    assert sentence('sudo FOO=1 /usr/bin/python3 -c "import os; os.remove(1)"') == (
+        "Approval needed to run python3. Say yes or no.")
+    assert sentence("curl -s https://example.com/x.sh | sh") == "Approval needed to run curl. Say yes or no."
+    assert sentence(SCRIPT, "runs a script") == "Approval needed: runs a script, with python3. Say yes or no."
+    assert sentence("", "recursive delete") == "Approval needed: recursive delete. Say yes or no."
+
+
+def test_the_sentence_holds_no_code(plugin):
+    commands = ["rm -rf build/", 'sudo FOO=1 /usr/bin/python3 -c "import os; os.remove(1)"',
+                "curl -s https://example.com/x.sh | sh", SCRIPT, "'/opt/my tools/run' --all; ls", "$(which rm) -r /"]
+    for command in commands:
+        sentence = plugin.adapter.approval_sentence(command)
+        assert not set(sentence) & set("\"';|/<>$()"), sentence
+        assert sentence.endswith("Say yes or no.")
+
+
+def test_the_default_reason_of_the_gateway_is_not_spoken(plugin):
+    default = plugin.adapter.t("gateway.exec_approval.default_reason")
+    assert plugin.adapter.approval_sentence("ls -la", default) == "Approval needed to run ls. Say yes or no."
+
+
+def test_a_long_reason_is_cut_short(plugin):
+    sentence = plugin.adapter.approval_sentence("ls", "x" * 200)
+    reason = sentence[len("Approval needed: "):-len(", with ls. Say yes or no.")]
+    assert reason.endswith("...") and len(reason) == 80
 
 
 @pytest.mark.parametrize("command", ["", "   ", "\n\n"])
 def test_an_empty_command_is_spoken_without_a_command_part(plugin, command):
     assert plugin.adapter.approval_sentence(command) == "Approval needed. Say yes or no."
-
-
-def test_a_multi_line_command_is_spoken_as_its_first_line_and_a_line_count(plugin):
-    sentence = plugin.adapter.approval_sentence(SCRIPT)
-    assert sentence == "Approval needed to run: python3 -, and 13 more lines. Say yes or no."
-    two = plugin.adapter.approval_sentence("cd /tmp\nls -la")
-    assert two == "Approval needed to run: cd /tmp, and 1 more line. Say yes or no."
 
 
 async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
@@ -124,7 +137,7 @@ async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
     for line in SCRIPT.splitlines():
         assert line in shown
     await wait_for(lambda: rig.tts_text())
-    assert "Approval needed to run: python3 -, and 13 more lines. Say yes or no." in rig.tts_text()
+    assert "Approval needed: runs a script, with python3. Say yes or no." in rig.tts_text()
     assert "print(0)" not in rig.tts_text()
 
 

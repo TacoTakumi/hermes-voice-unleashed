@@ -41,7 +41,7 @@ DEFAULT_HOST, DEFAULT_PORT = "127.0.0.1", 8765
 # The approval.inputs keys whose words answer a plain-text approval prompt, the
 # same ones the gateway's run loop accepts.
 APPROVAL_INPUT_KEYS = ("approve", "deny", "always", "session")
-COMMAND_SPOKEN_CHARS = 80  # a longer command is cut to this many characters, "..." included
+REASON_SPOKEN_CHARS = 80  # a longer reason is cut to this many characters, "..." included
 # How long a command the plugin sent on a lane's behalf may take to be answered. The
 # gateway handles a slash command in a background task, so its reply comes through
 # send() after handle_message returned; without a reply the lane's session is checked.
@@ -245,28 +245,45 @@ def spoken_choice(text: str, choices: Optional[list]) -> Optional[str]:
     return None
 
 
-def approval_sentence(command: str) -> str:
-    """The spoken form of an approval prompt: the command, cut short when long,
-    and how to answer.
+# Words before the program of a command that are not the program itself.
+_COMMAND_PREFIXES = frozenset({"sudo", "env", "nohup", "time", "command", "exec", "nice"})
 
-    A command of several lines, a script fed through a heredoc for example, is
-    spoken as its first line and the count of the other lines; reading the whole
-    script aloud tells the listener nothing. The heredoc opener (``<<EOF`` and its
-    quoted and dash forms) is dropped from that first line.
+
+def command_program(command: str) -> str:
+    """The name of the first program ``command`` runs: no directory, no ``sudo`` or
+    other prefix word, no environment assignment. Empty when there is none."""
+    line = next((line for line in command.splitlines() if line.strip()), "")
+    for token in line.split():
+        token = token.strip("'\"`()")
+        if token in _COMMAND_PREFIXES or token.startswith("-") or re.match(r"\w+=", token):
+            continue
+        name = re.sub(r"[^\w.+-]", "", token.rsplit("/", 1)[-1])
+        if name:
+            return name
+    return ""
+
+
+def approval_sentence(command: str, reason: str = "") -> str:
+    """The spoken form of an approval prompt: why the command needs approval, the
+    program it runs, and how to answer.
+
+    The command itself is not spoken: code read aloud tells the listener nothing,
+    and the page shows it. ``reason`` is the gateway's reason for the prompt; its
+    default text, which names no reason, counts as none.
     """
-    lines = [line for line in command.splitlines() if line.strip()]
-    first = lines[0] if lines else command
-    if len(lines) > 1:
-        first = re.sub(r"<<-?\s*(['\"]?)\w+\1\s*$", "", first)
-    short = re.sub(r"\s+", " ", first).strip()
-    if not short:  # nothing to read out
-        return "Approval needed. Say yes or no."
-    if len(short) > COMMAND_SPOKEN_CHARS:
-        short = short[:COMMAND_SPOKEN_CHARS - 3] + "..."
-    if len(lines) > 1:
-        more = len(lines) - 1
-        short += f", and {more} more line" + ("s" if more != 1 else "")
-    return f"Approval needed to run: {short}. Say yes or no."
+    program = command_program(command)
+    reason = re.sub(r"\s+", " ", str(reason or "")).strip().rstrip(".")
+    if reason == t("gateway.exec_approval.default_reason").strip().rstrip("."):
+        reason = ""
+    if len(reason) > REASON_SPOKEN_CHARS:
+        reason = reason[:REASON_SPOKEN_CHARS - 3] + "..."
+    if reason and program:
+        return f"Approval needed: {reason}, with {program}. Say yes or no."
+    if reason:
+        return f"Approval needed: {reason}. Say yes or no."
+    if program:
+        return f"Approval needed to run {program}. Say yes or no."
+    return "Approval needed. Say yes or no."
 
 
 class VoiceLiveAdapter(BasePlatformAdapter):
@@ -790,7 +807,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         if self._clients.get(prompt.chat_id) is None or session is None:
             return SendResult(success=False, error="the voice page is not connected")
         await self._send_json(prompt.chat_id, {"type": "reply", "text": prompt.text})
-        await session.speak_prompt(approval_sentence(prompt.command))
+        await session.speak_prompt(approval_sentence(prompt.command, prompt.description))
         return SendResult(success=True, message_id=None)
 
     async def send_clarify(self, chat_id: str, question: str, choices: Optional[list], clarify_id: str,
