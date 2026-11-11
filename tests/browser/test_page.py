@@ -2406,6 +2406,15 @@ async def _a_session_with_a_long_log(fake, page, sessions, lines=40):
     return session
 
 
+async def _stream_a_reply(session, page, parts, label="Part"):
+    """Reply text in pieces with a pause between them, so it lands over many frames as a
+    spoken reply does. Returns once the page shows the last piece."""
+    for i in range(parts):
+        await session.send_page({"type": "reply_delta", "text": f"{label} {i} of a long answer that wraps. "})
+        await asyncio.sleep(0.012)
+    await page.wait_for_function(f"document.getElementById('log').textContent.includes('{label} {parts - 1} of')")
+
+
 async def _scroll_the_log_by_hand(page, to_end):
     """A wheel gesture on the log, then its scroll: to the top, or to its end."""
     await page.evaluate("""(toEnd) => {
@@ -2422,9 +2431,7 @@ async def test_the_log_is_at_its_end_after_a_long_history_and_a_streamed_reply(s
     box = await _log_box(page)
     assert box["scroll"] > box["height"] and box["atEnd"], box
     await session.send_page({"type": "utterance", "text": "tell me a long story"})
-    for i in range(40):
-        await session.send_page({"type": "reply_delta", "text": f"Part {i} of a long answer that wraps. "})
-    await page.wait_for_function("document.querySelector('#log .turn.hermes:last-child').textContent.includes('Part 39')")
+    await _stream_a_reply(session, page, 40)
     grown = await _log_box(page)
     assert grown["scroll"] > box["scroll"] + grown["height"], (box, grown)  # more text than the log area holds
     assert grown["atEnd"], grown
@@ -2455,19 +2462,26 @@ async def test_the_log_stays_where_the_user_scrolled_it_and_follows_again_from_i
     session = await _a_session_with_a_long_log(fake, page, sessions)
     await _scroll_the_log_by_hand(page, to_end=False)
     await session.send_page({"type": "utterance", "text": "go on"})
-    for i in range(10):
-        await session.send_page({"type": "reply_delta", "text": f"Part {i} of the answer. "})
+    await _stream_a_reply(session, page, 10)
     await session.send_page({"type": "speech_failed"})
     await page.wait_for_function("document.querySelectorAll('#log .turn.note').length === 1")
     await asyncio.sleep(0.2)
     box = await _log_box(page)
     assert box["top"] == 0, box
     await _scroll_the_log_by_hand(page, to_end=True)
-    for i in range(30):
-        await session.send_page({"type": "reply_delta", "text": f"Later part {i} of the answer. "})
-    await page.wait_for_function("document.getElementById('log').textContent.includes('Later part 29')")
+    await _stream_a_reply(session, page, 30, label="Later part")
     box = await _log_box(page)
     assert box["atEnd"] and box["top"] > 0, box
+
+
+async def test_the_log_follows_a_reply_after_a_tap_on_it_that_scrolled_nothing(stack):
+    fake, page, sessions, utterances = stack
+    session = await _a_session_with_a_long_log(fake, page, sessions)
+    await session.send_page({"type": "utterance", "text": "tell me a long story"})
+    await page.evaluate("document.querySelector('main').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+    await _stream_a_reply(session, page, 40)
+    box = await _log_box(page)
+    assert box["atEnd"], box
 
 
 async def test_the_meter_is_a_low_strip_at_every_screen_size(stack):

@@ -310,24 +310,34 @@ header > * { flex-shrink: 0; }
     logPinSoon();
     return li;
   }
-  // The log follows its end, by the rule of the tool list below: it moves when a line is
-  // added, when reply text streams into a line and when the header takes or gives back
-  // room, unless the user scrolled it up to read. Only a scroll right after the user's
-  // own gesture counts, and a scroll back to the end makes the log follow again. It moves
-  // without animation: a smooth scroll started again for each piece of text lags behind it.
-  let logAtEnd = true, logGestureUntil = 0, logPinQueued = false;
+  // The log follows its end: it moves when a line is added, when reply text streams into
+  // a line and when the header takes or gives back room, unless the user scrolled it up
+  // to read. It moves without animation: a smooth scroll started again for each piece of
+  // text lags behind it.
+  // Only the user's own scroll changes whether the log follows, and the scroll event of
+  // the page's own move must not pass for one: it comes a frame late, when more text may
+  // have made the log longer, so it can look like a scroll that stopped short of the end.
+  // So the page keeps the position it last saw. A scroll right after a gesture that went
+  // up from there, away from the end, holds the log. One that went down to the end, or to
+  // within two lines of it (text may have come since), makes it follow again. An event
+  // at the position last seen changes nothing.
+  let logAtEnd = true, logGestureUntil = 0, logPinQueued = false, logTop = 0;
   function logToEnd() {
     mainEl.scrollTop = mainEl.scrollHeight;
+    logTop = mainEl.scrollTop;
     logAtEnd = true;
   }
   for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
     mainEl.addEventListener(kind, () => { logGestureUntil = Date.now() + 1000; }, { passive: true });
   }
   mainEl.addEventListener("scroll", () => {
-    const now = Date.now();
+    const now = Date.now(), top = mainEl.scrollTop, before = logTop;
+    logTop = top;
     if (now > logGestureUntil || logEl.hidden) return;
     logGestureUntil = Math.max(logGestureUntil, now + 300);
-    logAtEnd = mainEl.scrollTop + mainEl.clientHeight >= mainEl.scrollHeight - 4;
+    const left = mainEl.scrollHeight - mainEl.clientHeight - top;
+    if (left <= 4 || (top > before && left <= 48)) logAtEnd = true;
+    else if (top < before) logAtEnd = false;
   });
   function logPinSoon() {
     if (logPinQueued) return;
