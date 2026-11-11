@@ -12,6 +12,7 @@ entry names next to its pinned commit.
 
 - Three screenshots of the voice page at the top of the README: a question
   with its choices, an approval prompt and the session list.
+- A link to the demo video under the screenshots.
 
 ## [0.5.0] - 2026-11-11
 

@@ -9,6 +9,8 @@ and see what it does while it works.
   <img src="docs/screenshots/sessions.png" width="260" alt="The first page with the sessions of the profile">
 </p>
 
+[Watch the demo video](https://x.com/TacoTakumiGH/status/2120604022193246526) (66 seconds).
+
 Most voice add-ons turn speech into text and text into speech. Voice Unleashed
 makes voice the way you run the agent:
 
