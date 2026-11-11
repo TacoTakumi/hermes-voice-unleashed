@@ -38,6 +38,10 @@ from .vm_client import TurnEngineError, VoiceManagerClient
 logger = logging.getLogger(__name__)
 
 TURN_ENGINE = "tyger"
+# While an approval waits, an utterance of at most this many words that is no answer is
+# not sent to Hermes: the user is asked again with the notice below.
+UNCLEAR_ANSWER_MAX_WORDS = 3
+APPROVAL_REPEAT_NOTICE = "Say yes or no."
 # The bare word the gateway takes for each choice of an approval prompt.
 APPROVAL_CHOICE_WORDS = {"once": "yes", "session": "session", "always": "always", "deny": "no"}
 # How long the reply must be quiet after its Hermes turn ended before its TTS request is
@@ -565,6 +569,19 @@ class VoiceSession:
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
             return
+        if await self._unclear_approval_answer(text):
+            # A short utterance that is no answer is most likely an answer the
+            # recognizer got wrong ("Yet please"). Sent on, it would be a new message:
+            # the gateway withdraws the approval for one, and the model may issue the
+            # command again. So it stays here, the approval stays open, and the user
+            # is asked again. The page shows what was heard.
+            logger.info("voice page %s: approval answer not understood, asked again", self.client_id)
+            await self.send_page({"type": "note", "text": f'Heard "{text.strip()}". Say yes or no, or tap a choice.'})
+            if self.reply_open or self.reply_request is not None:
+                await self.cancel_reply("approval answer not understood")
+            self._prompt_request = await self.speak_notice(APPROVAL_REPEAT_NOTICE, show=False)
+            await self._next_turn()
+            return
         if await self._answers_question():
             # The model asked a question and its turn waits for the answer. The gateway
             # takes this utterance as that answer and the turn resumes under its
@@ -608,6 +625,19 @@ class VoiceSession:
             return None
         self._prompt_reply = None  # the approval was answered elsewhere or timed out
         return None
+
+    async def _unclear_approval_answer(self, text: str) -> bool:
+        """Whether ``text``, which is no approval answer, is too short to be a message
+        of its own while the chat waits for an approval."""
+        if self._approval_words is None or self._approval_pending is None:
+            return False
+        if not 1 <= len(heard_words(text)) <= UNCLEAR_ANSWER_MAX_WORDS:
+            return False
+        try:
+            return bool(await self._approval_pending())
+        except Exception:
+            logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
+            return False
 
     async def _answers_question(self) -> bool:
         """Whether the chat waits for the answer to a question the model asked."""

@@ -541,3 +541,38 @@ async def test_a_tap_after_the_prompt_audio_ended_cancels_nothing(rig):
     await _tap(rig, "deny")
     await wait_for(lambda: len(rig.events) > count)
     assert not rig.conn.json_frames("tts_cancel")
+
+
+@pytest.mark.parametrize("said", ["Yet please", "By answered.", "Hmm"])
+async def test_a_short_utterance_that_is_no_answer_keeps_the_approval_and_is_asked_again(rig, said):
+    reply_id = await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    count = len(rig.events)
+    await rig.conn.send({"type": "turn_end", "text": said, "turn_id": 0})
+    await wait_for(lambda: rig.page.of("note"))
+    assert said.strip() in rig.page.of("note")[-1]["text"]
+    await wait_for(lambda: rig.tts_text().endswith("Say yes or no.Say yes or no.") or
+                   rig.tts_text().endswith(SENTENCE + "Say yes or no."))
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == count  # nothing reached the gateway
+    assert not rig.page.of("utterance")[1:] and not rig.page.of("approval_end")
+    last = rig.conn.json_frames("tts_stream")[-1]
+    assert last["done"]  # the notice leaves no stream open while the wait goes on
+    # The answer that follows still resumes the blocked turn's reply.
+    await _heard(rig, "yes")
+    assert rig.events[-1].text == "yes" and rig.session.reply_id == reply_id and rig.session.reply_open
+
+
+async def test_a_longer_utterance_that_is_no_answer_still_goes_to_hermes(rig):
+    await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    await _heard(rig, "what does that command do")
+    assert rig.events[-1].text == "what does that command do"
+    assert not rig.page.of("note")
+
+
+async def test_a_short_utterance_with_nothing_pending_is_an_ordinary_utterance(rig):
+    await _reply_in_progress(rig)
+    rig.wants(False)
+    await _heard(rig, "Yet please")
+    assert rig.events[-1].text == "Yet please" and not rig.page.of("note")

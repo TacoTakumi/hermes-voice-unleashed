@@ -22,8 +22,17 @@ entry names next to its pinned commit.
   answer said again counts: "I said yes", "I said no". Before, only one
   bare word counted and anything else was sent to Hermes as a new message.
 
+- While an approval prompt is open, a short utterance of up to three words
+  that is not an answer no longer goes to Hermes, where it cancelled the
+  prompt. The page shows what it heard, the prompt stays open and you hear
+  "Say yes or no." This covers an answer the recognizer got wrong.
+
 ### Changed
 
+- The speech stream of a reply ends after a spoken approval prompt or a
+  question of the model. Before, it stayed open while Hermes waited, the
+  voice server kept the microphone audio back for that time, and an answer
+  given after the prompt could lose its first word or all of it.
 - The spoken approval prompt no longer reads the command. It names the
   gateway's reason and the program: "Approval needed: recursive delete,
   with rm. Say yes or no." The command is on the page.

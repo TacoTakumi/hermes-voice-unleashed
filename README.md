@@ -306,7 +306,11 @@ You answer in one of three ways:
   that". "I said no" and "do not do it" count too.
 
 Punctuation from the speech recognizer ("Yes.") does not matter. The turn
-then goes on and its reply is spoken as usual. Anything else ("yes, but
+then goes on and its reply is spoken as usual.
+
+A short utterance of up to three words that is not an answer is most likely
+an answer the recognizer got wrong. The page shows what it heard, the prompt
+stays open and you hear "Say yes or no." A longer utterance ("yes, but
 change the path first") reaches Hermes as a new message, which stops the
 waiting turn, and the command does not run. The gateway's confirmation
 ("Allowed once") is screen text.

@@ -2660,3 +2660,17 @@ async def test_a_tap_on_an_approval_choice_sends_the_answer_and_removes_the_prom
         {"type": "approval_answer", "request_id": "r1", "choice": "deny"}]
     assert await page.is_hidden("#approval")
     assert await page.text_content("#state") != "Waiting for approval"
+
+
+async def test_a_note_frame_adds_a_note_line_and_leaves_the_approval_prompt_open(stack):
+    page = stack[1]
+    session, _ = await _blocked_turn(stack)
+    await session.send_page(APPROVAL)
+    await page.wait_for_selector("#approval:not([hidden])", timeout=5000)
+    await session.send_page({"type": "note", "text": 'Heard "Yet please". Say yes or no, or tap a choice.'})
+    await page.wait_for_selector("#log .turn.note", timeout=5000)
+    assert await page.text_content("#log .turn.note") == 'Heard "Yet please". Say yes or no, or tap a choice.'
+    await session.send_page({"type": "turn_done"})
+    await asyncio.sleep(0.2)
+    assert await page.is_visible("#approval")
+    assert await page.text_content("#state") == "Waiting for approval"

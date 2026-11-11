@@ -805,6 +805,11 @@ header > * { flex-shrink: 0; }
       case "approval":
         approvalOpen(f);
         break;
+      case "note":
+        // A line from the server that is nobody's speech: what it heard when it could
+        // not take the words as an answer.
+        if (f.text) addTurn("note", f.text);
+        break;
       case "approval_end":
         if (approval && (!f.request_id || f.request_id === approval.id)) approvalClose();
         break;
