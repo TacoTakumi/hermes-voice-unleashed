@@ -16,7 +16,7 @@ makes voice the way you run the agent:
 - **See the work.** The page shows the conversation, each tool call as it
   runs and the model's reasoning, so a silent agent is never a mystery.
 - **Decide by voice.** Approval prompts and the model's questions are spoken.
-  You answer "yes", "no", a number or your own words.
+  You answer "yes", "no", a number or your own words, or you tap a button.
 - **Pick up any session.** The page lists the profile's sessions from every
   platform (Telegram, the CLI, Desktop). Go on with one or start a new one.
   "New session" and "end session" also work as spoken commands.
@@ -289,14 +289,25 @@ Anything else ("end the session now") reaches Hermes as a message.
 
 ### Approvals
 
-When a command needs your approval, the page shows the gateway's prompt and
-speaks one sentence: "Approval needed to run: <the command>. Say yes or no."
-An approval word said on its own ("yes", "approve", "ok", "no", "deny")
-answers it exactly as typing it would on another platform; punctuation from
-the speech recognizer ("Yes.") does not matter. The turn then goes on and its
-reply is spoken as usual. Anything longer ("yes, go ahead") reaches Hermes as
-a new message, which stops the waiting turn, and the command does not run.
-The gateway's confirmation ("Allowed once") is screen text.
+When a command needs your approval, the page shows a card with the command,
+the gateway's reason and one button for each choice the gateway offers. It
+speaks one sentence that names the reason and the program, never the code:
+"Approval needed: recursive delete, with rm. Say yes or no." The page reads
+"Waiting for approval" until the prompt is over.
+
+You answer in one of three ways:
+
+- Tap a button on the card.
+- Say an approve phrase and nothing else: "yes", "approve", "ok", "yes
+  please", "go ahead", "do it", "yeah", "yep", "sure".
+- Say a short refusal of at most five words that starts with a deny word:
+  "no", "nope", "no thanks", "no, just leave it", "cancel that".
+
+Punctuation from the speech recognizer ("Yes.") does not matter. The turn
+then goes on and its reply is spoken as usual. Anything else ("yes, but
+change the path first") reaches Hermes as a new message, which stops the
+waiting turn, and the command does not run. The gateway's confirmation
+("Allowed once") is screen text.
 
 ### Questions from the model
 

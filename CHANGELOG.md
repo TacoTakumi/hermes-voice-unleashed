@@ -8,7 +8,25 @@ entry names next to its pinned commit.
 
 ## [0.3.3]
 
+### Added
+
+- An approval prompt shows on the page as a card above the microphone
+  button: the command, the reason the gateway gives, and one button for
+  each choice the gateway offers (once, session, always, deny). A tap
+  answers the prompt. The page reads "Waiting for approval" until the
+  prompt is answered, withdrawn or timed out.
+- A spoken approve phrase answers an approval prompt: "yes please", "go
+  ahead", "do it", "yeah", "yep", "sure". So does a short spoken refusal
+  that starts with a deny word: "no thanks", "no, just leave it", "nope",
+  "cancel that". Before, only one bare word counted and anything else was
+  sent to Hermes as a new message.
+
 ### Changed
+
+- The spoken approval prompt no longer reads the command. It names the
+  gateway's reason and the program: "Approval needed: recursive delete,
+  with rm. Say yes or no." The command is on the page.
+- The approval prompt is no longer a line of the conversation log.
 
 - The voice page has the Hermes dashboard look: cream text on dark teal, the
   state title in EB Garamond italic, a system sans body and soft rounded
