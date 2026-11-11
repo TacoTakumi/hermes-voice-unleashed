@@ -334,11 +334,19 @@ waiting turn, and the command does not run. The gateway's confirmation
 
 When Hermes asks you something before it goes on (its `clarify` tool), the
 page shows the question and speaks it; a question with choices is read with
-their numbers ("One: ... Two: ... Say the number or your answer."). The next
-thing you say is the answer, and the turn then goes on and its reply is
-spoken as usual. A number ("four", "number four", "the fourth one") or a
-choice's name selects that choice; anything else reaches Hermes as your own
-answer. "Skip" skips the question; "new session" and "end session" are still
+their numbers ("One: ... Two: ... Say number one or number two, or your
+answer."). The next thing you say is the answer, and the turn then goes on
+and its reply is spoken as usual. A number ("number four", "four", "the
+fourth one"), a choice's name, or a short sentence that ends in one of them
+("I said one", "I pick blue") selects that choice; anything else reaches
+Hermes as your own answer. Say "number one" rather than "one": a speech
+recognizer often gives no text for one short word said alone.
+
+The page also shows the choices as buttons, and a tap answers the question.
+While a question waits the page reads "Waiting for your answer". When you
+spoke and no words came, Hermes says "I did not catch that." and the
+question stays open; this needs a VoiceManager that sends the `turn_empty`
+frame, and it is said for an approval prompt too. "Skip" skips the question; "new session" and "end session" are still
 commands.
 
 ## Voice in Hermes Desktop and the Webapp

@@ -21,12 +21,22 @@ entry names next to its pinned commit.
   off." while VoiceManager's turn engine learns your voice at the start
   of a session, and "Barge-in ready." when it has. It needs a VoiceManager
   that sends the `barge_state` frame.
+- A question from the model can be answered by a tap: the page shows its
+  choices as buttons, and reads "Waiting for your answer" while it waits.
+- When you spoke and the recognizer gave no words while a question or an
+  approval waits, Hermes says "I did not catch that." and the prompt stays
+  open. It needs a VoiceManager that sends the `turn_empty` frame.
 - More spoken phrases end the session: "end of session", "end
   discussion" and "end of discussion", and the forms the speech recognizer
   often gives for them, "in session" and "in discussion".
 
 ### Changed
 
+- The spoken form of a question with choices ends with "Say number one,
+  number two or number three, or your answer.": one short word said alone
+  often gets no text from the recognizer. A short sentence that ends in a
+  number or a choice's name ("I said one", "I pick blue") now selects that
+  choice.
 - During a turn the page reads "Working" while a tool call runs, also
   while the reply plays, and "Thinking" when no tool call runs and no
   reply plays. Before, it read "Thinking" only until its first update
