@@ -478,6 +478,43 @@ async def test_a_turn_error_from_the_gateway_ends_the_turn_state(rig):
     assert "turn_running" not in page.of("reply")[-1]
 
 
+async def test_a_turn_that_fails_after_it_streamed_text_ends_on_the_page(rig):
+    hooks, conn, page = rig
+    adapter, session = hooks._adapters[-1], _session(hooks)
+    fire(hooks.pre_llm_call, session_id="s1")
+    fire(hooks.on_stream_delta, delta="Let me look. ", kind="text", turn_id="t1", iteration=1,
+         surface=PLATFORM)
+    await wait_for(lambda: page.of("reply_delta"))
+    assert page.of("turn_done") == []
+    event = SimpleNamespace(source=adapter._voice_source("voice"), message_id=session.reply_id)
+    await adapter._notify_turn_error(event, RuntimeError("the handler raised"))
+    # What the turn said before it failed is spoken to its end, as for a turn that finished.
+    await wait_for(lambda: ended(conn))
+    rid = tts_frames(conn)[0]["request_id"]
+    await conn.send({"type": "audio_end", "request_id": rid, "reason": "complete"})
+    await wait_for(lambda: page.of("turn_done"))
+    kinds = [f["type"] for f in page.frames]
+    assert kinds.index("reply") < kinds.index("turn_done")  # the error text, then the end of the turn
+    assert "turn_running" not in page.of("reply")[-1]
+    assert not session.reply_open and not session.turn_running
+    # Text that still arrives for the failed turn is not taken.
+    deltas = len(page.of("reply_delta"))
+    fire(hooks.on_stream_delta, delta="More. ", kind="text", turn_id="t1", iteration=1, surface=PLATFORM)
+    await asyncio.sleep(0.2)
+    assert len(page.of("reply_delta")) == deltas
+
+
+async def test_the_failure_of_a_replaced_turn_leaves_the_running_one_alone(rig):
+    hooks, conn, page = rig
+    adapter, session = hooks._adapters[-1], _session(hooks)
+    fire(hooks.pre_llm_call, session_id="s1")
+    await wait_for(lambda: session.turn_running)
+    event = SimpleNamespace(source=adapter._voice_source("voice"), message_id="an-older-message")
+    await adapter._notify_turn_error(event, RuntimeError("the handler raised"))
+    await wait_for(lambda: page.of("reply"))
+    assert session.reply_open and session.turn_running and page.of("turn_done") == []
+
+
 async def test_an_event_of_another_reply_does_not_start_the_turn(rig):
     hooks, conn, page = rig
     session = _session(hooks)

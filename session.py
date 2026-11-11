@@ -350,12 +350,25 @@ class VoiceSession:
         await self._approval_sync()
         self._in_turn(reply_id)
 
-    def turn_failed(self) -> None:
-        """The reply's turn raised: it runs no more, and no end-of-turn hook comes."""
-        if self._turn_started and not self.reply_open:
-            # The reply was cut and the page still waits for the end of its turn.
-            self._tasks.append(asyncio.create_task(self._guarded(self._send_turn_done())))
-        self._turn_started = False
+    def turn_failed(self, reply_id: str = "") -> None:
+        """The turn of reply ``reply_id`` raised: it runs no more, and no end-of-turn
+        hook comes. The failure of a turn that a newer utterance replaced changes
+        nothing here."""
+        if self._same_reply(reply_id):
+            self._turn_started = False
+
+    async def end_failed_turn(self, reply_id: str = "") -> None:
+        """The error notice of the failed turn is on the page: the turn ends there
+        too, whether or not it streamed text. An open reply ends as one whose turn
+        finished, so what it said is still spoken to its end. A reply that was cut
+        has nothing left but the turn_done frame the page waits for."""
+        if not self._same_reply(reply_id):
+            return
+        if self.reply_open:
+            self._cancel_finishing()
+            await self._end_reply(self.reply_id or "")
+        else:
+            await self._send_turn_done()
 
     def _same_reply(self, reply_id: str) -> bool:
         """Whether a hook event for ``reply_id`` names the last reply.

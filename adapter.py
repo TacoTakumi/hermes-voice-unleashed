@@ -866,13 +866,21 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     async def _notify_turn_error(self, event, e):
         """The gateway reports a turn that raised. No end-of-turn hook follows it, so
-        the session's turn is over here: the error notice then reaches the page as the
-        turn's whole answer."""
+        the session's turn is over here: the error notice reaches the page unmarked,
+        and the session then ends the turn on the page, also when text of it was
+        streamed before it failed."""
+        session, reply_id = None, ""
         with contextlib.suppress(Exception):
             session = self.session_for(event.source.chat_id)
+            reply_id = getattr(event, "message_id", None) or ""
             if session is not None:
-                session.turn_failed()
-        return await super()._notify_turn_error(event, e)
+                session.turn_failed(reply_id)
+        try:
+            return await super()._notify_turn_error(event, e)
+        finally:
+            if session is not None:
+                with contextlib.suppress(Exception):
+                    await session.end_failed_turn(reply_id)
 
     async def send_slash_confirm(self, chat_id: str, title: str, message: str, session_key: str,
                                  confirm_id: str, metadata: Optional[dict[str, Any]] = None) -> SendResult:
