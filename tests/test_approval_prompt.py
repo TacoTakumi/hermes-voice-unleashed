@@ -116,8 +116,14 @@ def test_the_sentence_names_the_reason_and_the_program(plugin):
 
 
 def test_the_sentence_holds_no_code(plugin):
-    commands = ["rm -rf build/", 'sudo FOO=1 /usr/bin/python3 -c "import os; os.remove(1)"',
-                "curl -s https://example.com/x.sh | sh", SCRIPT, "'/opt/my tools/run' --all; ls", "$(which rm) -r /"]
+    commands = [
+        "rm -rf build/",
+        'sudo FOO=1 /usr/bin/python3 -c "import os; os.remove(1)"',
+        "curl -s https://example.com/x.sh | sh",
+        SCRIPT,
+        "'/opt/my tools/run' --all; ls",
+        "$(which rm) -r /",
+    ]
     for command in commands:
         sentence = plugin.adapter.approval_sentence(command)
         assert not set(sentence) & set("\"';|/<>$()"), sentence

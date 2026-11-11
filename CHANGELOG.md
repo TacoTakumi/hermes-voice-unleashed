@@ -6,6 +6,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.4.1] - 2026-11-11
+
+### Changed
+
+- A list of test commands is written one command per line. On one line,
+  two harmless strings read together as a delete from the root path, and
+  the plugin validator's security scan gave a caution for the test file.
+  The scan now reads the plugin as safe. No behaviour changes.
+
 ## [0.4.0] - 2026-11-11
 
 ### Added
