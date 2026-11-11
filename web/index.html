@@ -768,6 +768,8 @@ header > * { flex-shrink: 0; }
     return Math.max(0, Math.round(micAnchor.count + (edgePerf - micAnchor.time) / 1000 * MIC_RATE));
   }
 
+  // How far ahead audio is queued when it arrives after the reply's queue ran dry, in s.
+  const REPLY_RESERVE = 0.2;
   function replyBegin(id, rate) {
     replyClear(null);
     reply = { id, rate, next: playCtx.currentTime + 0.06, first: null, samples: 0, sources: [], chunks: [],
@@ -783,7 +785,12 @@ header > * { flex-shrink: 0; }
     const src = playCtx.createBufferSource();
     src.buffer = audio;
     src.connect(playCtx.destination);
-    const at = Math.max(reply.next, playCtx.currentTime + 0.02);
+    // The queue ran dry in a reply that has played: its audio comes no faster than it
+    // plays just now (a new clause begins on the server). Played 20 ms after it arrives,
+    // each chunk that is a little late would leave its own gap, a stutter. This chunk
+    // waits for a reserve, so the ones that follow join it: one short pause.
+    const dry = reply.first !== null && reply.next <= playCtx.currentTime;
+    const at = Math.max(reply.next, playCtx.currentTime + (dry ? REPLY_RESERVE : 0.02));
     src.start(at);
     if (reply.first === null) {
       reply.first = at;

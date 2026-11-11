@@ -3066,3 +3066,63 @@ async def test_with_playback_locked_no_blip_is_scheduled_until_the_tap(site):
     await page.wait_for_selector("#unmute", state="hidden", timeout=5000)
     cues = await _cues(page, 2, timeout=3000)
     assert [c["freq"] for c in cues[:2]] == [784, 659.3], cues
+
+
+# --- the reply queue: audio that arrives after the queue ran dry -----------------------
+# Every reply chunk the page schedules is recorded: how far ahead of the context clock
+# it was scheduled, when it starts and how long it is, all in context seconds.
+CHUNKS_RECORDED = """
+window.chunks = [];
+const realBufferStart = AudioBufferSourceNode.prototype.start;
+AudioBufferSourceNode.prototype.start = function (when) {
+  window.chunks.push({ ahead: when - this.context.currentTime, start: when, length: this.buffer.duration });
+  return realBufferStart.call(this, when);
+};
+"""
+
+
+def _tone_chunk(seconds, rate=24000):
+    return b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 300 * i / rate)))
+                    for i in range(int(seconds * rate)))
+
+
+def _gaps(chunks):
+    """The silence between each chunk and the one before it, in seconds."""
+    return [b["start"] - (a["start"] + a["length"]) for a, b in zip(chunks, chunks[1:])]
+
+
+@pytest.mark.parametrize("stack", [CHUNKS_RECORDED], indirect=True)
+async def test_a_reply_queue_that_ran_dry_takes_a_reserve_before_it_plays_on(stack):
+    """The first part of a reply played out and the rest comes a little slower than the
+    page would need it: one pause, then no gap, not a gap at every chunk."""
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "audio_start", "request_id": "r1", "sample_rate": 24000})
+    await session.page.send(_tone_chunk(0.2))
+    await asyncio.sleep(0.6)  # it has played out: the queue is dry
+    for _ in range(5):
+        await session.page.send(_tone_chunk(0.1))
+        await asyncio.sleep(0.15)  # later than the chunk before it lasts
+    await page.wait_for_function("window.chunks.length === 6", timeout=3000)
+    chunks = await page.evaluate("window.chunks")
+    assert chunks[0]["ahead"] < 0.1, chunks[0]  # a reply starts as soon as before
+    assert chunks[1]["ahead"] >= 0.19, chunks[1]
+    gaps = _gaps(chunks[1:])
+    assert all(abs(gap) < 0.001 for gap in gaps), gaps
+
+
+@pytest.mark.parametrize("stack", [CHUNKS_RECORDED], indirect=True)
+async def test_a_reply_queue_with_audio_in_it_takes_each_chunk_without_a_gap(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "audio_start", "request_id": "r1", "sample_rate": 24000})
+    for _ in range(5):
+        await session.page.send(_tone_chunk(0.2))
+    await page.wait_for_function("window.chunks.length === 5", timeout=3000)
+    chunks = await page.evaluate("window.chunks")
+    assert chunks[0]["ahead"] < 0.1, chunks[0]
+    gaps = _gaps(chunks)
+    assert all(abs(gap) < 0.001 for gap in gaps), gaps
+    assert chunks[-1]["ahead"] > 0.5, chunks[-1]  # queued behind the others, no reserve added
