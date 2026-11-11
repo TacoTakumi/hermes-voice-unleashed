@@ -581,7 +581,8 @@ class VoiceSession:
             # does not take that turn's text: it is shown by the final send but not
             # spoken. The window is a few milliseconds.
             self._reopen_reply()
-            await self.send_page({"type": "utterance", "text": answer, **self._next_epoch()})
+            # The answer resumes the turn that waits: the page keeps that turn's reasoning and clock.
+            await self.send_page({"type": "utterance", "text": answer, "resumed": True, **self._next_epoch()})
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
             await self._approval_sync()  # the approval behind the answered one, if it waits
@@ -610,7 +611,8 @@ class VoiceSession:
             # takes as a selection when the user said a choice's number or name.
             answer = await self._question_answer(text)
             self._reopen_reply()
-            await self.send_page({"type": "utterance", "text": text, **self._next_epoch()})
+            # As for an approval word, the answer resumes the turn that waits.
+            await self.send_page({"type": "utterance", "text": text, "resumed": True, **self._next_epoch()})
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
             return
@@ -748,7 +750,8 @@ class VoiceSession:
         # No utterance came through the tracker for this answer, so it is told here
         # that a reply runs: the next utterance must stop it like any other.
         self.tracker.reply_started()
-        await self.send_page({"type": "utterance", "text": word, **self._next_epoch()})
+        # The answer resumes the turn that waits: the page keeps that turn's reasoning and clock.
+        await self.send_page({"type": "utterance", "text": word, "resumed": True, **self._next_epoch()})
         if self._on_utterance is not None:
             await self._on_utterance(word, uuid.uuid4().hex)
         await self._approval_sync()  # the approval behind the answered one, if it waits

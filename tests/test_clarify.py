@@ -38,7 +38,8 @@ async def test_an_utterance_that_answers_a_question_reopens_the_reply_that_asked
     assert rig.events[-1].text == "the voice path please"  # whole, not cut to a word
     assert rig.events[-1].message_id != asked  # under a message id of its own
     assert rig.session.reply_id == asked and rig.session.reply_open
-    assert rig.page.of("utterance")[-1]["text"] == "the voice path please"
+    # The answer resumes the turn that asked: the page keeps that turn's reasoning and clock.
+    assert rig.page.of("utterance")[-1] == {"type": "utterance", "text": "the voice path please", "resumed": True}
     spoken = len(rig.tts_text())
     await rig.session.on_reply_delta(asked, "t1", 2, "Standing by. ")
     await wait_for(lambda: rig.tts_text()[spoken:] == "Standing by. ")
@@ -49,6 +50,7 @@ async def test_an_utterance_with_no_question_waiting_is_an_ordinary_one(rig):
     asked = await _asked(rig)
     _waits_for_an_answer(rig, False)  # answered on another device, or timed out
     await _heard(rig, "never mind, tell me a joke")
+    assert rig.page.of("utterance")[-1] == {"type": "utterance", "text": "never mind, tell me a joke"}
     assert rig.session.reply_id not in (None, asked)
     assert rig.events[-1].message_id == rig.session.reply_id
     spoken = len(rig.tts_text())

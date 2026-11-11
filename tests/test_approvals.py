@@ -130,7 +130,7 @@ async def test_an_approval_word_over_a_running_reply_reopens_it_for_the_resumed_
     reply_id = await _reply_in_progress(rig)
     rig.wants(True)
     await _heard(rig, "Yes.")
-    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": "yes"}])
+    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": "yes", "resumed": True}])
     await _resumed_turn_is_spoken(rig, reply_id)
 
 
@@ -142,7 +142,7 @@ async def test_an_approval_word_after_a_barge_in_reopens_the_reply_for_the_resum
     assert not rig.session.reply_open
     rig.wants(True)
     await _heard(rig, "yes")
-    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": "yes"}])
+    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": "yes", "resumed": True}])
     await _resumed_turn_is_spoken(rig, reply_id)
 
 
@@ -151,6 +151,7 @@ async def test_an_approval_word_with_nothing_pending_is_an_ordinary_utterance(ri
     rig.wants(False)
     await _heard(rig, "Yes.")
     assert rig.events[-1].text == "Yes."
+    assert "resumed" not in rig.page.of("utterance")[-1]  # a new turn for the page, not a resumed one
     assert rig.session.reply_id != reply_id
     assert rig.events[-1].message_id == rig.session.reply_id
     await rig.session.on_reply_delta(reply_id, "t1", 2, "Done. ")
@@ -183,7 +184,7 @@ async def test_a_spoken_approve_or_deny_phrase_answers_the_pending_approval(rig,
     await _heard(rig, said)
     assert rig.events[-1].text == word and rig.events[-1].message_id != reply_id
     assert rig.session.reply_id == reply_id and rig.session.reply_open  # the blocked turn's reply
-    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": word}])
+    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": word, "resumed": True}])
 
 
 @pytest.mark.parametrize("said", ["Go ahead.", "No, just leave it."])
@@ -471,7 +472,7 @@ async def test_a_tap_on_a_choice_answers_the_open_prompt(rig, choice, word):
     await wait_for(lambda: len(rig.events) > count)
     assert rig.events[-1].text == word and rig.events[-1].message_id != reply_id
     assert rig.session.reply_id == reply_id and rig.session.reply_open
-    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": word}])
+    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": word, "resumed": True}])
     assert rig.page.of("approval_end") == [{"type": "approval_end", "request_id": "r1"}]
     kinds = [f["type"] for f in rig.page.frames]
     assert kinds.index("approval") < kinds.index("clear")  # the prompt's audio stops on the tap
