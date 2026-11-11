@@ -2260,3 +2260,30 @@ async def test_the_meter_paints_hermes_bars_in_the_hermes_color_while_a_reply_pl
         const [r, gr, b, a] = g.getImageData(m.width - 2, Math.floor(m.height / 2), 1, 1).data;
         return a > 200 && Math.abs(r - 255) <= 3 && Math.abs(gr - 230) <= 3 && Math.abs(b - 203) <= 3;
     }""", timeout=8000)
+
+
+# --- the first page: the logo, what this is, and the session to go on with -------------
+
+async def _line_widths(page):
+    return await page.evaluate("""() => [...document.querySelectorAll('#brand span')].map(s => {
+        const r = document.createRange(); r.selectNodeContents(s); return r.getBoundingClientRect().width; })""")
+
+
+async def test_the_chooser_shows_the_logo_and_what_this_is_instead_of_the_state(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    await page.evaluate("document.fonts.ready")
+    for width in (390, 1280):
+        await page.set_viewport_size({"width": width, "height": 800})
+        assert await page.is_visible("#brand") and await page.is_visible("#intro")
+        assert await page.is_hidden("#state")
+        assert (await page.text_content("#brand")).split() == ["Hermes", "Voice", "Unleashed"]
+        hermes, voice = await _line_widths(page)
+        assert abs(hermes - voice) / hermes < 0.02, (width, hermes, voice)
+    assert "hands free" in await page.text_content("#intro")
+    assert (await page.text_content("#detail")).strip() == ""
+    await page.click("#new")
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    assert await page.is_hidden("#brand") and await page.is_hidden("#intro")
+    assert await page.is_visible("#state")

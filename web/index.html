@@ -54,6 +54,16 @@ header { padding: 28px var(--gutter) 8px; min-width: 0; }
   color: var(--paper);
   transition: color 160ms ease;
 }
+/* The first page shows the logo and what this is; a session shows its state instead.
+   The second logo line is sized to the width of the first: the ratio of the two text
+   widths in this font. */
+#brand, #intro { display: none; }
+body:has(#chooser:not([hidden])) #brand, body:has(#chooser:not([hidden])) #intro { display: block; }
+body:has(#chooser:not([hidden])) #state { display: none; }
+#brand { margin: 0; font: italic 400 clamp(64px, 20vw, 96px)/0.95 "EB Garamond", Georgia, serif; color: var(--paper); }
+#brand span { display: block; width: max-content; }
+#brand span + span { font-size: 0.4797em; margin-top: 0.12em; }
+#intro { margin: 16px 0 0; color: var(--muted); font-size: 16px; max-width: 30rem; }
 body[data-who="you"] #state { color: var(--you); }
 body[data-who="hermes"] #state { color: var(--hermes); }
 body[data-who="alert"] #state { color: var(--alert); }
@@ -185,6 +195,8 @@ header > * { flex-shrink: 0; }
 </head>
 <body data-who="none">
 <header>
+  <h1 id="brand"><span>Hermes</span> <span>Voice Unleashed</span></h1>
+  <p id="intro">Talk with your Hermes agent, hands free. It hears you, answers out loud and shows what it is doing while it works.</p>
   <h1 id="state">Tap to start</h1>
   <p id="elapsed" hidden></p>
   <p id="detail">Hermes listens while this page is open.</p>
@@ -1080,7 +1092,7 @@ header > * { flex-shrink: 0; }
     sessionsEl.textContent = "";
     chooserEl.hidden = false;
     logEl.hidden = meter.hidden = footerEl.hidden = true;
-    show("Sessions", "none", detail || "Tap one to go on with it, or start a new one.");
+    show("Sessions", "none", detail || "");
     let rows;
     try {
       const res = await fetch(`/sessions?token=${encodeURIComponent(token)}`);
