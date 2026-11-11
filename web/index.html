@@ -407,16 +407,25 @@ header > * { flex-shrink: 0; }
   // something new (the user's speech is heard, an error) still shows.
   const FLOOR_STATES = ["Listening", "Muted", "Thinking", "Working", "Speaking"];
   function show(state, who, detail) {
+    // The prompt is being spoken and the server still learns the voice: an answer said
+    // over it is not heard. The line that asks for the answer says so.
+    const deaf = !muted && bargeState === "learning" && !!(reply && reply.audible);
+    const off = "Barge-in is off: still learning your voice.";
     if (approval && FLOOR_STATES.includes(state)) {
       state = "Waiting for approval";
       who = "hermes";
-      detail = muted ? "Tap a choice." : "Say yes or no, or tap a choice.";
+      detail = muted ? "Tap a choice." : deaf ? `${off} Tap a choice, or answer when Hermes stops.`
+        : "Say yes or no, or tap a choice.";
     } else if (question && FLOOR_STATES.includes(state)) {
       // The turn waits for the user's answer, not for Hermes.
       state = "Waiting for your answer";
       who = "hermes";
-      detail = !question.choices ? (muted ? "Your microphone is off." : "Say your answer.")
-        : muted ? "Tap a choice." : "Say your answer, or tap a choice.";
+      if (!question.choices) {
+        detail = muted ? "Your microphone is off." : deaf ? `${off} Answer when Hermes stops.` : "Say your answer.";
+      } else {
+        detail = muted ? "Tap a choice." : deaf ? `${off} Tap a choice, or answer when Hermes stops.`
+          : "Say your answer, or tap a choice.";
+      }
     }
     stateEl.textContent = state;
     showElapsed();

@@ -3307,3 +3307,29 @@ async def test_an_approval_prompt_keeps_the_state_line_while_a_question_card_is_
     assert await page.is_visible("#approval") and await page.is_visible("#question")
     await session.send_page({"type": "approval_end", "request_id": "r1"})
     await _state_is(page, "Waiting for your answer")
+
+
+async def test_barge_in_off_shows_on_the_question_line_while_the_question_is_spoken(stack):
+    """The question plays and the server still learns the voice: an answer said over
+    it is not heard. The line that asks for the answer must say so."""
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await session.send_page(QUESTION_FRAME)
+    await _notice_to_the_page(session, "n1", seconds=3.0)
+    await _detail_is(page, "Barge-in is off: still learning your voice. Tap a choice, or answer when Hermes stops.",
+                     timeout=3000)
+    assert await page.text_content("#state") == "Waiting for your answer"
+    await _detail_is(page, "Say your answer, or tap a choice.", timeout=8000)  # the audio ended
+    await session.send_page({"type": "question", "request_id": "q2", "question": "What next?", "choices": []})
+    await _notice_to_the_page(session, "n2", seconds=3.0)
+    await _detail_is(page, "Barge-in is off: still learning your voice. Answer when Hermes stops.", timeout=3000)
+
+
+async def test_barge_in_off_shows_on_the_approval_line_while_the_prompt_is_spoken(stack):
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await session.send_page(APPROVAL)
+    await _notice_to_the_page(session, "n1", seconds=3.0)
+    await _detail_is(page, "Barge-in is off: still learning your voice. Tap a choice, or answer when Hermes stops.",
+                     timeout=3000)
+    await _detail_is(page, "Say yes or no, or tap a choice.", timeout=8000)
