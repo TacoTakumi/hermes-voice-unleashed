@@ -121,6 +121,64 @@ def test_the_sentence_holds_no_code(plugin):
         assert sentence.endswith("Say yes or no.")
 
 
+@pytest.mark.parametrize("command, program", [
+    ("sudo -u postgres psql -c 'DROP TABLE t'", "psql"),
+    ("sudo -n -E rm -rf x", "rm"),
+    ("nice -n 10 make clean", "make"),
+    ("timeout 5 rm -rf x", "rm"),
+    ("timeout -s KILL 2.5s rm -rf x", "rm"),
+    ("env -u HOME FOO=1 python3 x.py", "python3"),
+    ("/usr/local/bin/terraform destroy", "terraform"),
+    ("> /etc/passwd", ""),
+    ("if true; then rm -rf x; fi", ""),
+    ("for f in *; do rm $f; done", ""),
+    ("{ rm -rf x; }", ""),
+    ("sudo", ""),
+])
+def test_the_program_of_a_command(plugin, command, program):
+    assert plugin.adapter.command_program(command) == program
+
+
+def test_a_command_with_no_program_to_name_is_spoken_without_one(plugin):
+    assert plugin.adapter.approval_sentence("> /etc/passwd", "overwrite system file") == (
+        "Approval needed: overwrite system file. Say yes or no.")
+    assert plugin.adapter.approval_sentence("if true; then rm -rf x; fi") == "Approval needed. Say yes or no."
+
+
+CODE_CHARACTERS = set("\"'`;|/<>$(){}[]\\")
+
+
+def _gateway_reasons():
+    import tools.approval_detection as detection
+    reasons = set()
+    for name in dir(detection):
+        value = getattr(detection, name)
+        if isinstance(value, (list, tuple)):
+            reasons.update(item[1] for item in value
+                           if isinstance(item, tuple) and len(item) == 2 and all(isinstance(x, str) for x in item))
+    return sorted(reasons)
+
+
+def test_the_spoken_reason_of_every_gateway_pattern_holds_no_code_character(plugin):
+    reasons = _gateway_reasons()
+    assert len(reasons) > 50
+    for reason in reasons:
+        sentence = plugin.adapter.approval_sentence("rm x", reason)
+        assert not set(sentence) & CODE_CHARACTERS, (reason, sentence)
+        assert sentence.startswith("Approval needed: ") and sentence.endswith(", with rm. Say yes or no.")
+
+
+def test_the_spoken_reason_says_or_for_a_slash_and_drops_code(plugin):
+    sentence = plugin.adapter.approval_sentence
+    assert sentence("systemctl stop x", "stop/restart system service") == (
+        "Approval needed: stop or restart system service, with systemctl. Say yes or no.")
+    assert sentence("taskkill /F", "force kill processes (taskkill /F)") == (
+        "Approval needed: force kill processes, with taskkill. Say yes or no.")
+    free = sentence("ls", 'runs "rm -rf"; then `reboot` | tee')
+    assert not set(free) & CODE_CHARACTERS and free.endswith(", with ls. Say yes or no.")
+    assert sentence("ls", "(only code)") == "Approval needed to run ls. Say yes or no."
+
+
 def test_the_default_reason_of_the_gateway_is_not_spoken(plugin):
     default = plugin.adapter.t("gateway.exec_approval.default_reason")
     assert plugin.adapter.approval_sentence("ls -la", default) == "Approval needed to run ls. Say yes or no."

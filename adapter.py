@@ -245,22 +245,64 @@ def spoken_choice(text: str, choices: Optional[list]) -> Optional[str]:
     return None
 
 
-# Words before the program of a command that are not the program itself.
-_COMMAND_PREFIXES = frozenset({"sudo", "env", "nohup", "time", "command", "exec", "nice"})
+# Words before the program of a command that are not the program itself, each with
+# its options that take a value: the value is not the program either.
+_COMMAND_PREFIXES: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t"}),
+    "doas": frozenset({"-u", "-C"}),
+    "env": frozenset({"-u", "-C", "-S"}),
+    "nice": frozenset({"-n"}),
+    "ionice": frozenset({"-c", "-n", "-p"}),
+    "timeout": frozenset({"-s", "-k"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+    "nohup": frozenset(), "time": frozenset(), "command": frozenset(), "exec": frozenset(),
+    "setsid": frozenset(),
+}
+_NUMBER_OR_DURATION = re.compile(r"\d+(\.\d+)?[smhd]?$")
+_PROGRAM_NAME = re.compile(r"[\w.+-]+$")
 
 
 def command_program(command: str) -> str:
     """The name of the first program ``command`` runs: no directory, no ``sudo`` or
-    other prefix word, no environment assignment. Empty when there is none."""
+    other prefix word with its options, no environment assignment. Empty when it
+    cannot be told: a command that starts with a redirect, a shell keyword or a
+    grouping names no program in its first word, and a wrong name is worse than none."""
     line = next((line for line in command.splitlines() if line.strip()), "")
+    value_flags: frozenset[str] = frozenset()
+    skip_value = prefixed = False
     for token in line.split():
-        token = token.strip("'\"`()")
-        if token in _COMMAND_PREFIXES or token.startswith("-") or re.match(r"\w+=", token):
+        if skip_value:
+            skip_value = False
             continue
-        name = re.sub(r"[^\w.+-]", "", token.rsplit("/", 1)[-1])
-        if name:
-            return name
+        if re.match(r"\w+=", token):
+            continue
+        if prefixed and token.startswith("-"):
+            skip_value = token in value_flags
+            continue
+        if prefixed and _NUMBER_OR_DURATION.match(token):
+            continue  # the duration of timeout
+        if token in _COMMAND_PREFIXES:
+            value_flags, prefixed = _COMMAND_PREFIXES[token], True
+            continue
+        name = token.strip("'\"").rsplit("/", 1)[-1]
+        if name in _SHELL_WORDS or not _PROGRAM_NAME.match(name):
+            return ""
+        return name
     return ""
+
+
+# First words of a command that are shell syntax, not a program.
+_SHELL_WORDS = frozenset({"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+                          "case", "esac", "function", "select", "time", "coproc"})
+
+
+def spoken_reason(reason: str) -> str:
+    """``reason`` as words to speak: a note in brackets is dropped, a slash between
+    alternatives is said as "or", and what is left of code characters goes."""
+    reason = re.sub(r"\([^)]*\)|\[[^\]]*\]|\{[^}]*\}", " ", str(reason or ""))
+    reason = re.sub(r"(?<=\w)/(?=[\w-])", " or ", reason)
+    reason = re.sub(r"[\"'`;|/<>$(){}\[\]\\]", " ", reason)
+    return re.sub(r"\s+", " ", reason).strip().rstrip(".,:")
 
 
 def approval_sentence(command: str, reason: str = "") -> str:
@@ -272,9 +314,9 @@ def approval_sentence(command: str, reason: str = "") -> str:
     default text, which names no reason, counts as none.
     """
     program = command_program(command)
-    reason = re.sub(r"\s+", " ", str(reason or "")).strip().rstrip(".")
-    if reason == t("gateway.exec_approval.default_reason").strip().rstrip("."):
+    if str(reason or "").strip().rstrip(".") == t("gateway.exec_approval.default_reason").strip().rstrip("."):
         reason = ""
+    reason = spoken_reason(reason)
     if len(reason) > REASON_SPOKEN_CHARS:
         reason = reason[:REASON_SPOKEN_CHARS - 3] + "..."
     if reason and program:
