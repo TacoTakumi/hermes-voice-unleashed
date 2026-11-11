@@ -2914,7 +2914,7 @@ def _page_frames(session):
 
 @pytest.mark.parametrize("stack", [CUES_RECORDED], indirect=True)
 async def test_the_thinking_sound_plays_while_a_turn_runs_in_silence(stack):
-    """Two quiet sine blips in turn, G4 and E4, each with a downward glide, 0.8 to 1.2 s
+    """Two quiet sine blips in turn, G5 and E5, each with a downward glide, 0.8 to 1.2 s
     apart. The server hears nothing of it: no playback frame."""
     fake, page, sessions, _ = stack
     await _listening(fake, page)
@@ -2924,7 +2924,7 @@ async def test_the_thinking_sound_plays_while_a_turn_runs_in_silence(stack):
     begun = await page.evaluate("performance.now()")
     await session.send_page({"type": "utterance", "text": "run the tests"})
     cues = await _cues(page, 4)
-    assert [c["freq"] for c in cues[:4]] == [392, 329.6, 392, 329.6], cues
+    assert [c["freq"] for c in cues[:4]] == [784, 659.3, 784, 659.3], cues
     assert all(c["type"] == "sine" for c in cues), cues
     for cue in cues[:4]:
         assert cue["glide"] == pytest.approx(cue["freq"] * 0.72), cue
@@ -3065,4 +3065,4 @@ async def test_with_playback_locked_no_blip_is_scheduled_until_the_tap(site):
     await page.click("#unmute")
     await page.wait_for_selector("#unmute", state="hidden", timeout=5000)
     cues = await _cues(page, 2, timeout=3000)
-    assert [c["freq"] for c in cues[:2]] == [392, 329.6], cues
+    assert [c["freq"] for c in cues[:2]] == [784, 659.3], cues

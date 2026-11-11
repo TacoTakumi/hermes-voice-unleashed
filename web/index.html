@@ -328,10 +328,11 @@ header > * { flex-shrink: 0; }
   // does not look at it cannot tell work from a dead turn. A quiet blip repeats for that
   // time. It is the thinking sound of Hermes Desktop and of the Hermes CLI voice mode
   // (apps/desktop/src/lib/thinking-sound.ts in hermes-agent, MIT License, Copyright (c)
-  // 2025 Nous Research), a little louder: their level was low on a phone. It plays on the reply's context, so the
+  // 2025 Nous Research), one octave higher and louder: a phone loudspeaker gives little
+  // under 400 Hz, where their tones are, and more level alone did not help. It plays on the reply's context, so the
   // browser's echo canceller knows it, and the server is told nothing: it is no reply.
   const CUE_STATES = ["Thinking", "Working"];
-  const CUE_PITCHES = [392, 329.6]; // G4 and E4, in turn
+  const CUE_PITCHES = [784, 659.3]; // G5 and E5, in turn
   const CUE_GAIN = 0.2; // the peak of a blip; Hermes Desktop has 0.08
   let cueTimer = null, cueCount = 0, cueVoice = null;
   // The user's switch for the cues. On unless the URL says cues=0 or the browser holds an
