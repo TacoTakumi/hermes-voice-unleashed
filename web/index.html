@@ -425,22 +425,28 @@ header > * { flex-shrink: 0; }
   // What Hermes does in the turn that runs: Working while one of its tool calls runs,
   // Thinking otherwise.
   function turnState() {
-    const tool = turnTools.some((li) => li.classList.contains("running"));
+    const tool = toolRuns();
     const detail = tool ? "Hermes is still working." : "Hermes is working on it.";
     show(tool ? "Working" : "Thinking", "hermes", muted ? detail : detail + " Speaking now stops it.");
   }
-  // What the page shows when nobody is talking: Hermes speaking, Hermes still at work, or
-  // waiting for the user.
+  function toolRuns() {
+    return turnTools.some((li) => li.classList.contains("running"));
+  }
+  // What the page shows when nobody is talking: Hermes at work on a tool call, Hermes
+  // speaking, Hermes thinking, or waiting for the user. A tool call that runs shows as
+  // Working also while the reply plays: Hermes says a sentence before most tool calls,
+  // and the audio itself tells the user that it speaks.
   function status() {
     if (!running || ending) return;
-    if (reply && reply.audible) show("Speaking", "hermes", "Talk over it to stop it.");
+    if (busy && toolRuns()) turnState();
+    else if (reply && reply.audible) show("Speaking", "hermes", "Talk over it to stop it.");
     else if (busy) turnState();
     else listening();
   }
   // A tool call began or ended: the state line follows when it shows what Hermes does.
-  // Any other state (the user or the reply has the floor, a prompt, an alert) stays.
+  // Any other state (the user has the floor, a prompt, an alert) stays.
   function toolChanged() {
-    if (busy && ["Thinking", "Working"].includes(stateEl.textContent)) status();
+    if (busy && ["Thinking", "Working", "Speaking"].includes(stateEl.textContent)) status();
   }
 
   // --- the reasoning line: the newest sentence, the whole text on a tap ------------------

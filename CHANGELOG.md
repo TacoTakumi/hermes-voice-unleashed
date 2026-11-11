@@ -10,9 +10,10 @@ entry names next to its pinned commit.
 
 ### Changed
 
-- During a turn the page reads "Working" while a tool call runs and
-  "Thinking" at all other times. Before, it read "Thinking" only until
-  its first update and "Working" after it, whatever Hermes did.
+- During a turn the page reads "Working" while a tool call runs, also
+  while the reply plays, and "Thinking" when no tool call runs and no
+  reply plays. Before, it read "Thinking" only until its first update
+  and "Working" after it, whatever Hermes did.
 - An answer to an approval prompt or to a question from the model goes on
   with the same turn on the page: the reasoning line, the turn's time and
   its tool lines stay. The utterance frame of such an answer carries

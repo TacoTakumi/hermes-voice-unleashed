@@ -2833,3 +2833,33 @@ async def test_hearing_you_ends_by_itself_when_no_more_words_come(stack):
     await asyncio.sleep(2.5)
     assert await page.text_content("#state") == "Hearing you"
     await _state_is(page, "Thinking", timeout=6000)
+
+
+async def test_a_tool_call_shows_as_working_also_while_the_reply_plays(stack):
+    """Hermes says a sentence before most tool calls: the tool call that runs has the
+    state line, and Speaking shows only when no tool call runs."""
+    fake, page, sessions, utterances = stack
+    (conn,) = await fake.wait_connections(1, timeout=10)
+    await _state_is(page, "Listening", timeout=10000)
+    await conn.send({"type": "turn_end", "text": "check the weather", "turn_id": 0})
+    await wait_for(lambda: utterances, timeout=5)
+    session, reply_id = sessions[0], utterances[0][1]
+    await _state_is(page, "Thinking", timeout=5000)
+    await session.on_reply_delta(reply_id, "t1", 1, "Let me check. ")
+    rid = (await wait_for(lambda: conn.json_frames("tts_stream")))[0]["request_id"]
+    await conn.send({"type": "audio_start", "request_id": rid, "sample_rate": 24000})
+    await conn.send(b"\x10\x00" * 96000)  # 4 s
+    await _state_is(page, "Speaking", timeout=5000)
+    await session.send_page(_tool("c1"))
+    await _state_is(page, "Working", timeout=1000)  # the reply still plays
+    assert await page.is_visible("#elapsed")
+    await session.send_page(_tool("c1", "tool_end"))
+    await _state_is(page, "Speaking", timeout=1000)
+    await session.send_page(_tool("c2"))
+    await _state_is(page, "Working", timeout=1000)
+    await conn.send(b"\x10\x00" * 4800)  # more audio begins: the tool call keeps the line
+    await asyncio.sleep(0.3)
+    assert await page.text_content("#state") == "Working"
+    await session.send_page(_tool("c2", "tool_end"))
+    await _state_is(page, "Speaking", timeout=1000)
+    await _state_is(page, "Thinking", timeout=8000)  # the audio ran out and the turn goes on
