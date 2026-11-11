@@ -12,7 +12,8 @@ entry names next to its pinned commit.
 
 - Sound cues: while a turn runs and no reply audio plays, the page plays
   a quiet repeating blip, the thinking sound of Hermes Desktop and the
-  Hermes CLI voice mode. It stops when reply audio starts, the turn ends,
+  Hermes CLI voice mode, one octave higher so that a phone loudspeaker
+  plays it. It stops when reply audio starts, the turn ends,
   you are heard or an approval prompt opens. A "Sound cues" button turns
   it off and on and the browser keeps the choice; `cues=0` in the page
   URL starts with it off.
