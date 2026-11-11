@@ -45,6 +45,13 @@ BARGE_STATES = ("learning", "ready")
 # not sent to Hermes: the user is asked again with the notice below.
 UNCLEAR_ANSWER_MAX_WORDS = 3
 APPROVAL_REPEAT_NOTICE = "Say yes or no."
+# Said when the user spoke and the recognizer gave no words, while a question or an
+# approval waits for the answer. Not more often than every NOT_CAUGHT_EVERY_S, and
+# only after NOT_CAUGHT_WAIT_S without words: an utterance can end in two parts, the
+# first with no text.
+NOT_CAUGHT_NOTICE = "I did not catch that."
+NOT_CAUGHT_EVERY_S = 5.0
+NOT_CAUGHT_WAIT_S = 1.0
 # The bare word the gateway takes for each choice of an approval prompt.
 APPROVAL_CHOICE_WORDS = {"once": "yes", "session": "session", "always": "always", "deny": "no"}
 # How long the reply must be quiet after its Hermes turn ended before its TTS request is
@@ -234,6 +241,9 @@ class VoiceSession:
         self.turn_engine: Optional[str] = None
         # The server said that its turn engine still learns the user's voice.
         self._barge_learning = False
+        # The wait before the notice that an answer was not caught, and when it was last said.
+        self._not_caught: Optional[asyncio.Task] = None
+        self._not_caught_at = float("-inf")
         # The question of the model that the page shows a card for, and its choices.
         self._question_id: Optional[str] = None
         self._question_choices: list[str] = []
@@ -302,6 +312,8 @@ class VoiceSession:
     async def _read_transcripts(self) -> None:
         async for frame in self.duplex.transcripts():
             await self.tracker.on_transcript(frame)
+            if self._not_caught is not None and heard_words(str(frame.get("text") or "")):
+                self._not_caught.cancel()  # words came after all
             if (not self.turn_engine and not self._cleared_turn and not self.tracker.reply_active
                     and heard_words(self.tracker.text)):
                 # Classic mode: the user speaks while the last reply's tail may still play.
@@ -314,6 +326,9 @@ class VoiceSession:
 
     async def _read_turn_ends(self) -> None:
         async for frame in self.duplex.turn_ends():
+            if frame.get("type") == "turn_empty":
+                self._on_turn_empty(frame)
+                continue
             await self.tracker.on_turn_end(frame)
             # The words the page showed as heard are gone, into an utterance or into
             # nothing. VoiceManager sends no empty transcription, so the page is told
@@ -630,6 +645,8 @@ class VoiceSession:
     async def _dispatch(self, text: str) -> None:
         # A page's spoken command is the session's to act on; an attached client
         # gets every utterance and decides itself.
+        if self._not_caught is not None:
+            self._not_caught.cancel()  # words came: there is nothing to say sorry for
         command = spoken_command(text) if not self.attached else None
         if command == END_SESSION:
             await self._end_session()
@@ -740,6 +757,32 @@ class VoiceSession:
         except Exception:
             logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
             return False
+
+    def _on_turn_empty(self, frame: dict[str, Any]) -> None:
+        """A turn ended on the server with no words. With ``speech`` true its
+        recognizer heard speech and gave no text: an answer of one short word is lost
+        like that. The user is told, a moment later, when the turn waits for them."""
+        if frame.get("speech") is not True or self.attached:
+            return
+        if self._not_caught is not None and not self._not_caught.done():
+            return
+        if asyncio.get_running_loop().time() - self._not_caught_at < NOT_CAUGHT_EVERY_S:
+            return
+        self._not_caught = asyncio.create_task(self._guarded(self._say_not_caught()))
+
+    async def _say_not_caught(self) -> None:
+        await asyncio.sleep(NOT_CAUGHT_WAIT_S)
+        approval = self._approval_id is not None
+        if not approval and not await self._answers_question():
+            return  # nothing waits for the user: a noise needs no answer
+        self._not_caught_at = asyncio.get_running_loop().time()
+        logger.info("voice page %s: speech with no words while a prompt waits, said so", self.client_id)
+        await self.send_page({"type": "note", "text": NOT_CAUGHT_NOTICE})
+        if self.reply_open or self.reply_request is not None:
+            await self.cancel_reply("answer not caught")
+        notice = f"{NOT_CAUGHT_NOTICE} {APPROVAL_REPEAT_NOTICE}" if approval else NOT_CAUGHT_NOTICE
+        self._prompt_request = await self.speak_notice(notice, show=False)
+        await self._next_turn()
 
     async def _answers_question(self) -> bool:
         """Whether the chat waits for the answer to a question the model asked."""
@@ -1209,6 +1252,8 @@ class VoiceSession:
 
     async def _stop(self) -> None:
         self._cancel_finishing()
+        if self._not_caught is not None:
+            self._not_caught.cancel()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:

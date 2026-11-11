@@ -347,7 +347,9 @@ class DuplexSession:
                 yield ("barge_state", item)
 
     async def turn_ends(self) -> AsyncIterator[dict]:
-        """Yield every turn_end frame as it arrives (opted-in connections only)."""
+        """Yield every turn_end and turn_empty frame as it arrives (opted-in
+        connections only). A turn_empty frame has no text: the reader tells the two
+        apart by ``type``."""
         while (frame := await self._client._turn_end_queue.get()) is not None:
             yield frame
 
@@ -591,7 +593,9 @@ class VoiceManagerClient:
                         # Server-owned ack for a turn_start - routed to
                         # its own queue so turn_start() awaits it independently.
                         await self._turn_queue.put(frame)
-                    elif ftype == "turn_end":
+                    elif ftype in ("turn_end", "turn_empty"):
+                        # turn_empty: a turn ended and the recognizer had no words
+                        # for it. With the turn ends, so the two keep their order.
                         await self._turn_end_queue.put(frame)
                     elif ftype == "barge":
                         # In the audio stream, so it lands in order with the pcm

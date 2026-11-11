@@ -337,3 +337,81 @@ async def test_a_newer_question_replaces_the_card_of_the_one_before(rig, clarify
     await _tap(rig, 2, "q2")
     await wait_for(lambda: len(rig.events) == sent + 1)
     assert rig.events[-1].text == "2"
+
+
+# --- the user spoke and no words came: turn_empty from VoiceManager ----------------------
+from test_approvals import _prompt_open  # noqa: E402
+
+EMPTY = {"type": "turn_empty", "mic_sample": 1000, "by": "silence", "speech": True}
+NOT_CAUGHT = "I did not catch that."
+
+
+@pytest.fixture
+def quick_notice(plugin, monkeypatch):
+    """The wait before the notice, short for a test."""
+    monkeypatch.setattr(plugin.session, "NOT_CAUGHT_WAIT_S", 0.05)
+
+
+async def test_a_turn_empty_while_a_question_waits_is_answered_with_a_notice(rig, clarify, quick_notice):
+    """The recognizer gave no text for the answer. Hermes says so, and the question
+    and its card stay open."""
+    await _asked_with_choices(rig, clarify)
+    sent = len(rig.events)
+    await rig.conn.send(EMPTY)
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
+    assert rig.page.of("note")[-1] == {"type": "note", "text": NOT_CAUGHT}
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == sent  # nothing went to Hermes
+    assert await rig.session._clarify_pending() is True
+    assert rig.page.of("question_end") == []
+    await _heard(rig, "Number four.")  # and the answer still works
+    assert rig.events[-1].text == "4"
+
+
+async def test_a_second_turn_empty_soon_after_gets_no_second_notice(rig, clarify, quick_notice):
+    await _asked_with_choices(rig, clarify)
+    await rig.conn.send(EMPTY)
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
+    await rig.conn.send(EMPTY)
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
+    assert rig.tts_text().count(NOT_CAUGHT) == 1
+
+
+@pytest.mark.parametrize("frame", [
+    {**EMPTY, "speech": False},                                        # room noise: the recognizer heard no speech
+    {"type": "turn_empty", "mic_sample": 1000, "by": "silence"},      # a server that does not say
+])
+async def test_a_turn_empty_without_speech_gets_no_notice(rig, clarify, quick_notice, frame):
+    await _asked_with_choices(rig, clarify)
+    await rig.conn.send(frame)
+    await asyncio.sleep(0.4)
+    assert NOT_CAUGHT not in rig.tts_text() and not rig.page.of("note")
+
+
+async def test_a_turn_empty_with_nothing_waiting_gets_no_notice(rig, quick_notice):
+    await _reply_in_progress(rig)
+    rig.wants(False)
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
+    assert NOT_CAUGHT not in rig.tts_text() and not rig.page.of("note")
+
+
+async def test_a_turn_empty_while_an_approval_waits_asks_for_yes_or_no(rig, quick_notice):
+    await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    sent = len(rig.events)
+    await rig.conn.send(EMPTY)
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say yes or no."))
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == sent and not rig.page.of("approval_end")
+
+
+async def test_words_that_arrive_after_a_turn_empty_stop_the_notice(rig, clarify, plugin, monkeypatch):
+    """An utterance can be cut in two: the first part ends empty and the words follow."""
+    monkeypatch.setattr(plugin.session, "NOT_CAUGHT_WAIT_S", 0.4)
+    await _asked_with_choices(rig, clarify)
+    await rig.conn.send(EMPTY)
+    await rig.conn.send({"type": "transcription", "segment_index": 7, "text": "number", "is_final": False})
+    await asyncio.sleep(0.8)
+    assert NOT_CAUGHT not in rig.tts_text()
