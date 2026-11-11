@@ -16,6 +16,10 @@ entry names next to its pinned commit.
   cream while Hermes speaks. The Unmute button is warm gold. The font is
   inside the page (SIL Open Font License 1.1), so the page still loads
   nothing from another host.
+- The first page says what this is: the Hermes / Voice Unleashed logo and a
+  line on what the page does. The newest session leads as a Continue card
+  above New session. The other sessions follow under Earlier as thin lines
+  with their source and age.
 
 ## [0.3.2]
 
