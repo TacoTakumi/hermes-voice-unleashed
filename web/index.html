@@ -83,8 +83,10 @@ body[data-who="alert"] #state { color: var(--alert); }
   font-size: 22px;
   line-height: 1.35;
   color: var(--you);
-  min-height: 1.35em;
 }
+/* No words heard: the line takes no room. It stays in the layout, so the words are
+   announced when they come. */
+#transcript:empty { margin: 0; }
 #reasoning { margin-top: 12px; }
 #reasoning[hidden] { display: none; }
 #reason-fold { display: block; width: 100%; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-style: italic; }

@@ -24,7 +24,8 @@ entry names next to its pinned commit.
 - In a session the level meter is a low strip, so the log gets more of the
   screen. On a phone the time of a running turn sits beside the state word:
   it takes no line of its own and the page moves less when a turn starts
-  and ends.
+  and ends. The line for your words takes room only while there are
+  words on it.
 
 ### Fixed
 

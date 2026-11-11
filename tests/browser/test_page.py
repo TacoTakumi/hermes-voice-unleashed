@@ -2538,3 +2538,21 @@ async def test_the_elapsed_time_keeps_its_own_line_on_a_wide_screen(stack, width
             return { text, under: rect('elapsed').top >= rect('state').bottom - 12, detail: rect('detail').top }; }); }""")
     assert all(t["under"] for t in tops), tops
     assert len({t["detail"] for t in tops}) == 1, tops
+
+
+async def test_an_empty_transcript_takes_no_room_and_one_with_text_shows_as_before(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 390, "height": 844})
+    await _listening(fake, page)
+
+    async def box():
+        return await page.evaluate("""() => { const t = document.getElementById('transcript');
+            const r = t.getBoundingClientRect(), m = document.getElementById('meter').getBoundingClientRect();
+            return { height: r.height, gap: r.top - m.bottom, display: getComputedStyle(t).display }; }""")
+
+    empty = await box()
+    assert empty["height"] == 0 and abs(empty["gap"]) <= 1 and empty["display"] != "none", empty
+    await sessions[0].send_page({"type": "transcript", "text": "what is the weather"})
+    await page.wait_for_function("document.getElementById('transcript').textContent === 'what is the weather'")
+    spoken = await box()
+    assert spoken["height"] > 20 and abs(spoken["gap"] - 14) <= 1, spoken
