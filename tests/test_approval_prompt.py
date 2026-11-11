@@ -134,6 +134,22 @@ def test_the_sentence_holds_no_code(plugin):
     ("for f in *; do rm $f; done", ""),
     ("{ rm -rf x; }", ""),
     ("sudo", ""),
+    ("sudo --user postgres psql -c x", "psql"),
+    ("sudo --user=postgres psql", "psql"),
+    ("sudo -u postgres -- psql", "psql"),
+    ("timeout --signal KILL 5 rm x", "rm"),
+    ("timeout --kill-after=3 10 rm x", "rm"),
+    ("env --chdir /tmp rm x", "rm"),
+    ("exec -a foo rm x", "rm"),
+    ("nice --adjustment 5 make", "make"),
+    ("'/opt/my tools/wipe' --all", "wipe"),
+    ('"/opt/my tools/wipe" --all', "wipe"),
+    ("FOO='a b' rm x", "rm"),
+    ("rm 'unfinished quote", "rm"),
+    ("python3 -c \"import os", "python3"),
+    ("'/opt/my tools/wipe --all", ""),
+    ("echo 'it''s' fine", "echo"),
+    ("sudo --frobnicate x rm", ""),
 ])
 def test_the_program_of_a_command(plugin, command, program):
     assert plugin.adapter.command_program(command) == program

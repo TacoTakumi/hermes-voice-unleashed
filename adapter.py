@@ -15,6 +15,7 @@ import datetime
 import json
 import logging
 import re
+import shlex
 import sqlite3
 import uuid
 from typing import Any, NamedTuple, Optional
@@ -246,18 +247,25 @@ def spoken_choice(text: str, choices: Optional[list]) -> Optional[str]:
 
 
 # Words before the program of a command that are not the program itself, each with
-# its options that take a value: the value is not the program either.
+# its options that take a value in the next word: the value is not the program either.
 _COMMAND_PREFIXES: dict[str, frozenset[str]] = {
-    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t"}),
+    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t", "--user", "--group",
+                       "--host", "--prompt", "--close-from", "--chdir", "--chroot", "--command-timeout",
+                       "--other-user", "--role", "--type"}),
     "doas": frozenset({"-u", "-C"}),
-    "env": frozenset({"-u", "-C", "-S"}),
-    "nice": frozenset({"-n"}),
-    "ionice": frozenset({"-c", "-n", "-p"}),
-    "timeout": frozenset({"-s", "-k"}),
-    "stdbuf": frozenset({"-i", "-o", "-e"}),
-    "nohup": frozenset(), "time": frozenset(), "command": frozenset(), "exec": frozenset(),
-    "setsid": frozenset(),
+    "env": frozenset({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "ionice": frozenset({"-c", "-n", "-p", "--class", "--classdata", "--pid"}),
+    "timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
+    "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
+    "exec": frozenset({"-a"}),
+    "nohup": frozenset(), "time": frozenset(), "command": frozenset(), "setsid": frozenset(),
 }
+# Long options of those words that take no value. Any other long option without "="
+# may take one, and then the program cannot be told.
+_PLAIN_LONG_OPTIONS = frozenset({"--", "--login", "--preserve-env", "--non-interactive", "--stdin", "--shell",
+                                 "--set-home", "--reset-timestamp", "--ignore-environment", "--null",
+                                 "--foreground", "--preserve-status", "--verbose", "--wait", "--fork"})
 _NUMBER_OR_DURATION = re.compile(r"\d+(\.\d+)?[smhd]?$")
 _PROGRAM_NAME = re.compile(r"[\w.+-]+$")
 
@@ -266,25 +274,35 @@ def command_program(command: str) -> str:
     """The name of the first program ``command`` runs: no directory, no ``sudo`` or
     other prefix word with its options, no environment assignment. Empty when it
     cannot be told: a command that starts with a redirect, a shell keyword or a
-    grouping names no program in its first word, and a wrong name is worse than none."""
+    grouping names no program in its first word, an unknown option of a prefix word
+    may take the next word as its value, and a wrong name is worse than none."""
     line = next((line for line in command.splitlines() if line.strip()), "")
+    try:
+        tokens, split_by_shell_rules = shlex.split(line), True
+    except ValueError:  # an open quote, closed on a later line: only plain words are safe
+        tokens, split_by_shell_rules = line.split(), False
     value_flags: frozenset[str] = frozenset()
     skip_value = prefixed = False
-    for token in line.split():
+    for token in tokens:
+        if not split_by_shell_rules and ("'" in token or '"' in token):
+            return ""
         if skip_value:
             skip_value = False
             continue
         if re.match(r"\w+=", token):
             continue
         if prefixed and token.startswith("-"):
-            skip_value = token in value_flags
+            if token in value_flags:
+                skip_value = True
+            elif token.startswith("--") and "=" not in token and token not in _PLAIN_LONG_OPTIONS:
+                return ""
             continue
         if prefixed and _NUMBER_OR_DURATION.match(token):
             continue  # the duration of timeout
         if token in _COMMAND_PREFIXES:
             value_flags, prefixed = _COMMAND_PREFIXES[token], True
             continue
-        name = token.strip("'\"").rsplit("/", 1)[-1]
+        name = token.rsplit("/", 1)[-1]
         if name in _SHELL_WORDS or not _PROGRAM_NAME.match(name):
             return ""
         return name
