@@ -456,9 +456,25 @@ header > * { flex-shrink: 0; }
   const logSizes = new ResizeObserver(logPinSoon);
   logSizes.observe(mainEl);
   logSizes.observe(logEl);
+  // Whether the server can hear a barge yet. Its turn engine first learns the user's
+  // voice from a few seconds of speech, and fires no barge until then: "learning". The
+  // page says so where it would invite the user to talk over a reply. "ready" shows for
+  // a moment when the voice is learned; null is the normal case, with nothing to say.
+  const BARGE_READY_MS = 3000;
+  let bargeState = null, bargeTimer = null;
+  function bargeSet(state) {
+    clearTimeout(bargeTimer);
+    bargeState = state;
+    if (state === "ready") bargeTimer = setTimeout(() => bargeSet(null), BARGE_READY_MS);
+    // Only a line that says who has the floor is written again: a state that reports
+    // something (the user is heard, an error) keeps its own.
+    if (FLOOR_STATES.includes(stateEl.textContent)) status();
+  }
   function listening() {
     if (!running || ending) return;
-    show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : "Say something.");
+    const invite = bargeState === "learning" ? "Learning your voice. Barge-in is off."
+      : bargeState === "ready" ? "Barge-in ready." : "Say something.";
+    show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : invite);
   }
   // --- the approval prompt: the command, why it needs approval, one button per choice ----
   const approvalEl = document.getElementById("approval");
@@ -498,7 +514,10 @@ header > * { flex-shrink: 0; }
   function turnState() {
     const tool = toolRuns();
     const detail = tool ? "Hermes is still working." : "Hermes is working on it.";
-    show(tool ? "Working" : "Thinking", "hermes", muted ? detail : detail + " Speaking now stops it.");
+    // Speech stops the turn, but while reply audio plays that is a barge.
+    const deaf = bargeState === "learning" && reply && reply.audible;
+    const stops = deaf ? " Barge-in is off: still learning your voice." : " Speaking now stops it.";
+    show(tool ? "Working" : "Thinking", "hermes", muted ? detail : detail + stops);
   }
   function toolRuns() {
     return turnTools.some((li) => li.classList.contains("running"));
@@ -510,7 +529,10 @@ header > * { flex-shrink: 0; }
   function status() {
     if (!running || ending) return;
     if (busy && toolRuns()) turnState();
-    else if (reply && reply.audible) show("Speaking", "hermes", "Talk over it to stop it.");
+    else if (reply && reply.audible) {
+      show("Speaking", "hermes", bargeState === "learning" ? "Barge-in is off: still learning your voice."
+        : bargeState === "ready" ? "Barge-in ready. Talk over it to stop it." : "Talk over it to stop it.");
+    }
     else if (busy) turnState();
     else listening();
   }
@@ -882,6 +904,9 @@ header > * { flex-shrink: 0; }
         retry = 0;
         lastError = null;
         busy = false;
+        // The barge state is the server session's: this connection has a new one.
+        clearTimeout(bargeTimer);
+        bargeState = null;
         listening();
         break;
       case "error":
@@ -922,6 +947,9 @@ header > * { flex-shrink: 0; }
         // A line from the server that is nobody's speech: what it heard when it could
         // not take the words as an answer.
         if (f.text) addTurn("note", f.text);
+        break;
+      case "barge_state":
+        if (f.state === "learning" || f.state === "ready") bargeSet(f.state);
         break;
       case "approval_end":
         if (approval && (!f.request_id || f.request_id === approval.id)) approvalClose();
@@ -1236,6 +1264,8 @@ header > * { flex-shrink: 0; }
   function stop() {
     running = false;
     cueSync();
+    clearTimeout(bargeTimer);
+    bargeState = null;
     ending = false;
     moved = false;
     clearTimeout(endDrain);

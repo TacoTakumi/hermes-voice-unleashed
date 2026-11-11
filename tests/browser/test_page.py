@@ -3128,3 +3128,73 @@ async def test_a_reply_queue_with_audio_in_it_takes_each_chunk_without_a_gap(sta
     gaps = _gaps(chunks)
     assert all(abs(gap) < 0.001 for gap in gaps), gaps
     assert chunks[-1]["ahead"] > 0.5, chunks[-1]  # queued behind the others, no reserve added
+
+
+# --- barge-in is off while the server learns the user's voice ---------------------------
+DETAIL = "document.getElementById('detail').textContent"
+LEARNING = "Learning your voice. Barge-in is off."
+LEARNING_WHILE_IT_SPEAKS = "Barge-in is off: still learning your voice."
+
+
+async def _detail_is(page, text, timeout=3000):
+    await page.wait_for_function(f"{DETAIL} === {json.dumps(text)}", timeout=timeout)
+
+
+async def test_barge_in_off_shows_in_listening_while_the_server_learns_the_voice(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    assert await page.text_content("#detail") == "Say something."  # no frame, no notice
+    await sessions[0].send_page({"type": "barge_state", "state": "learning"})
+    await _detail_is(page, LEARNING)
+    assert await page.text_content("#state") == "Listening"
+
+
+async def test_barge_in_off_shows_while_a_reply_plays_in_place_of_the_invitation(stack):
+    """Talk over it to stop it is false while the server learns the voice."""
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await session.send_page({"type": "utterance", "text": "check the weather"})
+    await _notice_to_the_page(session, "n1", seconds=4.0)
+    await _state_is(page, "Speaking")
+    assert await page.text_content("#detail") == LEARNING_WHILE_IT_SPEAKS
+    await session.send_page(_tool("c1"))
+    await _state_is(page, "Working")  # the reply still plays
+    detail = await page.text_content("#detail")
+    assert LEARNING_WHILE_IT_SPEAKS in detail and "Speaking now stops it" not in detail, detail
+
+
+async def test_barge_in_ready_shows_for_a_moment_then_the_normal_line(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await _detail_is(page, LEARNING)
+    await session.send_page({"type": "barge_state", "state": "ready"})
+    await _detail_is(page, "Barge-in ready.")
+    await asyncio.sleep(2.0)
+    assert await page.text_content("#detail") == "Barge-in ready."
+    await _detail_is(page, "Say something.", timeout=2500)
+
+
+async def test_barge_in_ready_gives_the_invitation_back_while_a_reply_plays(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "barge_state", "state": "learning"})
+    await _notice_to_the_page(session, "n1", seconds=4.0)
+    await _state_is(page, "Speaking")
+    await session.send_page({"type": "barge_state", "state": "ready"})
+    await _detail_is(page, "Barge-in ready. Talk over it to stop it.")
+
+
+async def test_barge_in_off_is_gone_after_a_reconnect_that_says_nothing_of_it(stack):
+    """The state belongs to the server's session: a new connection starts with none."""
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    await sessions[0].send_page({"type": "barge_state", "state": "learning"})
+    await _detail_is(page, LEARNING)
+    await sessions[0].page.close()
+    await fake.wait_connections(2, timeout=10)
+    await _detail_is(page, "Say something.", timeout=10000)
