@@ -365,6 +365,8 @@ from test_approvals import _prompt_open  # noqa: E402
 
 EMPTY = {"type": "turn_empty", "mic_sample": 1000, "by": "silence", "speech": True}
 NOT_CAUGHT = "I did not catch that."
+# What the notice adds for the four-choice question of these tests: the long forms.
+NOT_CAUGHT_FOUR = NOT_CAUGHT + " Say number one, number two, number three or number four, or tap a choice."
 
 
 async def _prompt_audio_ended(rig):
@@ -389,8 +391,8 @@ async def test_a_turn_empty_while_a_question_waits_is_answered_with_a_notice(rig
     await _prompt_audio_ended(rig)
     sent = len(rig.events)
     await rig.conn.send(EMPTY)
-    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
-    assert rig.page.of("note")[-1] == {"type": "note", "text": NOT_CAUGHT}
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT_FOUR))
+    assert rig.page.of("note")[-1] == {"type": "note", "text": NOT_CAUGHT_FOUR}
     await asyncio.sleep(0.1)
     assert len(rig.events) == sent  # nothing went to Hermes
     assert await rig.session._clarify_pending() is True
@@ -403,7 +405,7 @@ async def test_a_second_turn_empty_soon_after_gets_no_second_notice(rig, clarify
     await _asked_with_choices(rig, clarify)
     await _prompt_audio_ended(rig)
     await rig.conn.send(EMPTY)
-    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT_FOUR))
     await _prompt_audio_ended(rig)  # the notice itself has been spoken
     await rig.conn.send(EMPTY)
     await rig.conn.send(EMPTY)
@@ -437,7 +439,7 @@ async def test_a_turn_empty_while_an_approval_waits_asks_for_yes_or_no(rig, quic
     await _prompt_audio_ended(rig)
     sent = len(rig.events)
     await rig.conn.send(EMPTY)
-    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say yes or no."))
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say approve or deny, or tap a choice."))
     await asyncio.sleep(0.1)
     assert len(rig.events) == sent and not rig.page.of("approval_end")
 
@@ -463,7 +465,7 @@ async def test_a_turn_empty_while_the_question_is_still_spoken_does_not_cut_it(r
     assert rig.conn.json_frames("tts_cancel") == []  # the question's audio goes on
     await _prompt_audio_ended(rig)
     await rig.conn.send(EMPTY)  # not held back by the one before: nothing was said then
-    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT))
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT_FOUR))
 
 
 async def test_a_turn_empty_without_the_turn_engine_gets_no_notice(rig, clarify, quick_notice):
@@ -487,3 +489,20 @@ async def test_the_card_of_a_question_that_waits_no_more_closes_when_its_tool_en
     await rig.session.on_tool_end(reply_id, "c1", "ok", 120000)  # the question's own tool call
     await wait_for(lambda: rig.page.of("question_end"))
     assert rig.page.of("question_end") == [{"type": "question_end", "request_id": "q1"}]
+
+
+async def test_the_not_caught_notice_for_a_question_without_choices_asks_for_a_few_words(rig, clarify, quick_notice):
+    await _reply_in_progress(rig)
+    _, key = clarify(QUESTION)
+    await rig.adapter.send_clarify("voice", QUESTION, None, "q1", key)
+    await wait_for(lambda: rig.tts_text().endswith(QUESTION))
+    await _prompt_audio_ended(rig)
+    await rig.conn.send(EMPTY)
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say it again in a few words."))
+
+
+def test_the_not_caught_notice_names_one_example_for_a_long_list_of_choices(plugin):
+    forms = plugin.turns.number_forms
+    assert forms(2) == "number one or number two"
+    assert forms(4) == "number one, number two, number three or number four"
+    assert forms(5) is None and forms(0) is None

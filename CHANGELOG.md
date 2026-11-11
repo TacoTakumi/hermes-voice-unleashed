@@ -24,8 +24,10 @@ entry names next to its pinned commit.
 - A question from the model can be answered by a tap: the page shows its
   choices as buttons, and reads "Waiting for your answer" while it waits.
 - When you spoke and the recognizer gave no words while a question or an
-  approval waits, Hermes says "I did not catch that." and the prompt stays
-  open. It needs a VoiceManager that sends the `turn_empty` frame.
+  approval waits, Hermes says "I did not catch that." and names the longer
+  answer that gets through ("number one", or "approve" and "deny"). The
+  prompt stays open. It needs a VoiceManager that sends the `turn_empty`
+  frame.
 - More spoken phrases end the session: "end of session", "end
   discussion" and "end of discussion", and the forms the speech recognizer
   often gives for them, "in session" and "in discussion".

@@ -33,6 +33,7 @@ from tools.approval import get_pending_gateway_approval, has_blocking_approval
 from . import sessions, stream_hooks
 from .server import JOIN_FAILED_CLOSE_CODE, REPLACED_CLOSE_CODE, VoiceServer
 from .session import SESSION_NEW_NOTICE, VoiceSession, client_from_url, strip_say_tags
+from .turns import number_forms
 
 logger = logging.getLogger(__name__)
 
@@ -186,11 +187,10 @@ def _answer_hint(count: int) -> str:
 
     It names "number one", not "one": a speech recognizer often gives no text at
     all for one short word said alone, and two words get through."""
-    if count > 4:
+    forms = number_forms(count)
+    if forms is None:
         return "Say the number of a choice, for example number one, or your answer."
-    names = [f"number {CHOICE_NUMBERS[i].lower()}" for i in range(count)]
-    listed = names[0] if count == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
-    return f"Say {listed}, or your answer."
+    return f"Say {forms}, or your answer."
 
 
 _CARDINALS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve")

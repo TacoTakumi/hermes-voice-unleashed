@@ -32,7 +32,8 @@ from urllib.parse import urlsplit
 from websockets.exceptions import ConnectionClosed
 
 from . import vm_client
-from .turns import END_SESSION, NEW_SESSION, TurnTracker, heard_words, spoken_approval, spoken_command
+from .turns import (END_SESSION, NEW_SESSION, TurnTracker, heard_words, number_forms, spoken_approval,
+                    spoken_command)
 from .vm_client import TurnEngineError, VoiceManagerClient
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ BARGE_STATES = ("learning", "ready")
 UNCLEAR_ANSWER_MAX_WORDS = 3
 APPROVAL_REPEAT_NOTICE = "Say yes or no."
 # Said when the user spoke and the recognizer gave no words, while a question or an
-# approval waits for the answer. Not more often than every NOT_CAUGHT_EVERY_S, and
+# approval waits for the answer, followed by what to say next. Not more often than every NOT_CAUGHT_EVERY_S, and
 # only after NOT_CAUGHT_WAIT_S without words: an utterance can end in two parts, the
 # first with no text.
 NOT_CAUGHT_NOTICE = "I did not catch that."
@@ -774,6 +775,19 @@ class VoiceSession:
         # then leaves no coroutine behind that was never awaited.
         self._not_caught = asyncio.create_task(self._say_not_caught())
 
+    def _not_caught_notice(self, approval: bool) -> str:
+        """The notice, with what to say next. The answer that got no words was most
+        likely one short word, and said again it is lost again: the notice names
+        the longer forms that get through."""
+        if approval:
+            return f"{NOT_CAUGHT_NOTICE} Say approve or deny, or tap a choice."
+        count = len(self._question_choices)
+        if not count:
+            return f"{NOT_CAUGHT_NOTICE} Say it again in a few words."
+        forms = number_forms(count)
+        how = f"Say {forms}" if forms else "Say the number of a choice, for example number one"
+        return f"{NOT_CAUGHT_NOTICE} {how}, or tap a choice."
+
     async def _say_not_caught(self) -> None:
         await asyncio.sleep(NOT_CAUGHT_WAIT_S)
         try:
@@ -784,10 +798,10 @@ class VoiceSession:
                 return  # nothing waits for the user: a noise needs no answer
             self._not_caught_at = asyncio.get_running_loop().time()
             logger.info("voice page %s: speech with no words while a prompt waits, said so", self.client_id)
-            await self.send_page({"type": "note", "text": NOT_CAUGHT_NOTICE})
+            notice = self._not_caught_notice(approval)
+            await self.send_page({"type": "note", "text": notice})
             if self.reply_open or self.reply_request is not None:
                 await self.cancel_reply("answer not caught")
-            notice = f"{NOT_CAUGHT_NOTICE} {APPROVAL_REPEAT_NOTICE}" if approval else NOT_CAUGHT_NOTICE
             self._prompt_request = await self.speak_notice(notice, show=False)
             await self._next_turn()
         except asyncio.CancelledError:

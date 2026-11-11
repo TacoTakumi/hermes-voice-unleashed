@@ -58,6 +58,20 @@ SPOKEN_COMMANDS = {
 }
 
 
+_NUMBER_NAMES = ("one", "two", "three", "four")
+
+
+def number_forms(count: int) -> Optional[str]:
+    """How to say each of ``count`` choice numbers so that a speech recognizer gets
+    it: "number one, number two or number three". One short word said alone often
+    gets no text at all. None for no choice and for more than four: that list would
+    be longer than the question."""
+    if not 1 <= count <= len(_NUMBER_NAMES):
+        return None
+    names = [f"number {name}" for name in _NUMBER_NAMES[:count]]
+    return names[0] if count == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+
+
 def spoken_command(text: str) -> Optional[str]:
     """The command ``text`` is, when the whole utterance is one of the phrases."""
     return SPOKEN_COMMANDS.get(normalized_phrase(text))
