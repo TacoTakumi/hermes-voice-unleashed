@@ -38,6 +38,7 @@ class Rig:
     def __init__(self, adapter, session, page, conn, events):
         self.adapter, self.session, self.page, self.conn, self.events = adapter, session, page, conn, events
         self.pending = False
+        self.oldest = None  # the request id the gateway holds as its oldest approval
 
     def wants(self, pending: bool) -> None:
         """Whether the chat waits for an approval right now."""
@@ -72,7 +73,11 @@ async def rig(plugin):
                     return rig.pending
 
                 session._approval_words = lambda: APPROVAL_WORDS
+                async def oldest():
+                    return rig.oldest
+
                 session._approval_pending = pending
+                session._approval_oldest = oldest
                 yield rig
                 page.task.cancel()
         finally:
@@ -284,10 +289,10 @@ async def test_two_notices_each_keep_their_id_until_their_own_audio_end(rig):
 async def _prompted(rig, command: str = "rm -rf build") -> None:
     """The gateway asks for an approval: the adapter speaks the prompt on the page."""
     spoken = len(rig.tts_text())
+    rig.wants(True)  # the gateway queues the approval before it sends the prompt
     result = await rig.adapter.send_exec_approval(chat_id="voice", command=command, session_key="k",
                                                   description="deletes files", request_id="r1")
     assert result.success
-    rig.wants(True)
     await wait_for(lambda: rig.tts_text()[spoken:].endswith("Say yes or no."))
 
 
@@ -648,4 +653,77 @@ async def test_the_second_prompt_is_forgotten_when_the_chat_waits_for_no_approva
     await wait_for(lambda: rig.page.of("approval_end"))
     await asyncio.sleep(0.05)
     assert [f["request_id"] for f in rig.page.of("approval")] == ["r1"]
-    assert not rig.session._approvals_waiting and rig.session._approval_id is None
+    assert not rig.session._approval_prompts and rig.session._approval_id is None
+
+
+async def _two_prompts(rig) -> str:
+    """Two approvals wait in the gateway's queue, r1 the oldest, and the page shows r1."""
+    reply_id = await _reply_in_progress(rig)
+    rig.oldest = "r1"
+    await _prompt_open(rig)
+    await _second_prompt_open(rig)
+    assert [f["request_id"] for f in rig.page.of("approval")] == ["r1"]
+    return reply_id
+
+
+async def test_the_card_moves_when_the_oldest_approval_leaves_the_queue_unanswered(rig):
+    """The shown approval timed out, or was answered elsewhere, while a newer one
+    still waits: the gateway now gives an answer to the newer one."""
+    reply_id = await _two_prompts(rig)
+    rig.oldest = "r2"
+    await rig.session.on_tool_end(reply_id, "c1", "error", 60000)
+    await wait_for(lambda: [f["request_id"] for f in rig.page.of("approval")] == ["r1", "r2"])
+    assert rig.page.of("approval_end") == [{"type": "approval_end", "request_id": "r1"}]
+    await wait_for(lambda: rig.tts_text().endswith(SECOND))
+
+
+@pytest.mark.parametrize("by", ["tap", "voice"])
+async def test_an_answer_for_the_oldest_approval_is_not_sent_once_the_queue_moved_on(rig, by):
+    """No hook told the session yet that r1 is gone. The answer for the r1 card must
+    not reach the gateway: it would resolve r2, a command the page never showed."""
+    await _two_prompts(rig)
+    rig.oldest = "r2"
+    count = len(rig.events)
+    if by == "tap":
+        await _tap(rig, "once")
+    else:
+        await rig.conn.send({"type": "turn_end", "text": "yes", "turn_id": 0})
+    await wait_for(lambda: [f["request_id"] for f in rig.page.of("approval")] == ["r1", "r2"])
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == count  # nothing was sent
+    assert rig.session._approval_id == "r2"
+    # The answer the user gives now is for r2, which the page shows.
+    await _tap(rig, "deny", request_id="r2")
+    await wait_for(lambda: len(rig.events) > count)
+    assert rig.events[-1].text == "no"
+
+
+async def test_a_prompt_that_arrives_before_the_oldest_one_waits_for_it_in_queue_order(rig):
+    """Two tools ask at once and the newer approval's prompt is delivered first."""
+    await _reply_in_progress(rig)
+    rig.wants(True)
+    rig.oldest = "r1"
+    await _second_prompt_open(rig)  # r2 comes first
+    assert not rig.page.of("approval") and SECOND not in rig.tts_text()
+    count = len(rig.events)
+    await _tap(rig, "once", request_id="r2")
+    await asyncio.sleep(0.05)
+    assert len(rig.events) == count
+    await rig.session.open_approval("r1", SENTENCE, {"type": "approval", "request_id": "r1"})
+    await wait_for(lambda: rig.page.of("approval"))
+    assert [f["request_id"] for f in rig.page.of("approval")] == ["r1"]
+    # r1 is answered and the gateway's oldest is then r2: its kept prompt is shown.
+    await _tap(rig, "once")
+    await wait_for(lambda: len(rig.events) > count)
+    rig.oldest = "r2"
+    await rig.session.on_tool_end("any", "c1", "ok", 10)
+    await wait_for(lambda: [f["request_id"] for f in rig.page.of("approval")] == ["r1", "r2"])
+
+
+async def test_the_card_closes_when_the_queue_of_approvals_is_empty(rig):
+    reply_id = await _two_prompts(rig)
+    rig.wants(False)
+    rig.oldest = None
+    await rig.session.on_turn_done(reply_id, "t1", True)
+    await wait_for(lambda: rig.page.of("approval_end"))
+    assert rig.session._approval_id is None and not rig.session._approval_prompts

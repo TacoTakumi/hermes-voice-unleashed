@@ -28,7 +28,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run_busy import approval_input_words
 from hermes_state import SessionDB
 from tools import clarify_gateway, slash_confirm
-from tools.approval import has_blocking_approval
+from tools.approval import get_pending_gateway_approval, has_blocking_approval
 
 from . import sessions, stream_hooks
 from .server import JOIN_FAILED_CLOSE_CODE, REPLACED_CLOSE_CODE, VoiceServer
@@ -478,6 +478,12 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # chat maps to the same key every utterance is handled under.
             return has_blocking_approval(self._source_session_key(self._voice_source(client_id)))
 
+        async def approval_oldest() -> Optional[str]:
+            # The gateway resolves a bare word against the first approval of the
+            # session's queue; this is that approval's id.
+            entry = get_pending_gateway_approval(self._source_session_key(self._voice_source(client_id)))
+            return (entry or {}).get("request_id") or None
+
         async def clarify_pending() -> bool:
             # A question the model asked waits under the same session key. The gateway
             # takes the next message of the chat as its answer, whatever kind it is.
@@ -498,7 +504,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
         return VoiceSession(connection, client_from_url(self.vm_url, self.vm_token), client_id,
                             on_utterance=on_utterance, approval_words=approval_words,
-                            approval_pending=approval_pending, clarify_pending=clarify_pending,
+                            approval_pending=approval_pending, approval_oldest=approval_oldest,
+                            clarify_pending=clarify_pending,
                             clarify_answer=clarify_answer,
                             on_new_session=on_new_session)
 

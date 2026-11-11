@@ -161,6 +161,7 @@ class VoiceSession:
                  attached: bool = False,
                  approval_words: Optional[Callable[[], Iterable[str]]] = None,
                  approval_pending: Optional[Callable[[], Awaitable[bool]]] = None,
+                 approval_oldest: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
                  clarify_pending: Optional[Callable[[], Awaitable[bool]]] = None,
                  clarify_answer: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
                  on_new_session: Optional[Callable[[], Awaitable[None]]] = None) -> None:
@@ -176,6 +177,9 @@ class VoiceSession:
         # whether the chat waits for one right now.
         self._approval_words = approval_words
         self._approval_pending = approval_pending
+        # The request id of the oldest approval the chat waits for, the one the
+        # gateway gives the next answer to; None when it names none.
+        self._approval_oldest = approval_oldest
         # Whether the chat waits for the answer to a question the model asked.
         self._clarify_pending = clarify_pending
         # The form in which a spoken answer to that question goes to the gateway, when
@@ -210,9 +214,10 @@ class VoiceSession:
         self._prompt_reply: Optional[tuple[Optional[str]]] = None
         # The request id of the approval prompt the page shows; None when it shows none.
         self._approval_id: Optional[str] = None
-        # Prompts that opened while another was shown, oldest first: (request id,
-        # spoken sentence, page frame). Each is shown when the ones before it ended.
-        self._approvals_waiting: list[tuple[str, str, dict[str, Any]]] = []
+        # The prompts that came and were not answered here, by request id: the spoken
+        # sentence and the page frame. The page shows the one the gateway holds as its
+        # oldest; the map empties when the chat waits for no approval.
+        self._approval_prompts: dict[str, tuple[str, dict[str, Any]]] = {}
         # The TTS request of the last spoken prompt while its audio may still play.
         self._prompt_request: Optional[vm_client.TTSRequest] = None
         self._turn_started = False  # a hook event of the open reply's turn was seen
@@ -337,7 +342,7 @@ class VoiceSession:
 
     async def on_turn_start(self, reply_id: str) -> None:
         """The turn's model call is about to start: nothing to show, the turn runs."""
-        await self._approval_check()
+        await self._approval_sync()
         self._in_turn(reply_id)
 
     def turn_failed(self) -> None:
@@ -410,7 +415,7 @@ class VoiceSession:
         # The tool that waited for an approval ends when the approval does, also when
         # the gateway withdrew it or it timed out, and also for a turn whose reply a
         # newer utterance replaced.
-        await self._approval_check()
+        await self._approval_sync()
         if not self.attached and self._in_turn(reply_id):
             await self.send_page({"type": "tool_end", "id": call_id, "status": status,
                                   "duration_ms": duration_ms})
@@ -438,7 +443,7 @@ class VoiceSession:
     async def on_turn_done(self, reply_id: str, turn_id: str, interrupted: bool) -> None:
         """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
         request so VoiceManager speaks the rest."""
-        await self._approval_check()
+        await self._approval_sync()
         if not self._takes(reply_id) or self._finishing is not None:
             return
         self._last_text_at = asyncio.get_running_loop().time()
@@ -553,9 +558,17 @@ class VoiceSession:
             await self._new_session()
             return
         self._turn_ended_at = asyncio.get_running_loop().time()
+        moved = await self._approval_sync()
         answer = await self._approval_answer(text)
+        if answer is not None and moved and self._approval_id is not None:
+            # The approval the user answered ended just now and the page shows the
+            # next one, spoken a moment ago. The answer was not for that command.
+            logger.info("voice page %s: approval answer came as the prompt changed, not sent", self.client_id)
+            await self.send_page({"type": "note", "text": "That approval ended. Another one waits for your answer."})
+            await self._next_turn()
+            return
         if answer is not None:
-            await self._end_approval()  # answered: the page's prompt is over
+            await self._answered_approval()  # the page's prompt is over
             # The gateway consumes a bare approval word for the blocked turn, which then
             # resumes under its original message id. The cancel that a new utterance
             # causes closed the reply, so it opens again under that id to take the
@@ -571,7 +584,7 @@ class VoiceSession:
             await self.send_page({"type": "utterance", "text": answer, **self._next_epoch()})
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
-            await self._open_next_approval()
+            await self._approval_sync()  # the approval behind the answered one, if it waits
             return
         if await self._unclear_approval_answer(text):
             # A short utterance that is no answer is most likely an answer the
@@ -665,27 +678,57 @@ class VoiceSession:
             return text
 
     async def open_approval(self, request_id: str, sentence: str, frame: dict[str, Any]) -> None:
-        """Show an approval prompt on the page with ``frame`` and speak ``sentence``.
+        """An approval prompt came: the page shows it with ``frame`` and ``sentence``
+        is spoken, at once when it is the oldest approval the chat waits for, else
+        when the ones before it have ended.
 
-        The page keeps the prompt until an ``approval_end`` frame with the same
-        request id: the user answered, or the gateway withdrew the approval or let
-        it time out. The sentence is not shown as reply text: the prompt holds the
-        command."""
-        if self._approval_id is not None and self._approval_id != request_id:
-            # The gateway takes an answer for the oldest approval the chat waits for,
-            # so the page must keep showing that one: a card for this newer prompt
-            # would have its answer run the older command. It waits its turn.
-            self._approvals_waiting.append((request_id, sentence, frame))
-            return
-        self._approval_id = request_id
+        The page keeps a prompt until an ``approval_end`` frame with the same request
+        id: the user answered, or the gateway withdrew the approval or let it time
+        out. The sentence is not shown as reply text: the prompt holds the command."""
+        self._approval_prompts[request_id] = (sentence, frame)
+        await self._approval_sync()
+
+    async def _approval_sync(self) -> bool:
+        """Make the page show the oldest approval the chat waits for, or none.
+
+        The gateway takes an answer, a bare word, for the oldest approval of the chat.
+        So that one, and no other, is what the page may show: a card for a newer
+        prompt would have its answer run the older command. Which one is oldest is
+        the gateway's to say; prompts can arrive in another order, and the oldest can
+        leave (a timeout, an answer elsewhere) while a newer one still waits.
+
+        Returns whether the page's prompt closed or changed to another approval: an
+        answer under way was then meant for a prompt that is gone."""
+        if self._approval_pending is None or (self._approval_id is None and not self._approval_prompts):
+            return False
+        try:
+            pending = await self._approval_pending()
+            oldest = await self._approval_oldest() if pending and self._approval_oldest is not None else None
+        except Exception:
+            logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
+            return False
+        if not pending:  # the chat waits for no approval at all
+            self._approval_prompts.clear()
+            return await self._end_approval()
+        if oldest is None:  # the gateway names none: take the prompts in arrival order
+            oldest = self._approval_id or next(iter(self._approval_prompts), None)
+        if oldest == self._approval_id:
+            return False
+        changed = await self._end_approval()
+        prompt = self._approval_prompts.get(oldest)
+        if prompt is None:  # the oldest approval's prompt has not come yet
+            return changed
+        sentence, frame = prompt
+        self._approval_id = oldest
         await self.send_page(frame)
         await self.speak_prompt(sentence, show=False)
+        return True
 
-    async def _open_next_approval(self) -> None:
-        """After an answer: show and speak the prompt that waited behind the answered
-        one, now the oldest approval of the chat."""
-        if self._approval_id is None and self._approvals_waiting:
-            await self.open_approval(*self._approvals_waiting.pop(0))
+    async def _answered_approval(self) -> None:
+        """The user answered the prompt the page shows: it is over and forgotten."""
+        if self._approval_id is not None:
+            self._approval_prompts.pop(self._approval_id, None)
+        await self._end_approval()
 
     async def _on_approval_answer(self, frame: dict[str, Any]) -> None:
         """The user tapped a choice of the approval prompt the page shows.
@@ -696,12 +739,11 @@ class VoiceSession:
         word = APPROVAL_CHOICE_WORDS.get(frame.get("choice"))
         if word is None or self._approval_id is None or frame.get("request_id") != self._approval_id:
             return
-        await self._approval_check()
-        if self._approval_id is None:  # it timed out or was withdrawn just now
-            return
+        if await self._approval_sync():
+            return  # it ended just now; the page has another prompt, or none
         logger.info("voice page %s: approval answered on the page (%s)", self.client_id, frame.get("choice"))
         await self.cancel_reply("approval answer")  # the prompt's audio stops, as when the user speaks
-        await self._end_approval()
+        await self._answered_approval()
         self._reopen_reply()
         # No utterance came through the tracker for this answer, so it is told here
         # that a reply runs: the next utterance must stop it like any other.
@@ -709,26 +751,15 @@ class VoiceSession:
         await self.send_page({"type": "utterance", "text": word, **self._next_epoch()})
         if self._on_utterance is not None:
             await self._on_utterance(word, uuid.uuid4().hex)
-        await self._open_next_approval()
+        await self._approval_sync()  # the approval behind the answered one, if it waits
 
-    async def _approval_check(self) -> None:
-        """End the page's approval prompt when the chat waits for no approval any more."""
-        if self._approval_id is None or self._approval_pending is None:
-            return
-        try:
-            if await self._approval_pending():
-                return
-        except Exception:
-            logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
-            return
-        self._approvals_waiting.clear()  # the chat waits for no approval at all
-        await self._end_approval()
-
-    async def _end_approval(self) -> None:
+    async def _end_approval(self) -> bool:
+        """Close the prompt on the page; whether one was open."""
         if self._approval_id is None:
-            return
+            return False
         request_id, self._approval_id = self._approval_id, None
         await self.send_page({"type": "approval_end", "request_id": request_id})
+        return True
 
     async def speak_prompt(self, sentence: str, show: bool = True) -> None:
         """Speak a prompt the running turn waits on, an approval prompt or a question

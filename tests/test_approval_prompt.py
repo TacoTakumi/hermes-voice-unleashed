@@ -42,7 +42,10 @@ class Rig:
 
 
 @pytest.fixture
-async def rig(plugin):
+async def rig(plugin, monkeypatch):
+    # The gateway queues an approval before it sends the prompt: one waits.
+    monkeypatch.setattr(plugin.adapter, "has_blocking_approval", lambda session_key: True)
+    monkeypatch.setattr(plugin.adapter, "get_pending_gateway_approval", lambda session_key: None)
     async with FakeVoiceManager() as fake:
         adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={
             "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
@@ -244,3 +247,20 @@ async def test_the_pending_check_asks_the_gateway_under_the_chat_session_key(rig
     source = rig.adapter.build_source(chat_id="voice", chat_name="Voice", chat_type="dm",
                                       user_id=plugin.adapter.OWNER, user_name="Owner")
     assert seen == [rig.adapter._source_session_key(source)]
+
+
+async def test_the_oldest_approval_of_the_queue_is_asked_from_the_gateway(rig, plugin, monkeypatch):
+    seen = []
+
+    def get_pending_gateway_approval(session_key):
+        seen.append(session_key)
+        return {"request_id": "r7", "command": "rm x"}
+
+    monkeypatch.setattr(plugin.adapter, "get_pending_gateway_approval", get_pending_gateway_approval)
+    session = rig.adapter.session_for("voice")
+    assert await session._approval_oldest() == "r7"
+    source = rig.adapter.build_source(chat_id="voice", chat_name="Voice", chat_type="dm",
+                                      user_id=plugin.adapter.OWNER, user_name="Owner")
+    assert seen == [rig.adapter._source_session_key(source)]
+    monkeypatch.setattr(plugin.adapter, "get_pending_gateway_approval", lambda key: None)
+    assert await session._approval_oldest() is None
