@@ -224,6 +224,9 @@ class VoiceSession:
         # and its end was not. A cut reply does not end it: the gateway stops the turn
         # only for the next utterance, so it stays true after the reply closed.
         self._turn_started = False
+        # The end of that turn was seen. The end-of-turn hook can overtake the turn's
+        # last stream events: one that arrives late must not start the turn again.
+        self._turn_over = False
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
         self.turn_engine_refusal: Optional[str] = None
@@ -342,7 +345,8 @@ class VoiceSession:
         the reply's turn has started."""
         if not self._takes(reply_id):
             return False
-        self._turn_started = True
+        if not self._turn_over:
+            self._turn_started = True
         return True
 
     async def on_turn_start(self, reply_id: str) -> None:
@@ -355,7 +359,7 @@ class VoiceSession:
         hook comes. The failure of a turn that a newer utterance replaced changes
         nothing here."""
         if self._same_reply(reply_id):
-            self._turn_started = False
+            self._turn_started, self._turn_over = False, True
 
     async def end_failed_turn(self, reply_id: str = "") -> None:
         """The error notice of the failed turn is on the page: the turn ends there
@@ -486,12 +490,13 @@ class VoiceSession:
         if not self.reply_open:
             if self._turn_started and self._same_reply(reply_id):
                 # The reply was cut while its turn ran: the page waited for this end.
-                self._turn_started = False
+                self._turn_started, self._turn_over = False, True
                 await self._send_turn_done()
             return
         if not self._takes(reply_id):
             return
-        self._turn_started = False  # the turn is over; the reply's audio may still play
+        # The turn is over; the reply's audio may still play.
+        self._turn_started, self._turn_over = False, True
         if self._finishing is not None:
             return
         self._last_text_at = asyncio.get_running_loop().time()
@@ -936,7 +941,8 @@ class VoiceSession:
         self._retire(self.reply_key)
         self.reply_id = uuid.uuid4().hex
         self.reply_open, self.reply_request, self._unsent = True, None, ""
-        self._turn_started = False  # the gateway interrupts the old turn for the new message
+        # The gateway interrupts the old turn for the new message.
+        self._turn_started, self._turn_over = False, False
         self._cutter = SayCutter()
 
     def _reopen_reply(self) -> None:
@@ -946,7 +952,7 @@ class VoiceSession:
         self._cancel_finishing()
         if self._prompt_reply is not None:
             (self.reply_id,), self._prompt_reply = self._prompt_reply, None
-        self._turn_started = True  # the blocked turn goes on
+        self._turn_started, self._turn_over = True, False  # the blocked turn goes on
         self.reply_open, self.reply_request, self._unsent = True, None, ""
         self._cutter = SayCutter()
 

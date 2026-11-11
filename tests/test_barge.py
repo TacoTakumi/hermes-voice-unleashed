@@ -293,3 +293,27 @@ async def test_a_turn_that_fails_after_a_barge_ends_on_the_page(plugin):
         await adapter._notify_turn_error(event, RuntimeError("the handler raised"))
         await wait_for(lambda: page.of("turn_done"))
         assert not adapter.session_for("voice").turn_running
+
+
+@pytest.mark.parametrize("late", ["a reply delta", "a stream end"])
+async def test_a_late_event_of_a_finished_turn_does_not_start_it_again(plugin, late):
+    """The end-of-turn hook can overtake the turn's last stream events. A barge in the
+    reply's quiet window after such an event must still end the turn on the page."""
+    async with rig(plugin) as (hooks, conn, page, messages):
+        await conn.send({"type": "turn_end", "text": "tell me a story", "turn_id": 0})
+        await wait_for(lambda: messages)
+        message_id, rid = await _start_reply(hooks, conn, page, messages)
+        session = hooks._adapters[-1].session_for("voice")
+        fire(hooks.on_session_end, message_id, turn_id="t1", interrupted=False)
+        await wait_for(lambda: not session.turn_running)
+        if late == "a reply delta":
+            fire(hooks.on_stream_delta, message_id, delta=" there was a dragon. ", kind="text",
+                 turn_id="t1", iteration=1)
+        else:
+            fire(hooks.on_stream_end, message_id)
+        await conn.send({"type": "barge", "request_id": rid, "onset_mic_sample": 10, "mic_sample": 20})
+        await conn.send({"type": "audio_end", "request_id": rid, "reason": "interrupted"})
+        await wait_for(lambda: page.of("clear"))
+        await wait_for(lambda: page.of("turn_done"))
+        assert not session.turn_running
+
