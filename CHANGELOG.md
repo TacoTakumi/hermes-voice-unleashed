@@ -50,6 +50,10 @@ entry names next to its pinned commit.
 
 ### Fixed
 
+- "End session" said twice, or after a remark, in one turn went to Hermes
+  as a message and the session stayed open. The last thing said in a turn
+  now decides a spoken command. "this session", which the recognizer gives
+  for "end session", ends the session too.
 - A voice page that started on one session did not switch off the voice of
   Hermes Desktop or the Webapp on another session, and the reverse. Both
   microphones stayed open: each heard the user, and each heard the other's
