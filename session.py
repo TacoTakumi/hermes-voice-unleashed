@@ -210,6 +210,9 @@ class VoiceSession:
         self._prompt_reply: Optional[tuple[Optional[str]]] = None
         # The request id of the approval prompt the page shows; None when it shows none.
         self._approval_id: Optional[str] = None
+        # Prompts that opened while another was shown, oldest first: (request id,
+        # spoken sentence, page frame). Each is shown when the ones before it ended.
+        self._approvals_waiting: list[tuple[str, str, dict[str, Any]]] = []
         # The TTS request of the last spoken prompt while its audio may still play.
         self._prompt_request: Optional[vm_client.TTSRequest] = None
         self._turn_started = False  # a hook event of the open reply's turn was seen
@@ -568,6 +571,7 @@ class VoiceSession:
             await self.send_page({"type": "utterance", "text": answer, **self._next_epoch()})
             if self._on_utterance is not None:
                 await self._on_utterance(answer, uuid.uuid4().hex)
+            await self._open_next_approval()
             return
         if await self._unclear_approval_answer(text):
             # A short utterance that is no answer is most likely an answer the
@@ -667,9 +671,21 @@ class VoiceSession:
         request id: the user answered, or the gateway withdrew the approval or let
         it time out. The sentence is not shown as reply text: the prompt holds the
         command."""
+        if self._approval_id is not None and self._approval_id != request_id:
+            # The gateway takes an answer for the oldest approval the chat waits for,
+            # so the page must keep showing that one: a card for this newer prompt
+            # would have its answer run the older command. It waits its turn.
+            self._approvals_waiting.append((request_id, sentence, frame))
+            return
         self._approval_id = request_id
         await self.send_page(frame)
         await self.speak_prompt(sentence, show=False)
+
+    async def _open_next_approval(self) -> None:
+        """After an answer: show and speak the prompt that waited behind the answered
+        one, now the oldest approval of the chat."""
+        if self._approval_id is None and self._approvals_waiting:
+            await self.open_approval(*self._approvals_waiting.pop(0))
 
     async def _on_approval_answer(self, frame: dict[str, Any]) -> None:
         """The user tapped a choice of the approval prompt the page shows.
@@ -693,6 +709,7 @@ class VoiceSession:
         await self.send_page({"type": "utterance", "text": word, **self._next_epoch()})
         if self._on_utterance is not None:
             await self._on_utterance(word, uuid.uuid4().hex)
+        await self._open_next_approval()
 
     async def _approval_check(self) -> None:
         """End the page's approval prompt when the chat waits for no approval any more."""
@@ -704,6 +721,7 @@ class VoiceSession:
         except Exception:
             logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
             return
+        self._approvals_waiting.clear()  # the chat waits for no approval at all
         await self._end_approval()
 
     async def _end_approval(self) -> None:

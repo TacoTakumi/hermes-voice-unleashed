@@ -598,3 +598,54 @@ async def test_a_new_utterance_cancels_the_resumed_reply_after_a_tap(rig, asked_
     await _heard(rig, "tell me more about it")
     assert resumed in [f["request_id"] for f in rig.conn.json_frames("tts_cancel")]
     assert len(rig.page.of("clear")) > clears and len(rig.page.of("turn_done")) > dones
+
+
+SECOND = "Approval needed to run dd. Say yes or no."
+
+
+async def _second_prompt_open(rig) -> None:
+    """A second approval of the chat asks while the first still waits."""
+    await rig.session.open_approval("r2", SECOND, {"type": "approval", "request_id": "r2"})
+    await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize("by", ["tap", "voice"])
+async def test_a_second_prompt_waits_and_the_answer_is_for_the_oldest_one(rig, by):
+    """The gateway gives an answer to the oldest approval: the page shows that one."""
+    reply_id = await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    await _second_prompt_open(rig)
+    assert [f["request_id"] for f in rig.page.of("approval")] == ["r1"]  # the card keeps the first
+    assert SECOND not in rig.tts_text()
+    count = len(rig.events)
+    await _tap(rig, "once", request_id="r2")  # no card shows r2: nothing happens
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == count
+    if by == "tap":
+        await _tap(rig, "once")
+        await wait_for(lambda: len(rig.events) > count)
+    else:
+        await _heard(rig, "yes")
+    assert rig.events[-1].text == "yes"
+    # The first prompt ends, then the second is shown and spoken, in the blocked turn's reply.
+    await wait_for(lambda: [f["request_id"] for f in rig.page.of("approval")] == ["r1", "r2"])
+    assert rig.page.of("approval_end") == [{"type": "approval_end", "request_id": "r1"}]
+    kinds = [(f["type"], f.get("request_id")) for f in rig.page.frames]
+    assert kinds.index(("approval_end", "r1")) < kinds.index(("approval", "r2"))
+    await wait_for(lambda: rig.tts_text().endswith(SECOND))
+    assert rig.session.reply_id == reply_id and rig.session._prompt_reply == (reply_id,)
+    await _tap(rig, "deny", request_id="r2")
+    await wait_for(lambda: rig.events[-1].text == "no")
+    await wait_for(lambda: len(rig.page.of("approval_end")) == 2)
+
+
+async def test_the_second_prompt_is_forgotten_when_the_chat_waits_for_no_approval(rig):
+    reply_id = await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    await _second_prompt_open(rig)
+    rig.wants(False)  # both were withdrawn
+    await rig.session.on_tool_end(reply_id, "c1", "error", 100)
+    await wait_for(lambda: rig.page.of("approval_end"))
+    await asyncio.sleep(0.05)
+    assert [f["request_id"] for f in rig.page.of("approval")] == ["r1"]
+    assert not rig.session._approvals_waiting and rig.session._approval_id is None
