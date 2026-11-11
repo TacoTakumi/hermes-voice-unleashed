@@ -202,6 +202,8 @@ class VoiceSession:
         # one-item tuple (the id is None on a page that never saw the utterance); None
         # when no prompt waits for its word.
         self._prompt_reply: Optional[tuple[Optional[str]]] = None
+        # The request id of the approval prompt the page shows; None when it shows none.
+        self._approval_id: Optional[str] = None
         self._turn_started = False  # a hook event of the open reply's turn was seen
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
@@ -324,6 +326,7 @@ class VoiceSession:
 
     async def on_turn_start(self, reply_id: str) -> None:
         """The turn's model call is about to start: nothing to show, the turn runs."""
+        await self._approval_check()
         self._in_turn(reply_id)
 
     def turn_failed(self) -> None:
@@ -393,6 +396,10 @@ class VoiceSession:
             await self.send_page({"type": "tool_start", "id": call_id, "name": name, "summary": summary})
 
     async def on_tool_end(self, reply_id: str, call_id: str, status: str, duration_ms: int) -> None:
+        # The tool that waited for an approval ends when the approval does, also when
+        # the gateway withdrew it or it timed out, and also for a turn whose reply a
+        # newer utterance replaced.
+        await self._approval_check()
         if not self.attached and self._in_turn(reply_id):
             await self.send_page({"type": "tool_end", "id": call_id, "status": status,
                                   "duration_ms": duration_ms})
@@ -420,6 +427,7 @@ class VoiceSession:
     async def on_turn_done(self, reply_id: str, turn_id: str, interrupted: bool) -> None:
         """The Hermes turn finished: once its text has gone quiet, end the reply's TTS
         request so VoiceManager speaks the rest."""
+        await self._approval_check()
         if not self._takes(reply_id) or self._finishing is not None:
             return
         self._last_text_at = asyncio.get_running_loop().time()
@@ -534,6 +542,7 @@ class VoiceSession:
         self._turn_ended_at = asyncio.get_running_loop().time()
         answer = await self._approval_answer(text)
         if answer is not None:
+            await self._end_approval()  # answered: the page's prompt is over
             # The gateway consumes a bare approval word for the blocked turn, which then
             # resumes under its original message id. The cancel that a new utterance
             # causes closed the reply, so it opens again under that id to take the
@@ -614,6 +623,35 @@ class VoiceSession:
         except Exception:
             logger.warning("voice page %s: answer mapping failed", self.client_id, exc_info=True)
             return text
+
+    async def open_approval(self, request_id: str, sentence: str, frame: dict[str, Any]) -> None:
+        """Show an approval prompt on the page with ``frame`` and speak ``sentence``.
+
+        The page keeps the prompt until an ``approval_end`` frame with the same
+        request id: the user answered, or the gateway withdrew the approval or let
+        it time out. The sentence is not shown as reply text: the prompt holds the
+        command."""
+        self._approval_id = request_id
+        await self.send_page(frame)
+        await self.speak_prompt(sentence, show=False)
+
+    async def _approval_check(self) -> None:
+        """End the page's approval prompt when the chat waits for no approval any more."""
+        if self._approval_id is None or self._approval_pending is None:
+            return
+        try:
+            if await self._approval_pending():
+                return
+        except Exception:
+            logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
+            return
+        await self._end_approval()
+
+    async def _end_approval(self) -> None:
+        if self._approval_id is None:
+            return
+        request_id, self._approval_id = self._approval_id, None
+        await self.send_page({"type": "approval_end", "request_id": request_id})
 
     async def speak_prompt(self, sentence: str, show: bool = True) -> None:
         """Speak a prompt the running turn waits on, an approval prompt or a question

@@ -375,3 +375,72 @@ async def test_a_notice_leaves_a_finished_reply_that_still_plays_its_own_request
     await wait_for(lambda: rig.page.of("turn_done"))  # the reply's own audio end ends the turn
     assert rig.session.reply_request is None
 
+
+
+SENTENCE = "Approval needed to run rm. Say yes or no."
+
+
+async def _prompt_open(rig, request_id: str = "r1") -> None:
+    """The gateway asked for an approval and the page shows the prompt."""
+    rig.wants(True)
+    await rig.session.open_approval(request_id, SENTENCE, {"type": "approval", "request_id": request_id})
+    await wait_for(lambda: rig.page.of("approval"))
+
+
+async def test_the_prompt_ends_on_the_page_when_the_blocked_tool_ends_with_nothing_pending(rig):
+    reply_id = await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    await rig.session.on_tool_end(reply_id, "c0", "ok", 5)  # another tool; the approval still waits
+    await asyncio.sleep(0.05)
+    assert not rig.page.of("approval_end")
+    rig.wants(False)  # timed out
+    await rig.session.on_tool_end(reply_id, "c1", "error", 60000)
+    await wait_for(lambda: rig.page.of("approval_end"))
+    await rig.session.on_tool_end(reply_id, "c2", "ok", 5)
+    await rig.session.on_turn_done(reply_id, "t1", False)
+    await asyncio.sleep(0.05)
+    assert rig.page.of("approval_end") == [{"type": "approval_end", "request_id": "r1"}]
+
+
+async def test_an_answer_ends_the_prompt_on_the_page(rig):
+    await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    await _heard(rig, "No, just leave it.")
+    assert rig.events[-1].text == "no"
+    await wait_for(lambda: rig.page.of("approval_end"))
+    kinds = [f["type"] for f in rig.page.frames]
+    assert kinds.index("approval_end") < len(kinds) - 1 - kinds[::-1].index("utterance")
+
+
+async def test_an_utterance_that_is_no_answer_withdraws_the_approval_and_the_prompt_ends(rig):
+    """What the gateway does for "You ask me to say yes or no, and I say no": the
+    utterance is a new message, the blocked turn is interrupted and its approval is
+    withdrawn. The page must lose the prompt and take the new turn."""
+    blocked = await _reply_in_progress(rig)
+    await rig.session.on_tool_start(blocked, "c1", "terminal", "rm -rf build")
+    await _prompt_open(rig)
+    said = "You ask me to say yes or no, and I say no"
+    await _heard(rig, said)
+    assert rig.events[-1].text == said
+    newer = rig.events[-1].message_id
+    assert newer != blocked and rig.session.reply_id == newer
+    assert not rig.page.of("approval_end")  # the gateway has not withdrawn it yet
+    rig.wants(False)
+    await rig.session.on_tool_end(blocked, "c1", "error", 59000)  # the blocked tool returns
+    await rig.session.on_turn_done(blocked, "t1", True)
+    await wait_for(lambda: rig.page.of("approval_end"))
+    assert not [f for f in rig.page.of("tool_end") if f["id"] == "c1"]  # the old turn's line is not ended
+    await rig.session.on_turn_start(newer)
+    await rig.session.on_reply_delta(newer, "t2", 1, "Understood. ")
+    await wait_for(lambda: rig.page.of("reply_delta")[-1:] == [{"type": "reply_delta", "text": "Understood. "}])
+    kinds = [f["type"] for f in rig.page.frames]
+    last_utterance = len(kinds) - 1 - kinds[::-1].index("utterance")
+    assert "turn_done" in kinds[:last_utterance]  # the blocked turn's lines fold before the new turn
+    assert "turn_done" not in kinds[last_utterance:]  # and the new turn still runs
+
+
+async def test_the_spoken_sentence_of_a_prompt_is_not_shown_as_reply_text(rig):
+    await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    await wait_for(lambda: rig.tts_text().endswith("Say yes or no."))
+    assert not any("Approval needed" in f.get("text", "") for f in rig.page.of("reply_delta"))

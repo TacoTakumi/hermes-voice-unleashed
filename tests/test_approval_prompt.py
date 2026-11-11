@@ -76,10 +76,18 @@ async def _prompt(adapter, chat_id: str, command: str = "rm -rf build", request_
 async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
     result = await _prompt(rig.adapter, "voice")
     assert result.success
-    await wait_for(lambda: rig.page.of("reply"))
-    assert "rm -rf build" in rig.page.of("reply")[-1]["text"]
+    await wait_for(lambda: rig.page.of("approval"))
+    (frame,) = rig.page.of("approval")
+    assert frame["request_id"] == "r1" and frame["command"] == "rm -rf build"
+    assert frame["reason"] == "deletes files"
+    choices = [c["choice"] for c in frame["choices"]]
+    assert choices[0] == "once" and choices[-1] == "deny" and set(choices) <= {"once", "session", "always", "deny"}
+    assert all(c["label"] for c in frame["choices"])
     await wait_for(lambda: "Say yes or no." in rig.tts_text())
     assert "Approval needed: deletes files, with rm. Say yes or no." in rig.tts_text()
+    # The prompt shows once: no reply line with the gateway's text or the spoken sentence.
+    assert not rig.page.of("reply")
+    assert not any(f.get("text") for f in rig.page.of("reply_delta"))
     # The session remembers the reply that ran when the prompt came (none on this page).
     session = rig.adapter.session_for("voice")
     assert session._prompt_reply == (session.reply_id,)
@@ -90,7 +98,7 @@ async def test_without_a_page_the_prompt_is_not_sent(rig):
     assert not result.success
     await asyncio.sleep(0.05)
     assert rig.tts_text() == ""
-    assert not rig.page.of("reply")
+    assert not rig.page.of("approval")
 
 
 def test_the_sentence_names_the_reason_and_the_program(plugin):
@@ -132,10 +140,8 @@ def test_an_empty_command_is_spoken_without_a_command_part(plugin, command):
 async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
     result = await _prompt(rig.adapter, "voice", command=SCRIPT, request_id="r2", description="runs a script")
     assert result.success
-    await wait_for(lambda: rig.page.of("reply"))
-    shown = rig.page.of("reply")[-1]["text"]
-    for line in SCRIPT.splitlines():
-        assert line in shown
+    await wait_for(lambda: rig.page.of("approval"))
+    assert rig.page.of("approval")[-1]["command"] == SCRIPT
     await wait_for(lambda: rig.tts_text())
     assert "Approval needed: runs a script, with python3. Say yes or no." in rig.tts_text()
     assert "print(0)" not in rig.tts_text()

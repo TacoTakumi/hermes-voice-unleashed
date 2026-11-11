@@ -798,16 +798,21 @@ class VoiceLiveAdapter(BasePlatformAdapter):
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
         """Show and speak an approval prompt.
 
-        The page shows the gateway's prompt text as a reply. The short sentence is
-        spoken, so a user who is not looking at the page knows the turn waits and
-        how to answer. Without a connected page the prompt is not sent, and the
-        gateway falls back to its text prompt.
+        The page gets the command, the gateway's reason and the gateway's choices in
+        a frame of its own, and shows them as a prompt with one button per choice.
+        The short sentence is spoken, so a user who is not looking at the page knows
+        the turn waits and how to answer. Without a connected page the prompt is not
+        sent, and the gateway falls back to its text prompt.
         """
         session = self.session_for(prompt.chat_id)
         if self._clients.get(prompt.chat_id) is None or session is None:
             return SendResult(success=False, error="the voice page is not connected")
-        await self._send_json(prompt.chat_id, {"type": "reply", "text": prompt.text})
-        await session.speak_prompt(approval_sentence(prompt.command, prompt.description))
+        request_id = prompt.request_id or uuid.uuid4().hex
+        frame = {"type": "approval", "request_id": request_id, "command": prompt.command,
+                 "reason": prompt.description,
+                 "choices": [{"choice": choice, "label": label, "style": style}
+                             for label, choice, style in prompt.actions]}
+        await session.open_approval(request_id, approval_sentence(prompt.command, prompt.description), frame)
         return SendResult(success=True, message_id=None)
 
     async def send_clarify(self, chat_id: str, question: str, choices: Optional[list], clarify_id: str,
