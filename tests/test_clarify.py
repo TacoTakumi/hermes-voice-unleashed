@@ -509,12 +509,12 @@ def test_the_not_caught_notice_names_one_example_for_a_long_list_of_choices(plug
 
 
 # --- the notice and a prompt that the page still plays -------------------------------------
-async def _prompt_audio_sent(rig) -> str:
+async def _prompt_audio_sent(rig, seconds: float = 0.1) -> str:
     """All audio of the spoken prompt has come from the server and gone to the page,
     which still plays it. Returns the prompt's request id."""
     request_id = rig.session._prompt_request.request_id
     await rig.conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
-    await rig.conn.send(b"\x11\x00" * 2400)
+    await rig.conn.send(b"\x11\x00" * int(seconds * 24000))
     await rig.conn.send({"type": "audio_end", "request_id": request_id, "reason": "complete"})
     await wait_for(lambda: rig.session._prompt_request is None)
     return request_id
@@ -542,11 +542,24 @@ async def test_a_turn_empty_while_the_page_still_plays_the_question_does_not_cut
 
 async def test_a_page_that_never_reports_the_end_of_the_question_holds_the_notice_for_a_time_only(
         rig, clarify, quick_notice, plugin, monkeypatch):
-    monkeypatch.setattr(plugin.session, "PROMPT_PLAY_MAX_S", 0.2)
+    """Its time is the length of the prompt's audio and a margin: the audio cannot
+    play for longer than it is."""
+    monkeypatch.setattr(plugin.session, "PROMPT_PLAY_MARGIN_S", 0.1)
     await _asked_with_choices(rig, clarify)
-    await _prompt_audio_sent(rig)
+    await _prompt_audio_sent(rig)  # 0.1 s of audio
     await rig.conn.send(EMPTY)
     await asyncio.sleep(0.4)
     assert NOT_CAUGHT not in rig.tts_text()
-    await rig.conn.send(EMPTY)  # past the bound: the page is taken to be done with it
+    await rig.conn.send(EMPTY)  # past the audio's length and the margin
     await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT_FOUR))
+
+
+async def test_a_long_question_holds_the_notice_for_as_long_as_its_audio_lasts(
+        rig, clarify, quick_notice, plugin, monkeypatch):
+    monkeypatch.setattr(plugin.session, "PROMPT_PLAY_MARGIN_S", 0.1)
+    await _asked_with_choices(rig, clarify)
+    await _prompt_audio_sent(rig, seconds=2.0)
+    await asyncio.sleep(0.6)  # far past the margin, inside the audio's length
+    await rig.conn.send(EMPTY)
+    await asyncio.sleep(0.4)
+    assert NOT_CAUGHT not in rig.tts_text() and rig.page.of("clear") == []

@@ -53,9 +53,10 @@ APPROVAL_REPEAT_NOTICE = "Say yes or no."
 NOT_CAUGHT_NOTICE = "I did not catch that."
 NOT_CAUGHT_EVERY_S = 5.0
 NOT_CAUGHT_WAIT_S = 1.0
-# How long after the last audio of a prompt came the page may still play it, when the
-# page reports no end of its playback: a prompt's audio arrives faster than it plays.
-PROMPT_PLAY_MAX_S = 30.0
+# A prompt's audio arrives faster than it plays, so the page still plays it when its
+# last audio has come. A page that reports no end of the playback is taken to be done
+# after the length of that audio and this margin: the audio cannot play for longer.
+PROMPT_PLAY_MARGIN_S = 5.0
 # The bare word the gateway takes for each choice of an approval prompt.
 APPROVAL_CHOICE_WORDS = {"once": "yes", "session": "session", "always": "always", "deny": "no"}
 # How long the reply must be quiet after its Hermes turn ended before its TTS request is
@@ -246,7 +247,7 @@ class VoiceSession:
         # The server said that its turn engine still learns the user's voice.
         self._barge_learning = False
         # The prompt whose audio has all come and which the page may still play: its
-        # request id and when its audio ended.
+        # request id and the time by which the page must have played it out.
         self._prompt_playing: Optional[tuple[str, float]] = None
         # The wait before the notice that an answer was not caught, and when it was last said.
         self._not_caught: Optional[asyncio.Task] = None
@@ -612,10 +613,13 @@ class VoiceSession:
             self._prompt_request = None
         cancelled = rid in self._dropped
         self._dropped.discard(rid)
-        silent = not self._audio_bytes.pop(rid, 0)
+        audio_bytes = self._audio_bytes.pop(rid, 0)
+        silent = not audio_bytes
         if prompt_ended and not silent and not cancelled:
             # The page has the prompt's audio and plays it out: it is still being spoken.
-            self._prompt_playing = (rid, asyncio.get_running_loop().time())
+            rate = getattr(self.client, "last_tts_sample_rate", None) or 24000
+            length = audio_bytes / 2 / rate
+            self._prompt_playing = (rid, asyncio.get_running_loop().time() + length + PROMPT_PLAY_MARGIN_S)
         await self.send_page({"type": "audio_end", "request_id": rid, "reason": frame.get("reason")})
         ours = rid in self._notice_requests or (
             self.reply_request is not None and rid == self.reply_request.request_id)
@@ -787,10 +791,11 @@ class VoiceSession:
 
     def _prompt_plays(self) -> bool:
         """Whether the page may still play a prompt whose audio has all come. The
-        page's playback stop ends that; a page that reports none is given a time."""
+        page's playback stop ends that; a page that reports none is given the length
+        of the audio and a margin."""
         if self._prompt_playing is None:
             return False
-        if asyncio.get_running_loop().time() - self._prompt_playing[1] > PROMPT_PLAY_MAX_S:
+        if asyncio.get_running_loop().time() > self._prompt_playing[1]:
             self._prompt_playing = None
             return False
         return True
