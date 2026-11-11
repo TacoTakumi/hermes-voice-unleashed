@@ -17,6 +17,10 @@ entry names next to its pinned commit.
   you are heard or an approval prompt opens. A "Sound cues" button turns
   it off and on and the browser keeps the choice; `cues=0` in the page
   URL starts with it off.
+- The page says when barge-in is off: "Learning your voice. Barge-in is
+  off." while VoiceManager's turn engine learns your voice at the start
+  of a session, and "Barge-in ready." when it has. It needs a VoiceManager
+  that sends the `barge_state` frame.
 
 ### Changed
 

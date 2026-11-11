@@ -251,6 +251,13 @@ thinking sound of Hermes Desktop and the Hermes CLI voice mode, one octave
 higher so that a phone loudspeaker plays it. The "Sound cues" button turns it off and on, and the browser keeps the choice. Add
 `&cues=0` to the URL to start with it off.
 
+A VoiceManager that runs its turn engine with the voice pre-filter hears
+no barge-in in a new session until it has heard about 3 seconds of your
+speech. For that time the page reads "Learning your voice. Barge-in is
+off.", and "Barge-in ready." when you can talk over a reply. It needs a
+VoiceManager that sends the `barge_state` frame; with an older one the
+page shows nothing of this.
+
 ### One voice device
 
 There is one voice device per profile. When you open the page on a second
