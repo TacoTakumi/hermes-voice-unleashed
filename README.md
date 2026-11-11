@@ -3,6 +3,12 @@
 A voice interface to Hermes. Talk to your agent hands-free, hear it answer,
 and see what it does while it works.
 
+<p>
+  <img src="docs/screenshots/question-with-choices.png" width="260" alt="A question from the model with its choices as buttons">
+  <img src="docs/screenshots/approval.png" width="260" alt="An approval prompt with the command and one button per choice">
+  <img src="docs/screenshots/sessions.png" width="260" alt="The first page with the sessions of the profile">
+</p>
+
 Most voice add-ons turn speech into text and text into speech. Voice Unleashed
 makes voice the way you run the agent:
 
@@ -16,7 +22,8 @@ makes voice the way you run the agent:
 - **See the work.** The page shows the conversation, each tool call as it
   runs and the model's reasoning, so a silent agent is never a mystery.
 - **Decide by voice.** Approval prompts and the model's questions are spoken.
-  You answer "yes", "no", a number or your own words, or you tap a button.
+  You answer "allow", "deny", "number two" or your own words, or you tap a
+  button.
 - **Pick up any session.** The page lists the profile's sessions from every
   platform (Telegram, the CLI, Desktop). Go on with one or start a new one.
   "New session" and "end session" also work as spoken commands.

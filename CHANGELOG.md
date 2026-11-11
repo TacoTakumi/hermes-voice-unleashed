@@ -6,6 +6,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.5.1]
+
+### Added
+
+- Three screenshots of the voice page at the top of the README: a question
+  with its choices, an approval prompt and the session list.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added
