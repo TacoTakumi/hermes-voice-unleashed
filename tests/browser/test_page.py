@@ -2293,6 +2293,9 @@ async def test_the_chooser_leads_with_a_continue_card_then_new_then_the_earlier_
     order = await page.evaluate("[...document.getElementById('chooser').children].map(e => e.id)")
     assert order == ["latest", "new", "earlier", "sessions"], order
     assert await page.is_visible("#earlier") and await page.text_content("#earlier") == "Earlier"
+    assert await page.evaluate("document.getElementById('earlier').tagName") == "H2"
+    assert await page.get_attribute("#sessions", "aria-labelledby") == "earlier"
+    assert await page.get_attribute("#latest", "aria-label") == "Continue"
     card = page.locator("#latest .session")
     assert await card.count() == 1
     assert await card.locator(".label").text_content() == "Continue"

@@ -230,10 +230,10 @@ header > * { flex-shrink: 0; }
 </header>
 <main>
   <section id="chooser" hidden aria-label="Sessions">
-    <ol id="latest" class="sessions"></ol>
+    <ol id="latest" class="sessions" aria-label="Continue"></ol>
     <button id="new" type="button">New session</button>
-    <p id="earlier" hidden>Earlier</p>
-    <ol id="sessions" class="sessions"></ol>
+    <h2 id="earlier" hidden>Earlier</h2>
+    <ol id="sessions" class="sessions" aria-labelledby="earlier"></ol>
   </section>
   <ol id="log" aria-live="polite"></ol>
 </main>
