@@ -6,6 +6,32 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.4.2]
+
+### Changed
+
+- During a turn the page reads "Working" while a tool call runs and
+  "Thinking" at all other times. Before, it read "Thinking" only until
+  its first update and "Working" after it, whatever Hermes did.
+- An answer to an approval prompt or to a question from the model goes on
+  with the same turn on the page: the reasoning line, the turn's time and
+  its tool lines stay. The utterance frame of such an answer carries
+  `resumed`.
+
+### Fixed
+
+- A reply that was cut (a barge with no words after it, for one) left
+  the page on "Listening" while Hermes still worked, and the turn's tool
+  lines and reasoning stopped. The page now stays on the turn until the
+  turn ends, and its tool lines and reasoning go on. The text of the cut
+  reply is still not spoken.
+- A turn that failed after it streamed text left the page on "Thinking"
+  or "Working" until the next utterance. The turn now ends on the page
+  after the error text.
+- Words that the page heard during a turn and that led to no utterance
+  left the page on "Hearing you". The page now goes back to the state of
+  the turn.
+
 ## [0.4.1] - 2026-11-11
 
 ### Changed
