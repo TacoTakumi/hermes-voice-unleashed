@@ -1092,6 +1092,18 @@ header > * { flex-shrink: 0; }
     if (!epoch) return "Unknown time";
     return new Date(epoch * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
+  // A session's source is the channel that started it. This page's own sessions need no
+  // tag; others show a readable name.
+  const OWN_SOURCE = "voice_unleashed";
+  const SOURCE_NAMES = { telegram: "Telegram", discord: "Discord", slack: "Slack", whatsapp: "WhatsApp",
+    signal: "Signal", matrix: "Matrix", email: "Email", sms: "SMS", cli: "CLI", api_server: "API",
+    webhook: "Webhook", cron: "Cron" };
+  function sourceName(source) {
+    if (!source || source === OWN_SOURCE) return "";
+    if (SOURCE_NAMES[source]) return SOURCE_NAMES[source];
+    const words = source.replace(/_/g, " ");
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
   // The newest session is a card (`card` true): Continue, its name, age and length, its
   // source. The others are lines: name, source, age.
   function sessionRow(row, card) {
@@ -1108,7 +1120,8 @@ header > * { flex-shrink: 0; }
     }
     // On a line the source, the mark and the age wrap as one group under a long title.
     const info = card ? button : button.appendChild(part("info", ""));
-    if (row.source) info.append(part("tag", row.source));
+    const source = sourceName(row.source);
+    if (source) info.append(part("tag", source));
     if (row.voice_attached) info.append(part("voice", "Voice on Desktop"));
     if (!card) info.append(part("when", ago(row.last_active)));
     button.addEventListener("click", () => choose(row.id));

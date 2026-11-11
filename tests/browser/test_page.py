@@ -174,9 +174,9 @@ async def test_the_chooser_shows_the_rows_as_received(site):
     names = await page.eval_on_selector_all("#chooser .session .name", "els => els.map(e => e.textContent)")
     assert names[0] == "Garden plans" and names[1] == "remind me about the dentist"
     assert re.search(r"\d", names[2]) and len(names[2]) <= 40  # the last-active time, nothing else
-    assert "5 min ago" in titled and "12 lines" in titled and "telegram" in titled
-    assert "2 h ago" in preview and "voice_unleashed" in preview
-    assert "3 days ago" in bare and "cli" in bare
+    assert "5 min ago" in titled and "12 lines" in titled and "Telegram" in titled
+    assert "2 h ago" in preview and "voice_unleashed" not in preview  # this page's own sessions carry no tag
+    assert "3 days ago" in bare and "CLI" in bare
     assert await page.locator("#chooser [aria-current]").count() == 0
     assert "Current" not in await page.text_content("#chooser")
     voice = await page.eval_on_selector_all("#chooser .session", "els => els.map(e => e.querySelector('.voice')?.textContent ?? null)")
@@ -2297,14 +2297,15 @@ async def test_the_chooser_leads_with_a_continue_card_then_new_then_the_earlier_
     assert await card.count() == 1
     assert await card.locator(".label").text_content() == "Continue"
     assert await card.locator(".name").text_content() == "Garden plans"
-    assert await card.locator(".tag").text_content() == "telegram"
+    assert await card.locator(".tag").text_content() == "Telegram"
     assert await card.locator(".voice").text_content() == "Voice on Desktop"
     meta = await card.locator(".meta").text_content()
     assert "5 min ago" in meta and "12 lines" in meta
     rows = page.locator("#sessions .session")
     assert await rows.count() == 2
     assert await rows.nth(0).locator(".name").text_content() == "remind me about the dentist"
-    assert [await rows.nth(i).locator(".tag").text_content() for i in range(2)] == ["voice_unleashed", "cli"]
+    assert await rows.nth(0).locator(".tag").count() == 0
+    assert await rows.nth(1).locator(".tag").text_content() == "CLI"
     assert await rows.nth(0).locator(".voice").count() == 0
     assert "2 h ago" in await rows.nth(0).locator(".when").text_content()
 
@@ -2337,3 +2338,11 @@ async def test_an_earlier_row_keeps_its_title_readable_on_a_narrow_screen(site):
             assert box["height"] < 50, (width, box)
         else:
             assert name >= 0.6 * box["width"], (width, name, box["width"])
+
+
+async def test_a_source_the_page_does_not_know_shows_as_words(site):
+    page = site.page
+    site.rows[2]["source"] = "home_assistant"
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    assert await page.locator("#sessions .session").nth(1).locator(".tag").text_content() == "Home assistant"
