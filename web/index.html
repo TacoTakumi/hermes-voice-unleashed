@@ -263,6 +263,7 @@ header > * { flex-shrink: 0; }
   const chooserEl = $("chooser"), sessionsEl = $("sessions"), newEl = $("new");
   const latestEl = $("latest"), earlierEl = $("earlier");
   const headerEl = document.querySelector("header"), footerEl = document.querySelector("footer");
+  const mainEl = document.querySelector("main");
   const reasoningEl = $("reasoning"), reasonFoldEl = $("reason-fold"), reasonLineEl = $("reason-line");
   const reasonFullEl = $("reason-full");
   const activityEl = $("activity"), toolsEl = $("tools"), foldEl = $("fold"), elapsedEl = $("elapsed");
@@ -301,9 +302,36 @@ header > * { flex-shrink: 0; }
     li.className = "turn " + kind;
     li.textContent = text;
     logEl.appendChild(li);
-    li.scrollIntoView({ block: "end", behavior: reduceMotion ? "auto" : "smooth" });
+    logPinSoon();
     return li;
   }
+  // The log follows its end, by the rule of the tool list below: it moves when a line is
+  // added, when reply text streams into a line and when the header takes or gives back
+  // room, unless the user scrolled it up to read. Only a scroll right after the user's
+  // own gesture counts, and a scroll back to the end makes the log follow again. It moves
+  // without animation: a smooth scroll started again for each piece of text lags behind it.
+  let logAtEnd = true, logGestureUntil = 0, logPinQueued = false;
+  function logToEnd() {
+    mainEl.scrollTop = mainEl.scrollHeight;
+    logAtEnd = true;
+  }
+  for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+    mainEl.addEventListener(kind, () => { logGestureUntil = Date.now() + 1000; }, { passive: true });
+  }
+  mainEl.addEventListener("scroll", () => {
+    const now = Date.now();
+    if (now > logGestureUntil || logEl.hidden) return;
+    logGestureUntil = Math.max(logGestureUntil, now + 300);
+    logAtEnd = mainEl.scrollTop + mainEl.clientHeight >= mainEl.scrollHeight - 4;
+  });
+  function logPinSoon() {
+    if (logPinQueued) return;
+    logPinQueued = true;
+    requestAnimationFrame(() => { logPinQueued = false; if (logAtEnd && !logEl.hidden) logToEnd(); });
+  }
+  const logSizes = new ResizeObserver(logPinSoon);
+  logSizes.observe(mainEl);
+  logSizes.observe(logEl);
   function listening() {
     if (!running || ending) return;
     show(muted ? "Muted" : "Listening", "none", muted ? "Your microphone is off." : "Say something.");
@@ -664,6 +692,7 @@ header > * { flex-shrink: 0; }
         if (f.session_id && running) setUrlSession(f.session_id);
         logEl.textContent = "";
         hermesTurn = null;
+        logAtEnd = true; // a log that starts over shows its newest line
         for (const line of f.lines || []) addTurn(line.role === "user" ? "user" : "hermes", line.text || "");
         break;
       case "ready":
@@ -722,6 +751,7 @@ header > * { flex-shrink: 0; }
         absorbing = null;
         if (!hermesTurn) hermesTurn = addTurn("hermes", "");
         hermesTurn.textContent += f.text;
+        logPinSoon();
         turnStreamed = true;
         break;
       case "reply": {
@@ -738,6 +768,7 @@ header > * { flex-shrink: 0; }
         if (streamed && text.length > streamed.length && text.startsWith(streamed)) {
           const soFar = hermesTurn.textContent.trimStart();
           hermesTurn.textContent = f.text;
+          logPinSoon();
           absorbing = { li: hermesTurn, text: f.text.trimStart(), streamed: soFar };
         } else if (text && !streamed.endsWith(text)) {
           const li = addTurn("hermes", f.text);
@@ -1155,6 +1186,7 @@ header > * { flex-shrink: 0; }
     sessionChoice = id;
     chooserEl.hidden = true;
     logEl.hidden = meter.hidden = footerEl.hidden = false;
+    logAtEnd = true;
     start();
   }
   // --- the URL: session=<id> while on a session, bare on the chooser -----------------
