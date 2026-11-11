@@ -70,7 +70,7 @@ body[data-who="you"] #state { color: var(--you); }
 body[data-who="hermes"] #state { color: var(--hermes); }
 body[data-who="alert"] #state { color: var(--alert); }
 /* The time of a running turn sits beside the state word, so it comes and goes without
-   moving what is under it. Where the word leaves no room it goes under the word. */
+   moving what is under it. */
 #headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
 #elapsed { margin: 0; color: var(--hermes); font-size: 18px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #elapsed[hidden] { display: none; }
@@ -209,6 +209,8 @@ header > * { flex-shrink: 0; }
   header { grid-row: 1 / span 2; padding: 48px 32px; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
   main { grid-column: 2; padding-top: 48px; }
   footer { grid-column: 2; }
+  /* Beside the large state word only a short time fits: here the time keeps its own line. */
+  #elapsed { flex-basis: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { #state { transition: none; } }
 </style>

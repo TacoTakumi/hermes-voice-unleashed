@@ -21,9 +21,10 @@ entry names next to its pinned commit.
   above New session. The other sessions follow under Earlier as thin lines
   with their source and age. A session's source shows as the channel's
   name (Telegram, CLI); sessions this page started carry no source tag.
-- In a session the level meter is a low strip and the time of a running
-  turn sits beside the state word, so the log gets more of the screen and
-  the page moves less when a turn starts and ends.
+- In a session the level meter is a low strip, so the log gets more of the
+  screen. On a phone the time of a running turn sits beside the state word:
+  it takes no line of its own and the page moves less when a turn starts
+  and ends.
 
 ### Fixed
 

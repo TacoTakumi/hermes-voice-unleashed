@@ -2520,3 +2520,21 @@ async def test_the_elapsed_time_sits_beside_the_state_and_takes_no_line_of_its_o
         assert time["top"] >= state["top"] and time["bottom"] <= state["bottom"] + 1, box
         assert time["right"] <= 390, box
     assert box["shown"] == box["hidden"] == box["longShown"], box
+
+
+@pytest.mark.parametrize("width", [900, 1280])
+async def test_the_elapsed_time_keeps_its_own_line_on_a_wide_screen(stack, width):
+    """Beside the wide state word only a short time fits: a time that went under the word
+    at the first tool call would move everything below it in the middle of a turn."""
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": width, "height": 800})
+    await _listening(fake, page)
+    await sessions[0].send_page({"type": "utterance", "text": "run the tests"})
+    await page.wait_for_selector("#elapsed:not([hidden])")
+    tops = await page.evaluate("""() => {
+        const el = (id) => document.getElementById(id), rect = (id) => el(id).getBoundingClientRect();
+        return ['0:05', '0:05, 1 tool', '12:34, 12 tools'].map(text => {
+            el('elapsed').textContent = text;
+            return { text, under: rect('elapsed').top >= rect('state').bottom - 12, detail: rect('detail').top }; }); }""")
+    assert all(t["under"] for t in tops), tops
+    assert len({t["detail"] for t in tops}) == 1, tops
