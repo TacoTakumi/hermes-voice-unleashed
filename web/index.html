@@ -314,6 +314,10 @@ header > * { flex-shrink: 0; }
   // How long reply audio must be silent before the page stops showing Speaking: chunks
   // arrive paced, so the queue can run dry for a moment between two of them.
   const QUIET_MS = 600;
+  // How long the page shows Hearing you after the last words it was sent: words that
+  // lead to nothing may get no frame that says so.
+  const HEARD_MS = 4000;
+  let heardTimer = null;
 
   // --- what the page shows --------------------------------------------------------
   // While an approval prompt is open the turn waits for the user, whatever else is true:
@@ -801,7 +805,11 @@ header > * { flex-shrink: 0; }
         break;
       case "transcript":
         transcriptEl.textContent = f.text || "";
-        if (f.text && !(reply && reply.audible)) show("Hearing you", "you");
+        clearTimeout(heardTimer);
+        if (f.text && !(reply && reply.audible)) {
+          show("Hearing you", "you");
+          heardTimer = setTimeout(() => { if (stateEl.textContent === "Hearing you") status(); }, HEARD_MS);
+        }
         // The words are gone and no utterance took them: the floor goes back.
         else if (!f.text && stateEl.textContent === "Hearing you") status();
         break;

@@ -317,3 +317,14 @@ async def test_a_late_event_of_a_finished_turn_does_not_start_it_again(plugin, l
         await wait_for(lambda: page.of("turn_done"))
         assert not session.turn_running
 
+
+
+async def test_a_turn_end_tells_the_page_that_the_heard_words_are_gone(plugin):
+    """Words shown as heard that lead to no utterance: the page must not go on showing
+    them as being heard."""
+    async with rig(plugin) as (hooks, conn, page, messages):
+        await conn.send({"type": "transcription", "segment_index": 0, "text": "...", "is_final": False})
+        await wait_for(lambda: [f for f in page.of("transcript") if f["text"]])
+        await conn.send({"type": "turn_end", "text": "", "turn_id": 0})
+        await wait_for(lambda: page.of("transcript")[-1]["text"] == "")
+        assert messages == [] and page.of("utterance") == []

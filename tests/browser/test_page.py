@@ -2820,3 +2820,16 @@ async def test_tool_frames_leave_waiting_for_approval_while_a_prompt_is_open(sta
     await session.send_page(_tool("c2", "tool_end"))
     await page.wait_for_function("document.querySelectorAll('#tools .tool.done').length === 1")
     assert await page.text_content("#state") == "Waiting for approval"
+
+
+async def test_hearing_you_ends_by_itself_when_no_more_words_come(stack):
+    """Words that lead to nothing may get no frame that says so: the page gives the
+    floor back after a few seconds without a transcript."""
+    session, page = await _turn_from_an_utterance_frame(stack)
+    await session.send_page({"type": "transcript", "text": "hm", "final": False})
+    await _state_is(page, "Hearing you")
+    await asyncio.sleep(2.5)
+    await session.send_page({"type": "transcript", "text": "hm hm", "final": False})  # still talking
+    await asyncio.sleep(2.5)
+    assert await page.text_content("#state") == "Hearing you"
+    await _state_is(page, "Thinking", timeout=6000)

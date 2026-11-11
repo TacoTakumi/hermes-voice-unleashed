@@ -307,6 +307,11 @@ class VoiceSession:
     async def _read_turn_ends(self) -> None:
         async for frame in self.duplex.turn_ends():
             await self.tracker.on_turn_end(frame)
+            # The words the page showed as heard are gone, into an utterance or into
+            # nothing. VoiceManager sends no empty transcription, so the page is told
+            # here: it must not go on showing that it hears the user.
+            if not self.attached:
+                await self.send_page({"type": "transcript", "text": "", "final": True})
 
     async def _read_errors(self) -> None:
         async for frame in self.duplex.errors():
