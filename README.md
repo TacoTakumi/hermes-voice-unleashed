@@ -289,8 +289,9 @@ is dropped. Your new words then go to Hermes, which stops the old turn.
 Two spoken commands end or restart the session from the page. A command is
 the whole utterance, in any case and with any punctuation:
 
-- "end session", "end the session" or "end this session" stops a reply that
-  is playing and says "Session ended". The page stops the microphone at once,
+- "end session", "end the session", "end this session", "end of session",
+  "end discussion" or "end of discussion" stops a reply that is playing and
+  says "Session ended". The page stops the microphone at once,
   lets the notice play out under the heading "Session ended", then lets the
   screen go off and shows the session list again.
 - "new session", "start a new session" or "start new session" stops a playing
