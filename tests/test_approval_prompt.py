@@ -169,6 +169,22 @@ def test_the_sentence_holds_no_code(plugin):
     ("sudo -e /etc/passwd", ""),
     ("sudo --edit /etc/passwd", ""),
     ("sudoedit /etc/passwd", "sudoedit"),
+    ("PID=$(pgrep -f server.py) && kill -9 $PID", ""),
+    ("BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push --force origin $BRANCH", ""),
+    ("CID=$(docker ps -q -f name=web) && docker rm -f $CID", ""),
+    ("X=`git rev-parse HEAD` make", ""),
+    ("env FOO=$(cat a b) rm x", ""),
+    ("FOO=$((1 + 2)) rm x", ""),
+    ('PID="$(pgrep -f x)" kill', ""),
+    ("command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh", ""),
+    ("command -V docker", ""),
+    ("command rm x", "rm"),
+    ("-rf x", ""),
+    ("#!/bin/bash", ""),
+    ("# remove the build\nrm -rf build", ""),
+    ("timeout .5 rm x", "rm"),
+    ("timeout 1e3 rm x", "rm"),
+    ("timeout 2.5s rm x", "rm"),
 ])
 def test_the_program_of_a_command(plugin, command, program):
     assert plugin.adapter.command_program(command) == program

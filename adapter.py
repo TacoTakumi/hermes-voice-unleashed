@@ -263,13 +263,16 @@ _COMMAND_PREFIXES: dict[str, frozenset[str]] = {
     "nohup": frozenset(), "command": frozenset(), "setsid": frozenset(),
 }
 # Options that make a prefix word do something else than run the next program.
-_NOT_A_RUN: dict[str, frozenset[str]] = {"sudo": frozenset({"-e", "--edit", "-l", "--list", "-v", "--validate"})}
+_NOT_A_RUN: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-e", "--edit", "-l", "--list", "-v", "--validate"}),
+    "command": frozenset({"-v", "-V"}),  # looks a name up, runs nothing
+}
 # Long options of those words that take no value. Any other long option without "="
 # may take one, and then the program cannot be told.
 _PLAIN_LONG_OPTIONS = frozenset({"--", "--login", "--preserve-env", "--non-interactive", "--stdin", "--shell",
                                  "--set-home", "--reset-timestamp", "--ignore-environment", "--null",
                                  "--foreground", "--preserve-status", "--verbose", "--wait", "--fork"})
-_NUMBER_OR_DURATION = re.compile(r"\d+(\.\d+)?[smhd]?$")
+_NUMBER_OR_DURATION = re.compile(r"(\d+(\.\d*)?|\.\d+)(e\d+)?[smhd]?$")
 _PROGRAM_NAME = re.compile(r"[\w.+-]+$")
 
 
@@ -293,6 +296,11 @@ def command_program(command: str) -> str:
         if skip_value:
             skip_value = False
             continue
+        if "$(" in token or "`" in token or token.startswith("#"):
+            # A command substitution: the words inside it are another command, and one
+            # with a space in it is split here into words that look like a program. A
+            # comment or a script's first line names no program either.
+            return ""
         if re.match(r"\w+=", token):
             continue
         if re.match(r"\d*[<>]|&>", token):
@@ -323,7 +331,7 @@ def command_program(command: str) -> str:
             not_a_run = _NOT_A_RUN.get(token, frozenset())
             continue
         name = token.rsplit("/", 1)[-1]
-        if name in _SHELL_WORDS or not _PROGRAM_NAME.match(name):
+        if name in _SHELL_WORDS or name.startswith("-") or not _PROGRAM_NAME.match(name):
             return ""
         return name
     return ""
