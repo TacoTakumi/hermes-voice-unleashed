@@ -443,7 +443,7 @@ async def test_a_rejoin_with_playback_locked_shows_one_unmute_button_that_resume
     await page.wait_for_function(LISTENING, timeout=10000)
     await page.wait_for_selector("#unmute:not([hidden])", timeout=5000)
     assert await page.text_content("#unmute") == "Tap for sound"
-    assert await page.locator("button:visible", has_text="sound").count() == 1
+    assert await page.locator("button:visible", has_text="Tap for sound").count() == 1
     assert await page.evaluate("window.resumeCalls") == 1
     assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
     assert await page.text_content("#state") == "Listening"
