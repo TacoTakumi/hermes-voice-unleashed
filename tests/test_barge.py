@@ -349,3 +349,31 @@ async def test_a_server_that_sends_no_barge_state_gives_the_page_none(plugin):
         await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
         await wait_for(lambda: messages)
         assert page.of("barge_state") == []
+
+
+LOST = {"type": "error", "error_type": "turn_engine_lost", "message": "the turn engine is gone"}
+
+
+async def test_a_lost_turn_engine_ends_the_learning_state_on_the_page(plugin):
+    """Without the turn engine speech stops a reply again, and the server says no more
+    about its barge state: the page must not go on saying that barge-in is off."""
+    async with rig(plugin, barge_state="learning") as (hooks, conn, page, messages):
+        await wait_for(lambda: page.of("barge_state"))
+        await conn.send(LOST)
+        await wait_for(lambda: len(page.of("barge_state")) == 2)
+        assert page.of("barge_state")[1] == {"type": "barge_state", "state": "ready"}
+
+
+async def test_a_lost_turn_engine_says_nothing_of_barge_state_when_none_was_learning(plugin):
+    async with rig(plugin, barge_state="learning") as (hooks, conn, page, messages):
+        await conn.send({"type": "barge_state", "state": "ready"})
+        await wait_for(lambda: len(page.of("barge_state")) == 2)
+        await conn.send(LOST)
+        await wait_for(lambda: conn.json_frames("turn_start"))
+        await asyncio.sleep(0.2)
+        assert len(page.of("barge_state")) == 2
+    async with rig(plugin) as (hooks, conn, page, messages):
+        await conn.send(LOST)
+        await wait_for(lambda: conn.json_frames("turn_start"))
+        await asyncio.sleep(0.2)
+        assert page.of("barge_state") == []

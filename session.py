@@ -232,6 +232,8 @@ class VoiceSession:
         self._turn_over = False
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
+        # The server said that its turn engine still learns the user's voice.
+        self._barge_learning = False
         self.turn_engine_refusal: Optional[str] = None
         self._tasks: list[asyncio.Task] = []
         self._failed = False  # the end was logged and the page told; later ends are silent
@@ -321,6 +323,11 @@ class VoiceSession:
             if frame.get("error_type") == "turn_engine_lost":
                 self.turn_engine = None
                 self.tracker.turn_engine_lost()
+                if self._barge_learning:
+                    # The engine that was learning the voice is gone and will say no
+                    # more. From here speech stops a reply as it does without one.
+                    self._barge_learning = False
+                    await self.send_page({"type": "barge_state", "state": "ready"})
                 self.tracker.open_turn(await self.duplex.turn_start(timeout=TURN_START_TIMEOUT_S))
             else:
                 logger.info("voice page %s: VoiceManager error frame: %s", self.client_id, frame)
@@ -567,6 +574,7 @@ class VoiceSession:
                 # page says so. Only the states the page knows go on.
                 state = event[1].get("state")
                 if state in BARGE_STATES:
+                    self._barge_learning = state == "learning"
                     await self.send_page({"type": "barge_state", "state": state})
 
     async def _on_audio_end(self, frame: dict) -> None:
