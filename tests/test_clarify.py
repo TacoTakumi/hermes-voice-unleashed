@@ -221,6 +221,15 @@ def test_a_choice_name_that_begins_with_a_lead_in_word_is_still_found_in_a_sente
     assert plugin.adapter.spoken_choice(said, choices) == sent
 
 
+def test_a_sentence_answer_is_at_most_five_words_long(plugin):
+    """A longer utterance is a message in the user's own words, also when each of its
+    words could lead into an answer."""
+    assert plugin.adapter.spoken_choice("I think I pick two", COLOURS) == "2"
+    assert plugin.adapter.spoken_choice("Well I think I pick two", COLOURS) is None
+    assert plugin.adapter.spoken_choice("I think I pick blue please", COLOURS) == "Blue"  # please is not counted
+    assert plugin.adapter.spoken_choice("Okay well I would like blue", COLOURS) is None
+
+
 def test_a_choice_name_wins_over_a_number_and_an_open_question_maps_nothing(plugin):
     assert plugin.adapter.spoken_choice("Two.", ["Two", "One"]) == "Two"
     assert plugin.adapter.spoken_choice("Four.", None) is None
