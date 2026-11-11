@@ -32,7 +32,7 @@ from urllib.parse import urlsplit
 from websockets.exceptions import ConnectionClosed
 
 from . import vm_client
-from .turns import END_SESSION, NEW_SESSION, TurnTracker, heard_words, spoken_command
+from .turns import END_SESSION, NEW_SESSION, TurnTracker, heard_words, spoken_approval, spoken_command
 from .vm_client import TurnEngineError, VoiceManagerClient
 
 logger = logging.getLogger(__name__)
@@ -532,8 +532,8 @@ class VoiceSession:
             await self._new_session()
             return
         self._turn_ended_at = asyncio.get_running_loop().time()
-        words = heard_words(text)
-        if len(words) == 1 and await self._answers_approval(words[0]):
+        answer = await self._approval_answer(text)
+        if answer is not None:
             # The gateway consumes a bare approval word for the blocked turn, which then
             # resumes under its original message id. The cancel that a new utterance
             # causes closed the reply, so it opens again under that id to take the
@@ -546,9 +546,9 @@ class VoiceSession:
             # does not take that turn's text: it is shown by the final send but not
             # spoken. The window is a few milliseconds.
             self._reopen_reply()
-            await self.send_page({"type": "utterance", "text": words[0], **self._next_epoch()})
+            await self.send_page({"type": "utterance", "text": answer, **self._next_epoch()})
             if self._on_utterance is not None:
-                await self._on_utterance(words[0], uuid.uuid4().hex)
+                await self._on_utterance(answer, uuid.uuid4().hex)
             return
         if await self._answers_question():
             # The model asked a question and its turn waits for the answer. The gateway
@@ -570,22 +570,29 @@ class VoiceSession:
         if self._on_utterance is not None:
             await self._on_utterance(text, self.reply_id)
 
-    async def _answers_approval(self, word: str) -> bool:
-        """Whether the bare ``word`` answers an approval the chat waits for."""
+    async def _approval_answer(self, text: str) -> Optional[str]:
+        """The bare word to send the gateway when ``text`` answers an approval the
+        chat waits for: one of the gateway's own words said alone, or the word a
+        spoken approve or deny phrase stands for. None for any other utterance."""
         if self._approval_words is None or self._approval_pending is None:
-            return False
+            return None
         try:
-            if word not in self._approval_words():
-                return False
+            words = heard_words(text)
+            if len(words) == 1 and words[0] in self._approval_words():
+                answer = words[0]
+            else:
+                answer = spoken_approval(text)
+            if answer is None:
+                return None
             if await self._approval_pending():
-                return True
+                return answer
         except Exception:
             # The check asks the gateway; a failure there must not end the voice
-            # session. The word goes on as an ordinary utterance.
+            # session. The utterance goes on as ordinary text.
             logger.warning("voice page %s: approval check failed", self.client_id, exc_info=True)
-            return False
+            return None
         self._prompt_reply = None  # the approval was answered elsewhere or timed out
-        return False
+        return None
 
     async def _answers_question(self) -> bool:
         """Whether the chat waits for the answer to a question the model asked."""

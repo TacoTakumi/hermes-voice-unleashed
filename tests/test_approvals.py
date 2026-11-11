@@ -153,16 +153,50 @@ async def test_an_approval_word_with_nothing_pending_is_an_ordinary_utterance(ri
     assert rig.tts_text() == "Let me check. "  # the old reply takes no more text
 
 
-async def test_more_than_one_word_is_an_ordinary_utterance_even_with_an_approval_pending(rig):
+@pytest.mark.parametrize("said", ["Yes, but change the path first.", "No, use the other directory for all of them."])
+async def test_a_longer_utterance_is_an_ordinary_utterance_even_with_an_approval_pending(rig, said):
     reply_id = await _reply_in_progress(rig)
     rig.wants(True)
-    await _heard(rig, "Yes please.")
-    assert rig.events[-1].text == "Yes please."
+    await _heard(rig, said)
+    assert rig.events[-1].text == said
     assert rig.session.reply_id != reply_id
     assert rig.events[-1].message_id == rig.session.reply_id
     await rig.session.on_reply_delta(reply_id, "t1", 2, "Done. ")
     await asyncio.sleep(0.1)
     assert rig.tts_text() == "Let me check. "
+
+
+@pytest.mark.parametrize("said, word", [
+    ("Yes, please.", "yes"), ("Go ahead.", "yes"), ("Yeah.", "yes"), ("OK", "ok"), ("Do it!", "yes"),
+    ("No.", "no"), ("No, just leave it.", "no"), ("Nope.", "no"), ("Cancel that", "no"),
+])
+async def test_a_spoken_approve_or_deny_phrase_answers_the_pending_approval(rig, said, word):
+    reply_id = await _reply_in_progress(rig)
+    rig.session._approval_words = lambda: ("yes", "no", "ok")
+    rig.wants(True)
+    await _heard(rig, said)
+    assert rig.events[-1].text == word and rig.events[-1].message_id != reply_id
+    assert rig.session.reply_id == reply_id and rig.session.reply_open  # the blocked turn's reply
+    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": word}])
+
+
+@pytest.mark.parametrize("said", ["Go ahead.", "No, just leave it."])
+async def test_an_approve_or_deny_phrase_with_nothing_pending_is_an_ordinary_utterance(rig, said):
+    reply_id = await _reply_in_progress(rig)
+    rig.wants(False)
+    await _heard(rig, said)
+    assert rig.events[-1].text == said
+    assert rig.session.reply_id != reply_id
+    assert rig.events[-1].message_id == rig.session.reply_id
+
+
+def test_which_utterances_answer_an_approval(plugin):
+    answer = plugin.turns.spoken_approval
+    assert answer("Yes please") == "yes" and answer("yep") == "yes" and answer("Sure.") == "yes"
+    assert answer("yes but wait") is None and answer("sure thing do whatever you like") is None
+    assert answer("No thanks") == "no" and answer("no no no no no") == "no"
+    assert answer("no I do not want that") is None  # six words: a message
+    assert answer("I say no") is None and answer("") is None
 
 
 async def test_a_fresh_page_with_an_approval_pending_takes_the_resumed_turn_under_any_id(rig):

@@ -57,6 +57,31 @@ def spoken_command(text: str) -> Optional[str]:
     return SPOKEN_COMMANDS.get(normalized_phrase(text))
 
 
+# Spoken answers to an approval prompt, beyond the gateway's own bare words.
+# Approve only on a whole utterance: "yes, but change the path" must not run a command.
+APPROVE_PHRASES = frozenset({
+    "yes please", "yes go ahead", "yes do it", "go ahead", "do it", "approve it",
+    "ok go ahead", "okay go ahead", "yeah", "yep", "sure",
+})
+# Deny on a short utterance that starts with one of these: a wrong deny costs nothing,
+# since any other utterance makes the gateway withdraw the approval anyway. A longer one
+# stays a message, so the model gets what it says.
+DENY_FIRST_WORDS = frozenset({"no", "nope", "deny", "reject", "cancel"})
+DENY_MAX_WORDS = 5
+APPROVE, DENY = "yes", "no"  # the bare words the gateway takes in every language
+
+
+def spoken_approval(text: str) -> Optional[str]:
+    """The bare word that ``text`` means as an answer to an approval prompt, or None
+    when it is not such an answer."""
+    words = heard_words(text)
+    if " ".join(words) in APPROVE_PHRASES:
+        return APPROVE
+    if words and len(words) <= DENY_MAX_WORDS and words[0] in DENY_FIRST_WORDS:
+        return DENY
+    return None
+
+
 class TurnTracker:
     def __init__(self, dispatch: Dispatch, cancel: Cancel, turn_engine: Optional[str] = None) -> None:
         self._dispatch = dispatch
