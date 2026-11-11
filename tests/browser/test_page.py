@@ -2319,3 +2319,21 @@ async def test_the_chooser_with_one_session_has_no_earlier_label(site):
     await page.click("#latest .session button")
     await site.fake.wait_connections(1, timeout=10)
     assert site.ws_requests[0]["session"] == ["sid-titled-111"]
+
+
+async def test_an_earlier_row_keeps_its_title_readable_on_a_narrow_screen(site):
+    """On a phone the source tag, the Voice on Desktop mark and the age go under the
+    title rather than squeeze it; on a wide screen the row stays one line."""
+    page = site.page
+    site.rows[1]["voice_attached"] = True
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    row = "#sessions .session:first-child button"
+    for width, one_line in ((320, False), (390, False), (1280, True)):
+        await page.set_viewport_size({"width": width, "height": 800})
+        name, box = await page.evaluate("""s => { const b = document.querySelector(s);
+            return [b.querySelector('.name').getBoundingClientRect().width, b.getBoundingClientRect()]; }""", row)
+        if one_line:
+            assert box["height"] < 50, (width, box)
+        else:
+            assert name >= 0.6 * box["width"], (width, name, box["width"])
