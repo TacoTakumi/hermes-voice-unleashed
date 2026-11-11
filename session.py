@@ -385,6 +385,7 @@ class VoiceSession:
     async def on_turn_start(self, reply_id: str) -> None:
         """The turn's model call is about to start: nothing to show, the turn runs."""
         await self._approval_sync()
+        await self._question_sync()
         self._in_turn(reply_id)
 
     def turn_failed(self, reply_id: str = "") -> None:
@@ -492,6 +493,7 @@ class VoiceSession:
         # the gateway withdrew it or it timed out, and also for a turn whose reply a
         # newer utterance replaced.
         await self._approval_sync()
+        await self._question_sync()
         if not self.attached and self._shows(reply_id):
             await self.send_page({"type": "tool_end", "id": call_id, "status": status,
                                   "duration_ms": duration_ms})
@@ -827,6 +829,12 @@ class VoiceSession:
         await self.send_page({"type": "question", "request_id": request_id, "question": question,
                               "choices": [{"number": number, "label": label}
                                           for number, label in enumerate(self._question_choices, 1)]})
+
+    async def _question_sync(self) -> None:
+        """Close the question card when its question waits no more: it timed out,
+        was skipped or was answered somewhere else, and the turn goes on."""
+        if self._question_id is not None and not await self._answers_question():
+            await self._end_question()
 
     async def _end_question(self) -> bool:
         """Close the question card on the page; whether one was open."""

@@ -473,3 +473,17 @@ async def test_a_turn_empty_without_the_turn_engine_gets_no_notice(rig, clarify,
     await rig.conn.send(EMPTY)
     await asyncio.sleep(0.4)
     assert NOT_CAUGHT not in rig.tts_text()
+
+
+async def test_the_card_of_a_question_that_waits_no_more_closes_when_its_tool_ends(rig, clarify):
+    """The question timed out or was answered on another device: the turn goes on,
+    and the page must not go on asking for an answer."""
+    reply_id = await _asked_with_choices(rig, clarify)
+    await rig.session.on_tool_end(reply_id, "c0", "ok", 5)  # another tool; the question still waits
+    await asyncio.sleep(0.05)
+    assert rig.page.of("question_end") == []
+    key = rig.adapter._source_session_key(rig.adapter._voice_source("voice"))
+    clarify_gateway.clear_session(key)
+    await rig.session.on_tool_end(reply_id, "c1", "ok", 120000)  # the question's own tool call
+    await wait_for(lambda: rig.page.of("question_end"))
+    assert rig.page.of("question_end") == [{"type": "question_end", "request_id": "q1"}]
