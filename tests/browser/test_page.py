@@ -2863,3 +2863,129 @@ async def test_a_tool_call_shows_as_working_also_while_the_reply_plays(stack):
     await session.send_page(_tool("c2", "tool_end"))
     await _state_is(page, "Speaking", timeout=1000)
     await _state_is(page, "Thinking", timeout=8000)  # the audio ran out and the turn goes on
+
+
+# --- the thinking sound: quiet blips while a turn runs and no reply audio plays --------
+# Every oscillator the page starts is recorded with its time and its first frequency, and
+# every gain ramp with its target, so a test reads the sound without hearing it.
+CUES_RECORDED = """
+window.cues = [];
+window.cueGains = [];
+const realOscillator = AudioContext.prototype.createOscillator;
+AudioContext.prototype.createOscillator = function () {
+  const osc = realOscillator.call(this);
+  const cue = { at: null, freq: null, glide: null, type: null };
+  const freq = osc.frequency;
+  const realSet = freq.setValueAtTime.bind(freq), realRamp = freq.exponentialRampToValueAtTime.bind(freq);
+  freq.setValueAtTime = (value, time) => { cue.freq = value; return realSet(value, time); };
+  freq.exponentialRampToValueAtTime = (value, time) => { cue.glide = value; return realRamp(value, time); };
+  const realStart = osc.start.bind(osc);
+  osc.start = (time) => { cue.at = performance.now(); cue.type = osc.type; window.cues.push(cue); return realStart(time); };
+  return osc;
+};
+const realGain = AudioContext.prototype.createGain;
+AudioContext.prototype.createGain = function () {
+  const node = realGain.call(this);
+  const gain = node.gain;
+  const realRamp = gain.exponentialRampToValueAtTime.bind(gain);
+  gain.exponentialRampToValueAtTime = (value, time) => { window.cueGains.push(value); return realRamp(value, time); };
+  return node;
+};
+"""
+CUE_COUNT = "window.cues.length"
+
+
+async def _cues(page, at_least, timeout=6000):
+    await page.wait_for_function(f"{CUE_COUNT} >= {at_least}", timeout=timeout)
+    return await page.evaluate("window.cues")
+
+
+def _page_frames(session):
+    """The JSON frames the page sends from now on."""
+    sent = []
+
+    async def on_page_frame(frame, keep=session.on_page_frame):
+        sent.append(frame)
+        await keep(frame)
+
+    session.on_page_frame = on_page_frame
+    return sent
+
+
+@pytest.mark.parametrize("stack", [CUES_RECORDED], indirect=True)
+async def test_the_thinking_sound_plays_while_a_turn_runs_in_silence(stack):
+    """Two quiet sine blips in turn, G4 and E4, each with a downward glide, 0.8 to 1.2 s
+    apart. The server hears nothing of it: no playback frame."""
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    sent = _page_frames(session)
+    assert await page.evaluate(CUE_COUNT) == 0  # nobody works yet
+    begun = await page.evaluate("performance.now()")
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    cues = await _cues(page, 4)
+    assert [c["freq"] for c in cues[:4]] == [392, 329.6, 392, 329.6], cues
+    assert all(c["type"] == "sine" for c in cues), cues
+    for cue in cues[:4]:
+        assert cue["glide"] == pytest.approx(cue["freq"] * 0.72), cue
+    assert cues[0]["at"] - begun >= 350, (begun, cues[0])
+    gaps = [b["at"] - a["at"] for a, b in zip(cues, cues[1:4])]
+    assert all(780 <= gap <= 1350 for gap in gaps), gaps
+    gains = await page.evaluate("window.cueGains")
+    assert max(gains) == pytest.approx(0.08), gains
+    assert not [f for f in sent if f.get("type") == "playback"], sent
+
+
+@pytest.mark.parametrize("stack", [CUES_RECORDED], indirect=True)
+async def test_the_thinking_sound_gives_way_to_reply_audio_and_returns_after_it(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    await _cues(page, 1)
+    await _notice_to_the_page(session, "n1", seconds=2.5)
+    await _state_is(page, "Speaking")
+    during = await page.evaluate(CUE_COUNT)
+    # The audio ran out and the turn goes on: until then no blip started.
+    await page.wait_for_function(f"{STATE} === 'Thinking' || {CUE_COUNT} > {during}", timeout=8000)
+    assert await page.evaluate(CUE_COUNT) == during
+    await _cues(page, during + 1)
+
+
+async def _turn_done(session, page):
+    await session.send_page({"type": "turn_done"})
+    await _state_is(page, "Listening")
+
+
+async def _words_heard(session, page):
+    await session.send_page({"type": "transcript", "text": "wait a moment"})
+    await _state_is(page, "Hearing you")
+
+
+async def _approval_asked(session, page):
+    await session.send_page(APPROVAL)
+    await _state_is(page, "Waiting for approval")
+
+
+async def _session_ended(session, page):
+    await session.send_page({"type": "session_end"})
+    await page.wait_for_function(f"!['Thinking', 'Working'].includes({STATE})", timeout=3000)
+
+
+async def _socket_closed(session, page):
+    await session.page.close()
+    await page.wait_for_function(f"!['Thinking', 'Working'].includes({STATE})", timeout=3000)
+
+
+@pytest.mark.parametrize("stack", [CUES_RECORDED], indirect=True)
+@pytest.mark.parametrize("event", [_turn_done, _words_heard, _approval_asked, _session_ended, _socket_closed])
+async def test_the_thinking_sound_stops_when_the_silent_work_ends(stack, event):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    await _cues(page, 1)
+    await event(session, page)
+    after = await page.evaluate(CUE_COUNT)
+    await asyncio.sleep(1.6)  # longer than the longest gap between two blips
+    assert await page.evaluate(CUE_COUNT) == after

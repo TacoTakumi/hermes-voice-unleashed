@@ -319,6 +319,56 @@ header > * { flex-shrink: 0; }
   const HEARD_MS = 4000;
   let heardTimer = null;
 
+  // --- the thinking sound ---------------------------------------------------------
+  // While a turn runs and no reply audio plays the page would be silent, and a user who
+  // does not look at it cannot tell work from a dead turn. A quiet blip repeats for that
+  // time. It is the thinking sound of Hermes Desktop and of the Hermes CLI voice mode,
+  // with their values: apps/desktop/src/lib/thinking-sound.ts in hermes-agent, MIT
+  // License, Copyright (c) 2025 Nous Research. It plays on the reply's context, so the
+  // browser's echo canceller knows it, and the server is told nothing: it is no reply.
+  const CUE_STATES = ["Thinking", "Working"];
+  const CUE_PITCHES = [392, 329.6]; // G4 and E4, in turn
+  let cueTimer = null, cueCount = 0, cueVoice = null;
+  // One soft blip: a sine that glides down, with a smooth attack and decay (no click).
+  function cueBlip(freq) {
+    const t0 = playCtx.currentTime + 0.01, dur = 0.16;
+    const osc = playCtx.createOscillator(), env = playCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, t0);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.72, t0 + dur);
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.exponentialRampToValueAtTime(0.08, t0 + 0.02);
+    env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(env).connect(playCtx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+    cueVoice = osc;
+  }
+  function cueWanted() {
+    const silent = !(reply && (reply.playing > 0 || reply.audible));
+    return running && !ending && !!playCtx && silent && CUE_STATES.includes(stateEl.textContent);
+  }
+  function cueTick() {
+    cueTimer = null;
+    if (!cueWanted()) return;  // the state moved on without a call to cueSync
+    try { cueBlip(CUE_PITCHES[cueCount % CUE_PITCHES.length]); } catch (e) { /* no audio: the loop stays harmless */ }
+    cueCount += 1;
+    cueTimer = setTimeout(cueTick, 800 + Math.random() * 400); // not a metronome
+  }
+  // Start or stop the sound by what the page shows and plays now. Called wherever that
+  // changes; a call that changes nothing does nothing.
+  function cueSync() {
+    const want = cueWanted();
+    if (want && cueTimer === null) cueTimer = setTimeout(cueTick, 400);
+    else if (!want && cueTimer !== null) {
+      clearTimeout(cueTimer);
+      cueTimer = null;
+      // A blip that sounds now ends with the silence, not 160 ms into the reply.
+      if (cueVoice) { try { cueVoice.stop(); } catch (e) { /* it has ended */ } }
+      cueVoice = null;
+    }
+  }
+
   // --- what the page shows --------------------------------------------------------
   // While an approval prompt is open the turn waits for the user, whatever else is true:
   // the states that only say who has the floor give way to that. A state that reports
@@ -334,6 +384,7 @@ header > * { flex-shrink: 0; }
     showElapsed();
     document.body.dataset.who = who;
     if (detail !== undefined) detailEl.textContent = detail;
+    cueSync();
   }
   function addTurn(kind, text) {
     const li = document.createElement("li");
@@ -733,6 +784,7 @@ header > * { flex-shrink: 0; }
     reply.sources.push(src);
     reply.chunks.push({ start: at, length: pcm.length });
     reply.playing += 1;
+    cueSync();  // reply audio is queued: the thinking sound gives way before it is heard
     const r = reply;
     // The reply finishes when its audio_end has come and no chunk is still playing,
     // in whichever order those two happen.
@@ -1156,6 +1208,7 @@ header > * { flex-shrink: 0; }
   // session the page joins next.
   function stop() {
     running = false;
+    cueSync();
     ending = false;
     moved = false;
     clearTimeout(endDrain);
