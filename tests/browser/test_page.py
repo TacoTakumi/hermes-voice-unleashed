@@ -2091,7 +2091,8 @@ async def test_a_portrait_header_does_not_scroll_itself_while_the_tool_list_foll
 
 async def test_a_header_with_no_tool_line_stays_at_its_top(stack):
     fake, page, sessions, utterances = stack
-    await page.set_viewport_size({"width": 740, "height": 360})
+    # Short enough that the bare header (state, detail line and meter) is over its cap.
+    await page.set_viewport_size({"width": 740, "height": 300})
     await _listening(fake, page)
     session = sessions[0]
     await asyncio.sleep(0.2)
