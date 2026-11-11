@@ -69,7 +69,10 @@ body:has(#chooser:not([hidden])) #detail:empty { display: none; }
 body[data-who="you"] #state { color: var(--you); }
 body[data-who="hermes"] #state { color: var(--hermes); }
 body[data-who="alert"] #state { color: var(--alert); }
-#elapsed { margin: 8px 0 0; color: var(--hermes); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* The time of a running turn sits beside the state word, so it comes and goes without
+   moving what is under it. Where the word leaves no room it goes under the word. */
+#headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
+#elapsed { margin: 0; color: var(--hermes); font-size: 18px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #elapsed[hidden] { display: none; }
 #detail { margin: 10px 0 0; color: var(--muted); font-size: 16px; min-height: 1.5em; }
 /* A low strip: the room goes to the log. */
@@ -214,8 +217,10 @@ header > * { flex-shrink: 0; }
 <header>
   <h1 id="brand"><span>Hermes</span> <span>Voice Unleashed</span></h1>
   <p id="intro">Talk with your Hermes agent, hands free. It hears you, answers out loud and shows what it is doing while it works.</p>
-  <h1 id="state">Tap to start</h1>
-  <p id="elapsed" hidden></p>
+  <div id="headline">
+    <h1 id="state">Tap to start</h1>
+    <p id="elapsed" hidden></p>
+  </div>
   <p id="detail">Hermes listens while this page is open.</p>
   <canvas id="meter" aria-hidden="true"></canvas>
   <p id="transcript" aria-live="polite"></p>

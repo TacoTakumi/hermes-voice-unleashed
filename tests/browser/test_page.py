@@ -2478,3 +2478,31 @@ async def test_the_meter_is_a_low_strip_at_every_screen_size(stack):
         style = await page.evaluate("""() => { const s = getComputedStyle(document.getElementById('meter'));
             return [s.height, s.marginTop]; }""")
         assert style == ["32px", "10px"], (width, height, style)
+
+
+async def test_the_elapsed_time_sits_beside_the_state_and_takes_no_line_of_its_own(stack):
+    fake, page, sessions, utterances = stack
+    await page.set_viewport_size({"width": 390, "height": 844})
+    await _listening(fake, page)
+    session = sessions[0]
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    for call in ("c1", "c2"):
+        await session.send_page({"type": "tool_start", "id": call, "name": "terminal", "summary": call})
+    await page.wait_for_function("(document.getElementById('elapsed').textContent || '').includes('2 tools')")
+    assert await page.is_visible("#elapsed")
+    box = await page.evaluate("""() => {
+        const el = (id) => document.getElementById(id), rect = (id) => el(id).getBoundingClientRect();
+        const out = { state: rect('state').toJSON(), elapsed: rect('elapsed').toJSON(), shown: rect('detail').top };
+        el('elapsed').hidden = true;
+        out.hidden = rect('detail').top;
+        el('elapsed').hidden = false;
+        el('elapsed').textContent = '12:34, 12 tools';  // a long turn with many tool calls
+        out.long = rect('elapsed').toJSON();
+        out.longShown = rect('detail').top;
+        return out; }""")
+    state = box["state"]
+    for time in (box["elapsed"], box["long"]):
+        assert time["left"] >= state["right"], box
+        assert time["top"] >= state["top"] and time["bottom"] <= state["bottom"] + 1, box
+        assert time["right"] <= 390, box
+    assert box["shown"] == box["hidden"] == box["longShown"], box
