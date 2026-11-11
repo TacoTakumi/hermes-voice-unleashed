@@ -206,6 +206,8 @@ class VoiceSession:
         self._prompt_reply: Optional[tuple[Optional[str]]] = None
         # The request id of the approval prompt the page shows; None when it shows none.
         self._approval_id: Optional[str] = None
+        # The TTS request of the last spoken prompt while its audio may still play.
+        self._prompt_request: Optional[vm_client.TTSRequest] = None
         self._turn_started = False  # a hook event of the open reply's turn was seen
         self.duplex: Optional[vm_client.DuplexSession] = None
         self.turn_engine: Optional[str] = None
@@ -489,6 +491,8 @@ class VoiceSession:
 
     async def _on_audio_end(self, frame: dict) -> None:
         rid = frame.get("request_id")
+        if self._prompt_request is not None and rid == self._prompt_request.request_id:
+            self._prompt_request = None
         cancelled = rid in self._dropped
         self._dropped.discard(rid)
         silent = not self._audio_bytes.pop(rid, 0)
@@ -680,7 +684,20 @@ class VoiceSession:
         the model asks, and remember the reply that raised it: the turn behind that
         reply is the one the user's spoken answer resumes."""
         self._prompt_reply = (self.reply_id,)
-        await self.speak_notice(sentence, show=show)
+        spoken = await self.speak_notice(sentence, show=show)
+        # The turn waits now, perhaps for a long time. A request left open keeps the
+        # page from reporting the end of its audio, and VoiceManager holds the mic for
+        # a reply that plays: the user's answer would not reach the recognizer. So the
+        # request ends here. The reply stays open, and the text of the turn that goes
+        # on opens a new request. The audio end of this one is no reply's end.
+        # A prompt spoken with no reply open already has an ended request of its own.
+        if spoken is None:
+            spoken, self.reply_request = self.reply_request, None
+            if spoken is not None and not spoken.cancelled:
+                self._notice_requests[spoken.request_id] = None
+                await spoken.done()
+        # Kept until its audio ends, so an answer given while it plays can stop it.
+        self._prompt_request = spoken
 
     async def speak_notice(self, text: str, ended: Optional[asyncio.Event] = None,
                            show: bool = True) -> Optional[vm_client.TTSRequest]:
@@ -835,12 +852,14 @@ class VoiceSession:
         self._unsent = ""  # a closed reply's held word is never spoken, not even by a notice
         self._retire(self.reply_key)
         request, self.reply_request = self.reply_request, None
-        if request is not None:
-            self._dropped.add(request.request_id)
-            if send_cancel and not request.cancelled:
-                with contextlib.suppress(Exception):
-                    await request.cancel()
-        return request
+        prompt, self._prompt_request = self._prompt_request, None
+        for stopped in (request, prompt):
+            if stopped is not None:
+                self._dropped.add(stopped.request_id)
+                if send_cancel and not stopped.cancelled:
+                    with contextlib.suppress(Exception):
+                        await stopped.cancel()
+        return request or prompt
 
     async def _send_turn_done(self) -> None:
         """Tell the page that nothing more of the turn is coming, so it stops showing

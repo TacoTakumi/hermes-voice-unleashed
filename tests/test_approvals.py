@@ -495,3 +495,49 @@ async def test_a_tap_with_no_approval_pending_sends_nothing_and_ends_the_prompt(
     await _tap(rig, "once")  # no prompt is open any more
     await asyncio.sleep(0.1)
     assert len(rig.events) == count
+
+
+async def test_the_reply_stream_ends_after_a_spoken_prompt_and_the_resumed_turn_gets_a_new_one(rig):
+    """A stream left open while Hermes waits keeps the page from reporting the end of
+    its audio, and VoiceManager then holds the mic for the whole wait."""
+    reply_id = await _reply_in_progress(rig)
+    first = rig.conn.json_frames("tts_stream")[0]["request_id"]
+    await _prompt_open(rig)
+    await wait_for(lambda: rig.conn.json_frames("tts_stream")[-1]["done"])
+    frames = rig.conn.json_frames("tts_stream")
+    assert {f["request_id"] for f in frames} == {first}  # the sentence went through the reply's request
+    assert rig.tts_text().endswith(SENTENCE)
+    assert rig.session.reply_open and rig.session.reply_request is None
+    # The end of the prompt's audio is not the end of the turn.
+    done = len(rig.page.of("turn_done"))
+    await rig.conn.send({"type": "audio_end", "request_id": first, "reason": "complete"})
+    await wait_for(lambda: rig.page.of("audio_end"))
+    await asyncio.sleep(0.1)
+    assert len(rig.page.of("turn_done")) == done and rig.session.reply_open
+    # Text of the turn that goes on is spoken through a new request.
+    await rig.session.on_reply_delta(reply_id, "t1", 2, "Done. ")
+    await wait_for(lambda: rig.conn.json_frames("tts_stream")[-1]["text"] == "Done. ")
+    assert rig.conn.json_frames("tts_stream")[-1]["request_id"] != first
+
+
+async def test_a_tap_while_the_prompt_still_plays_stops_the_prompt_audio(rig):
+    await _reply_in_progress(rig)
+    first = rig.conn.json_frames("tts_stream")[0]["request_id"]
+    await _prompt_open(rig)
+    await wait_for(lambda: rig.conn.json_frames("tts_stream")[-1]["done"])
+    await _tap(rig, "deny")
+    await wait_for(lambda: rig.conn.json_frames("tts_cancel"))
+    assert [f["request_id"] for f in rig.conn.json_frames("tts_cancel")] == [first]
+
+
+async def test_a_tap_after_the_prompt_audio_ended_cancels_nothing(rig):
+    await _reply_in_progress(rig)
+    first = rig.conn.json_frames("tts_stream")[0]["request_id"]
+    await _prompt_open(rig)
+    await wait_for(lambda: rig.conn.json_frames("tts_stream")[-1]["done"])
+    await rig.conn.send({"type": "audio_end", "request_id": first, "reason": "complete"})
+    await wait_for(lambda: rig.page.of("audio_end"))
+    count = len(rig.events)
+    await _tap(rig, "deny")
+    await wait_for(lambda: len(rig.events) > count)
+    assert not rig.conn.json_frames("tts_cancel")
