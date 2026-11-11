@@ -444,3 +444,47 @@ async def test_the_spoken_sentence_of_a_prompt_is_not_shown_as_reply_text(rig):
     await _prompt_open(rig)
     await wait_for(lambda: rig.tts_text().endswith("Say yes or no."))
     assert not any("Approval needed" in f.get("text", "") for f in rig.page.of("reply_delta"))
+
+
+async def _tap(rig, choice: str, request_id: str = "r1") -> None:
+    await rig.page.ws.send(json.dumps({"type": "approval_answer", "request_id": request_id, "choice": choice}))
+
+
+@pytest.mark.parametrize("choice, word", [("deny", "no"), ("once", "yes"), ("session", "session"), ("always", "always")])
+async def test_a_tap_on_a_choice_answers_the_open_prompt(rig, choice, word):
+    reply_id = await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    count = len(rig.events)
+    await _tap(rig, choice)
+    await wait_for(lambda: len(rig.events) > count)
+    assert rig.events[-1].text == word and rig.events[-1].message_id != reply_id
+    assert rig.session.reply_id == reply_id and rig.session.reply_open
+    await wait_for(lambda: rig.page.of("utterance")[-1:] == [{"type": "utterance", "text": word}])
+    assert rig.page.of("approval_end") == [{"type": "approval_end", "request_id": "r1"}]
+    kinds = [f["type"] for f in rig.page.frames]
+    assert kinds.index("approval") < kinds.index("clear")  # the prompt's audio stops on the tap
+    await rig.session.on_reply_delta(reply_id, "t1", 2, "Done. ")  # the blocked turn goes on
+    await wait_for(lambda: rig.tts_text().endswith("Done. "))
+
+
+async def test_a_tap_for_another_prompt_or_an_unknown_choice_sends_nothing(rig):
+    await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    count = len(rig.events)
+    await _tap(rig, "once", request_id="r0")
+    await _tap(rig, "maybe")
+    await rig.page.ws.send(json.dumps({"type": "approval_answer"}))
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == count and not rig.page.of("approval_end")
+
+
+async def test_a_tap_with_no_approval_pending_sends_nothing_and_ends_the_prompt(rig):
+    await _reply_in_progress(rig)
+    await _prompt_open(rig)
+    rig.wants(False)  # timed out before the tap
+    count = len(rig.events)
+    await _tap(rig, "once")
+    await wait_for(lambda: rig.page.of("approval_end"))
+    await _tap(rig, "once")  # no prompt is open any more
+    await asyncio.sleep(0.1)
+    assert len(rig.events) == count

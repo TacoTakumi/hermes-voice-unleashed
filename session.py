@@ -38,6 +38,8 @@ from .vm_client import TurnEngineError, VoiceManagerClient
 logger = logging.getLogger(__name__)
 
 TURN_ENGINE = "tyger"
+# The bare word the gateway takes for each choice of an approval prompt.
+APPROVAL_CHOICE_WORDS = {"once": "yes", "session": "session", "always": "always", "deny": "no"}
 # How long the reply must be quiet after its Hermes turn ended before its TTS request is
 # closed. Each stream hook runs on its own thread, so the turn's end can overtake the
 # last text deltas by a few milliseconds.
@@ -635,6 +637,26 @@ class VoiceSession:
         await self.send_page(frame)
         await self.speak_prompt(sentence, show=False)
 
+    async def _on_approval_answer(self, frame: dict[str, Any]) -> None:
+        """The user tapped a choice of the approval prompt the page shows.
+
+        The gateway gets the choice's bare word, as for a spoken answer, and takes it
+        for the oldest approval the chat waits for. So only a tap for the prompt that
+        is open now counts: one for an earlier prompt could answer a later command."""
+        word = APPROVAL_CHOICE_WORDS.get(frame.get("choice"))
+        if word is None or self._approval_id is None or frame.get("request_id") != self._approval_id:
+            return
+        await self._approval_check()
+        if self._approval_id is None:  # it timed out or was withdrawn just now
+            return
+        logger.info("voice page %s: approval answered on the page (%s)", self.client_id, frame.get("choice"))
+        await self.cancel_reply("approval answer")  # the prompt's audio stops, as when the user speaks
+        await self._end_approval()
+        self._reopen_reply()
+        await self.send_page({"type": "utterance", "text": word, **self._next_epoch()})
+        if self._on_utterance is not None:
+            await self._on_utterance(word, uuid.uuid4().hex)
+
     async def _approval_check(self) -> None:
         """End the page's approval prompt when the chat waits for no approval any more."""
         if self._approval_id is None or self._approval_pending is None:
@@ -873,6 +895,9 @@ class VoiceSession:
         >= 0; otherwise the count of mic samples forwarded so far stands in."""
         if self.attached and frame.get("type") in ("say", "say_end"):
             await self._on_say(frame)
+            return
+        if frame.get("type") == "approval_answer":
+            await self._on_approval_answer(frame)
             return
         if frame.get("type") != "playback" or not self.turn_engine:
             return
