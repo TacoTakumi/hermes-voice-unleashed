@@ -16,10 +16,11 @@ entry names next to its pinned commit.
   answers the prompt. The page reads "Waiting for approval" until the
   prompt is answered, withdrawn or timed out.
 - A spoken approve phrase answers an approval prompt: "yes please", "go
-  ahead", "do it", "yeah", "yep", "sure". So does a short spoken refusal
-  that starts with a deny word: "no thanks", "no, just leave it", "nope",
-  "cancel that". Before, only one bare word counted and anything else was
-  sent to Hermes as a new message.
+  ahead", "go for it", "do it", "run it", "I approve", "yeah", "yep",
+  "sure". So does a short spoken refusal that starts with a deny word: "no
+  thanks", "no, just leave it", "nope", "don't", "stop", "cancel that". An
+  answer said again counts: "I said yes", "I said no". Before, only one
+  bare word counted and anything else was sent to Hermes as a new message.
 
 ### Changed
 

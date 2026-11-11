@@ -60,14 +60,21 @@ def spoken_command(text: str) -> Optional[str]:
 # Spoken answers to an approval prompt, beyond the gateway's own bare words.
 # Approve only on a whole utterance: "yes, but change the path" must not run a command.
 APPROVE_PHRASES = frozenset({
-    "yes please", "yes go ahead", "yes do it", "go ahead", "do it", "approve it",
-    "ok go ahead", "okay go ahead", "yeah", "yep", "sure",
+    "yes please", "yes go ahead", "yes do it", "yes yes", "yes approve", "yes approve it",
+    "yes run it", "yes you can", "yes that's fine", "go ahead", "please go ahead", "go for it",
+    "do it", "please do", "run it", "approve it", "approved", "i approve", "yes i approve",
+    "allow", "allow it", "that's fine", "ok go ahead", "okay go ahead", "ok do it", "okay do it",
+    "yeah", "yeah go ahead", "yep", "yep go ahead", "sure", "sure go ahead",
 })
 # Deny on a short utterance that starts with one of these: a wrong deny costs nothing,
 # since any other utterance makes the gateway withdraw the approval anyway. A longer one
 # stays a message, so the model gets what it says.
-DENY_FIRST_WORDS = frozenset({"no", "nope", "deny", "reject", "cancel"})
+DENY_FIRST_WORDS = frozenset({"no", "nope", "deny", "reject", "cancel", "don't", "stop"})
+DENY_PHRASES = frozenset({"do not", "do not do it", "do not run it"})
 DENY_MAX_WORDS = 5
+# A user who was not heard says the answer again: "I said yes".
+REPEAT_PREFIX = ["i", "said"]
+REPEATED_APPROVE_WORDS = frozenset({"yes", "ok", "okay", "approve", "confirm"})
 APPROVE, DENY = "yes", "no"  # the bare words the gateway takes in every language
 
 
@@ -75,9 +82,14 @@ def spoken_approval(text: str) -> Optional[str]:
     """The bare word that ``text`` means as an answer to an approval prompt, or None
     when it is not such an answer."""
     words = heard_words(text)
-    if " ".join(words) in APPROVE_PHRASES:
+    if words[:2] == REPEAT_PREFIX:
+        words = words[2:]
+        if len(words) == 1 and words[0] in REPEATED_APPROVE_WORDS:
+            return APPROVE
+    phrase = " ".join(words)
+    if phrase in APPROVE_PHRASES:
         return APPROVE
-    if words and len(words) <= DENY_MAX_WORDS and words[0] in DENY_FIRST_WORDS:
+    if phrase in DENY_PHRASES or (words and len(words) <= DENY_MAX_WORDS and words[0] in DENY_FIRST_WORDS):
         return DENY
     return None
 

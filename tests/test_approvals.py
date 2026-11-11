@@ -168,6 +168,7 @@ async def test_a_longer_utterance_is_an_ordinary_utterance_even_with_an_approval
 
 @pytest.mark.parametrize("said, word", [
     ("Yes, please.", "yes"), ("Go ahead.", "yes"), ("Yeah.", "yes"), ("OK", "ok"), ("Do it!", "yes"),
+    ("I said yes, please", "yes"), ("I said no.", "no"),
     ("No.", "no"), ("No, just leave it.", "no"), ("Nope.", "no"), ("Cancel that", "no"),
 ])
 async def test_a_spoken_approve_or_deny_phrase_answers_the_pending_approval(rig, said, word):
@@ -197,6 +198,12 @@ def test_which_utterances_answer_an_approval(plugin):
     assert answer("No thanks") == "no" and answer("no no no no no") == "no"
     assert answer("no I do not want that") is None  # six words: a message
     assert answer("I say no") is None and answer("") is None
+    for said in ["I said yes", "I said yes, please.", "I approve", "Go for it.", "Run it", "Yeah, go ahead",
+                 "Yes, yes.", "Please do", "That's fine"]:
+        assert answer(said) == "yes", said
+    for said in ["I said no", "Don't.", "Do not do it", "Stop"]:
+        assert answer(said) == "no", said
+    assert answer("I said yes but wait") is None and answer("I said") is None
 
 
 async def test_a_fresh_page_with_an_approval_pending_takes_the_resumed_turn_under_any_id(rig):

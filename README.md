@@ -299,9 +299,11 @@ You answer in one of three ways:
 
 - Tap a button on the card.
 - Say an approve phrase and nothing else: "yes", "approve", "ok", "yes
-  please", "go ahead", "do it", "yeah", "yep", "sure".
+  please", "go ahead", "go for it", "do it", "run it", "I approve", "that's
+  fine", "yeah", "yep", "sure". "I said yes" counts too.
 - Say a short refusal of at most five words that starts with a deny word:
-  "no", "nope", "no thanks", "no, just leave it", "cancel that".
+  "no", "nope", "don't", "stop", "no thanks", "no, just leave it", "cancel
+  that". "I said no" and "do not do it" count too.
 
 Punctuation from the speech recognizer ("Yes.") does not matter. The turn
 then goes on and its reply is spoken as usual. Anything else ("yes, but
