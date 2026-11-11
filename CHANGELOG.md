@@ -26,6 +26,8 @@ entry names next to its pinned commit.
   it takes no line of its own and the page moves less when a turn starts
   and ends. The line for your words takes room only while there are
   words on it.
+- The button that turns the reply sound on after a reload reads "Tap for
+  sound". As "Tap to unmute" it read like a second microphone button.
 
 ### Fixed
 

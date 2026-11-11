@@ -236,7 +236,7 @@ returns from a session to the chooser with the microphone off, and Forward
 joins the session again. A reload while on a session joins it again by itself
 and opens the microphone without a tap, also after a spoken "new session",
 because the URL takes the id of the session the page lands on. A browser that
-keeps playback locked until a tap (Safari on iOS) shows a "Tap to unmute"
+keeps playback locked until a tap (Safari on iOS) shows a "Tap for sound"
 button until you tap it.
 
 Add `&session=<Hermes session id>` to the URL to skip the list and join that

@@ -435,15 +435,15 @@ Object.defineProperty(AudioContext.prototype, 'state', { configurable: true,
 @pytest.mark.parametrize("site", [PLAYBACK_LOCKED], indirect=True)
 async def test_a_rejoin_with_playback_locked_shows_one_unmute_button_that_resumes_it(site):
     """Without a tap the browser may keep the reply context suspended. The page joins
-    all the same, with the mic open, and shows one Tap to unmute button; the tap resumes
+    all the same, with the mic open, and shows one Tap for sound button; the tap resumes
     the context and the button goes."""
     page = site.page
     await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
     await site.fake.wait_connections(1, timeout=10)
     await page.wait_for_function(LISTENING, timeout=10000)
     await page.wait_for_selector("#unmute:not([hidden])", timeout=5000)
-    assert await page.text_content("#unmute") == "Tap to unmute"
-    assert await page.locator("button:visible", has_text="unmute").count() == 1
+    assert await page.text_content("#unmute") == "Tap for sound"
+    assert await page.locator("button:visible", has_text="sound").count() == 1
     assert await page.evaluate("window.resumeCalls") == 1
     assert await page.evaluate(MIC_TRACK_STATES) == ["live"]
     assert await page.text_content("#state") == "Listening"
