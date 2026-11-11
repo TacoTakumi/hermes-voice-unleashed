@@ -246,6 +246,8 @@ class VoiceSession:
         self.turn_engine: Optional[str] = None
         # The server said that its turn engine still learns the user's voice.
         self._barge_learning = False
+        # How the audio of each request arrives, for one log line at its end.
+        self._arrivals: dict[str, dict[str, Any]] = {}
         # The prompt whose audio has all come and which the page may still play: its
         # request id and the time by which the page must have played it out.
         self._prompt_playing: Optional[tuple[str, float]] = None
@@ -585,6 +587,7 @@ class VoiceSession:
                                 self.client_id, (asyncio.get_running_loop().time() - self._turn_ended_at) * 1000)
                     self._turn_ended_at = None
                 self._audio_bytes[event[2]] = self._audio_bytes.get(event[2], 0) + len(event[1])
+                self._note_arrival(event[2], len(event[1]))
                 if event[2] not in self._dropped:
                     with contextlib.suppress(Exception):
                         await self.page.send(event[1])
@@ -606,6 +609,37 @@ class VoiceSession:
                     self._barge_learning = state == "learning"
                     await self.send_page({"type": "barge_state", "state": state})
 
+    def _note_arrival(self, rid: str, size: int) -> None:
+        """Count one audio chunk of the request ``rid`` and play it through the page's
+        queue rule: the first chunk 60 ms ahead, each next one at the queue's end, and
+        200 ms ahead when the queue was dry. The times are those of the arrival here,
+        so the way to the page is not in them."""
+        now = asyncio.get_running_loop().time()
+        length = size / 2 / (getattr(self.client, "last_tts_sample_rate", None) or 24000)
+        a = self._arrivals.get(rid)
+        if a is None:
+            self._arrivals[rid] = {"first": now, "last": now, "chunks": 1, "audio": length, "stall": 0.0,
+                                   "next": now + 0.06 + length, "dry": []}
+            return
+        a["stall"] = max(a["stall"], now - a["last"])
+        if a["next"] <= now:
+            a["dry"].append(a["audio"])  # how much of the audio had played when it ran dry
+            start = now + 0.2
+        else:
+            start = max(a["next"], now + 0.02)
+        a["next"] = start + length
+        a["last"], a["chunks"], a["audio"] = now, a["chunks"] + 1, a["audio"] + length
+
+    def _log_arrival(self, rid: str) -> None:
+        a = self._arrivals.pop(rid, None)
+        if a is None:
+            return
+        dry = a["dry"]
+        where = (" at " + ", ".join(f"{at:.1f}" for at in dry[:8]) + " s") if dry else ""
+        logger.info("voice page %s: audio arrival: %d chunks, %.1f s of audio in %.1f s, longest wait %.0f ms, "
+                    "queue dry %d time%s%s", self.client_id, a["chunks"], a["audio"], a["last"] - a["first"],
+                    a["stall"] * 1000, len(dry), "" if len(dry) == 1 else "s", where)
+
     async def _on_audio_end(self, frame: dict) -> None:
         rid = frame.get("request_id")
         prompt_ended = self._prompt_request is not None and rid == self._prompt_request.request_id
@@ -615,6 +649,7 @@ class VoiceSession:
         self._dropped.discard(rid)
         audio_bytes = self._audio_bytes.pop(rid, 0)
         silent = not audio_bytes
+        self._log_arrival(rid)
         if prompt_ended and not silent and not cancelled:
             # The page has the prompt's audio and plays it out: it is still being spoken.
             rate = getattr(self.client, "last_tts_sample_rate", None) or 24000
@@ -809,7 +844,8 @@ class VoiceSession:
         likely one short word, and said again it is lost again: the notice names
         the longer forms that get through."""
         if approval:
-            return f"{NOT_CAUGHT_NOTICE} Say approve or deny, or tap a choice."
+            # The words on the prompt's buttons, Allow and Deny.
+            return f"{NOT_CAUGHT_NOTICE} Say allow or deny, or tap a choice."
         count = len(self._question_choices)
         if not count:
             return f"{NOT_CAUGHT_NOTICE} Say it again in a few words."

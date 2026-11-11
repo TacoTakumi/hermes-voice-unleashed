@@ -350,7 +350,7 @@ The page also shows the choices as buttons, and a tap answers the question.
 While a question waits the page reads "Waiting for your answer". When you
 spoke and no words came, Hermes says "I did not catch that. Say number one,
 number two or number three, or tap a choice." and the question stays open;
-for an approval prompt it asks for "approve" or "deny". This needs a
+for an approval prompt it asks for "allow" or "deny", the words on its buttons. This needs a
 VoiceManager that sends the `turn_empty` frame. "Skip" skips the question; "new session" and "end session" are still
 commands.
 

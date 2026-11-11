@@ -84,7 +84,7 @@ APPROVE_PHRASES = frozenset({
     "yes please", "yes go ahead", "yes do it", "yes yes", "yes approve", "yes approve it",
     "yes run it", "yes you can", "yes that's fine", "go ahead", "please go ahead", "go for it",
     "do it", "please do", "run it", "approve it", "approved", "i approve", "yes i approve",
-    "allow", "allow it", "that's fine", "ok go ahead", "okay go ahead", "ok do it", "okay do it",
+    "allow", "allow it", "allow once", "accept", "accept it", "accepted", "i accept", "that's fine", "ok go ahead", "okay go ahead", "ok do it", "okay do it",
     "yeah", "yeah go ahead", "yep", "yep go ahead", "sure", "sure go ahead",
 })
 # Deny on a short utterance that starts with one of these: a wrong deny costs nothing,

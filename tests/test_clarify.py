@@ -439,7 +439,7 @@ async def test_a_turn_empty_while_an_approval_waits_asks_for_yes_or_no(rig, quic
     await _prompt_audio_ended(rig)
     sent = len(rig.events)
     await rig.conn.send(EMPTY)
-    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say approve or deny, or tap a choice."))
+    await wait_for(lambda: rig.tts_text().endswith(NOT_CAUGHT + " Say allow or deny, or tap a choice."))
     await asyncio.sleep(0.1)
     assert len(rig.events) == sent and not rig.page.of("approval_end")
 
@@ -563,3 +563,33 @@ async def test_a_long_question_holds_the_notice_for_as_long_as_its_audio_lasts(
     await rig.conn.send(EMPTY)
     await asyncio.sleep(0.4)
     assert NOT_CAUGHT not in rig.tts_text() and rig.page.of("clear") == []
+
+
+# --- one log line per reply on how its audio arrived ---------------------------------------
+async def test_the_arrival_of_a_reply_s_audio_is_logged_when_it_ends(rig, caplog):
+    """How many chunks, how much audio in how much time, the longest wait between two
+    chunks, and how often a page that plays as the audio comes would have had nothing
+    to play: the facts a report of choppy speech is checked against."""
+    await _reply_in_progress(rig)
+    request_id = rig.conn.json_frames("tts_stream")[-1]["request_id"]
+    with caplog.at_level("INFO"):
+        await rig.conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+        await rig.conn.send(b"\x11\x00" * 2400)   # 0.1 s
+        await rig.conn.send(b"\x11\x00" * 2400)   # joins the first
+        await asyncio.sleep(0.5)                   # both have played out
+        await rig.conn.send(b"\x11\x00" * 4800)   # 0.2 s, after a dry queue
+        await rig.conn.send({"type": "audio_end", "request_id": request_id, "reason": "complete"})
+        await wait_for(lambda: any("audio arrival" in r.getMessage() for r in caplog.records))
+    line = next(r.getMessage() for r in caplog.records if "audio arrival" in r.getMessage())
+    assert "3 chunks" in line and "0.4 s of audio" in line, line
+    assert "queue dry 1 time" in line and "at 0.2 s" in line, line
+
+
+def test_the_not_caught_notice_for_an_approval_uses_the_words_on_the_buttons(plugin):
+    """The buttons read Allow and Deny: the voice asks for the same words, and each of
+    them is taken as an answer."""
+    assert plugin.turns.spoken_approval("Allow.") == plugin.turns.APPROVE
+    assert plugin.turns.spoken_approval("allow once") == plugin.turns.APPROVE
+    assert plugin.turns.spoken_approval("Accept") == plugin.turns.APPROVE
+    assert plugin.turns.spoken_approval("I accept") == plugin.turns.APPROVE
+    assert plugin.turns.spoken_approval("Deny.") == plugin.turns.DENY
