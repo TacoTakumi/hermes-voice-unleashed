@@ -410,12 +410,12 @@ def approval_sentence(command: str, reason: str = "") -> str:
     if len(reason) > REASON_SPOKEN_CHARS:
         reason = reason[:REASON_SPOKEN_CHARS - 3] + "..."
     if reason and program:
-        return f"Approval needed: {reason}, with {program}. Say yes or no."
+        return f"Approval needed: {reason}, with {program}. Say allow or deny."
     if reason:
-        return f"Approval needed: {reason}. Say yes or no."
+        return f"Approval needed: {reason}. Say allow or deny."
     if program:
-        return f"Approval needed to run {program}. Say yes or no."
-    return "Approval needed. Say yes or no."
+        return f"Approval needed to run {program}. Say allow or deny."
+    return "Approval needed. Say allow or deny."
 
 
 class VoiceLiveAdapter(BasePlatformAdapter):

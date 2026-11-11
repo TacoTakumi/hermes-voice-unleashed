@@ -415,7 +415,7 @@ header > * { flex-shrink: 0; }
       state = "Waiting for approval";
       who = "hermes";
       detail = muted ? "Tap a choice." : deaf ? `${off} Tap a choice, or answer when Hermes stops.`
-        : "Say yes or no, or tap a choice.";
+        : "Say allow or deny, or tap a choice.";
     } else if (question && FLOOR_STATES.includes(state)) {
       // The turn waits for the user's answer, not for Hermes.
       state = "Waiting for your answer";

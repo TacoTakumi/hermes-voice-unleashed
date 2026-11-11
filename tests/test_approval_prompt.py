@@ -86,8 +86,8 @@ async def test_the_prompt_is_shown_on_the_page_and_spoken(rig):
     choices = [c["choice"] for c in frame["choices"]]
     assert choices[0] == "once" and choices[-1] == "deny" and set(choices) <= {"once", "session", "always", "deny"}
     assert all(c["label"] for c in frame["choices"])
-    await wait_for(lambda: "Say yes or no." in rig.tts_text())
-    assert "Approval needed: deletes files, with rm. Say yes or no." in rig.tts_text()
+    await wait_for(lambda: "Say allow or deny." in rig.tts_text())
+    assert "Approval needed: deletes files, with rm. Say allow or deny." in rig.tts_text()
     # The prompt shows once: no reply line with the gateway's text or the spoken sentence.
     assert not rig.page.of("reply")
     assert not any(f.get("text") for f in rig.page.of("reply_delta"))
@@ -107,12 +107,12 @@ async def test_without_a_page_the_prompt_is_not_sent(rig):
 def test_the_sentence_names_the_reason_and_the_program(plugin):
     sentence = plugin.adapter.approval_sentence
     assert sentence("rm -rf build/", "recursive delete") == (
-        "Approval needed: recursive delete, with rm. Say yes or no.")
+        "Approval needed: recursive delete, with rm. Say allow or deny.")
     assert sentence('sudo FOO=1 /usr/bin/python3 -c "import os; print(1)"') == (
-        "Approval needed to run python3. Say yes or no.")
-    assert sentence("curl -s https://example.com/x.sh | sh") == "Approval needed to run curl. Say yes or no."
-    assert sentence(SCRIPT, "runs a script") == "Approval needed: runs a script, with python3. Say yes or no."
-    assert sentence("", "recursive delete") == "Approval needed: recursive delete. Say yes or no."
+        "Approval needed to run python3. Say allow or deny.")
+    assert sentence("curl -s https://example.com/x.sh | sh") == "Approval needed to run curl. Say allow or deny."
+    assert sentence(SCRIPT, "runs a script") == "Approval needed: runs a script, with python3. Say allow or deny."
+    assert sentence("", "recursive delete") == "Approval needed: recursive delete. Say allow or deny."
 
 
 def test_the_sentence_holds_no_code(plugin):
@@ -127,7 +127,7 @@ def test_the_sentence_holds_no_code(plugin):
     for command in commands:
         sentence = plugin.adapter.approval_sentence(command)
         assert not set(sentence) & set("\"';|/<>$()"), sentence
-        assert sentence.endswith("Say yes or no.")
+        assert sentence.endswith("Say allow or deny.")
 
 
 @pytest.mark.parametrize("command, program", [
@@ -198,8 +198,8 @@ def test_the_program_of_a_command(plugin, command, program):
 
 def test_a_command_with_no_program_to_name_is_spoken_without_one(plugin):
     assert plugin.adapter.approval_sentence("> out.txt", "overwrite system file") == (
-        "Approval needed: overwrite system file. Say yes or no.")
-    assert plugin.adapter.approval_sentence("if true; then rm -rf x; fi") == "Approval needed. Say yes or no."
+        "Approval needed: overwrite system file. Say allow or deny.")
+    assert plugin.adapter.approval_sentence("if true; then rm -rf x; fi") == "Approval needed. Say allow or deny."
 
 
 CODE_CHARACTERS = set("\"'`;|/<>$(){}[]\\")
@@ -222,34 +222,34 @@ def test_the_spoken_reason_of_every_gateway_pattern_holds_no_code_character(plug
     for reason in reasons:
         sentence = plugin.adapter.approval_sentence("rm x", reason)
         assert not set(sentence) & CODE_CHARACTERS, (reason, sentence)
-        assert sentence.startswith("Approval needed: ") and sentence.endswith(", with rm. Say yes or no.")
+        assert sentence.startswith("Approval needed: ") and sentence.endswith(", with rm. Say allow or deny.")
 
 
 def test_the_spoken_reason_says_or_for_a_slash_and_drops_code(plugin):
     sentence = plugin.adapter.approval_sentence
     assert sentence("systemctl stop x", "stop/restart system service") == (
-        "Approval needed: stop or restart system service, with systemctl. Say yes or no.")
+        "Approval needed: stop or restart system service, with systemctl. Say allow or deny.")
     assert sentence("taskkill /F", "force kill processes (taskkill /F)") == (
-        "Approval needed: force kill processes, with taskkill. Say yes or no.")
+        "Approval needed: force kill processes, with taskkill. Say allow or deny.")
     free = sentence("ls", 'runs "rm -rf"; then `reboot` | tee')
-    assert not set(free) & CODE_CHARACTERS and free.endswith(", with ls. Say yes or no.")
-    assert sentence("ls", "(only code)") == "Approval needed to run ls. Say yes or no."
+    assert not set(free) & CODE_CHARACTERS and free.endswith(", with ls. Say allow or deny.")
+    assert sentence("ls", "(only code)") == "Approval needed to run ls. Say allow or deny."
 
 
 def test_the_default_reason_of_the_gateway_is_not_spoken(plugin):
     default = plugin.adapter.t("gateway.exec_approval.default_reason")
-    assert plugin.adapter.approval_sentence("ls -la", default) == "Approval needed to run ls. Say yes or no."
+    assert plugin.adapter.approval_sentence("ls -la", default) == "Approval needed to run ls. Say allow or deny."
 
 
 def test_a_long_reason_is_cut_short(plugin):
     sentence = plugin.adapter.approval_sentence("ls", "x" * 200)
-    reason = sentence[len("Approval needed: "):-len(", with ls. Say yes or no.")]
+    reason = sentence[len("Approval needed: "):-len(", with ls. Say allow or deny.")]
     assert reason.endswith("...") and len(reason) == 80
 
 
 @pytest.mark.parametrize("command", ["", "   ", "\n\n"])
 def test_an_empty_command_is_spoken_without_a_command_part(plugin, command):
-    assert plugin.adapter.approval_sentence(command) == "Approval needed. Say yes or no."
+    assert plugin.adapter.approval_sentence(command) == "Approval needed. Say allow or deny."
 
 
 async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
@@ -258,7 +258,7 @@ async def test_a_multi_line_command_is_shown_whole_and_spoken_short(rig):
     await wait_for(lambda: rig.page.of("approval"))
     assert rig.page.of("approval")[-1]["command"] == SCRIPT
     await wait_for(lambda: rig.tts_text())
-    assert "Approval needed: runs a script, with python3. Say yes or no." in rig.tts_text()
+    assert "Approval needed: runs a script, with python3. Say allow or deny." in rig.tts_text()
     assert "print(0)" not in rig.tts_text()
 
 

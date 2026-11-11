@@ -226,8 +226,8 @@ async def test_a_fresh_page_with_an_approval_pending_takes_the_resumed_turn_unde
 
 async def test_a_notice_is_spoken_at_once_through_the_running_reply(rig):
     await _reply_in_progress(rig)
-    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
-    await wait_for(lambda: rig.tts_text().endswith("Say yes or no."))
+    await rig.session.speak_notice("Approval needed to run: ls. Say allow or deny.")
+    await wait_for(lambda: rig.tts_text().endswith("Say allow or deny."))
     frames = rig.conn.json_frames("tts_stream")
     assert {f["request_id"] for f in frames} == {frames[0]["request_id"]}  # the reply's own request
     assert not any(f["done"] for f in frames)  # the reply goes on
@@ -236,18 +236,18 @@ async def test_a_notice_is_spoken_at_once_through_the_running_reply(rig):
 async def test_a_notice_does_not_run_into_the_word_the_reply_holds(rig):
     reply_id = await _reply_in_progress(rig)
     await rig.session.on_reply_delta(reply_id, "t1", 1, "that.")  # no space: the word waits
-    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
-    await wait_for(lambda: rig.tts_text().endswith("Say yes or no."))
+    await rig.session.speak_notice("Approval needed to run: ls. Say allow or deny.")
+    await wait_for(lambda: rig.tts_text().endswith("Say allow or deny."))
     chunks = [f["text"] for f in rig.conn.json_frames("tts_stream")]
     assert "that." in chunks  # sent on its own, before the notice
     assert all(not c.startswith("that.Approval") for c in chunks)
-    assert rig.tts_text() == "Let me check. that.Approval needed to run: ls. Say yes or no."
+    assert rig.tts_text() == "Let me check. that.Approval needed to run: ls. Say allow or deny."
 
 
 async def test_a_notice_with_no_reply_open_is_still_spoken(rig):
     assert not rig.session.reply_open
-    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
-    await wait_for(lambda: rig.tts_text() == "Approval needed to run: ls. Say yes or no.")
+    await rig.session.speak_notice("Approval needed to run: ls. Say allow or deny.")
+    await wait_for(lambda: rig.tts_text() == "Approval needed to run: ls. Say allow or deny.")
 
 
 def _requests(rig) -> list[str]:
@@ -261,7 +261,7 @@ def _ended(rig, request_id: str) -> bool:
 
 async def test_a_notice_with_no_reply_open_ends_its_own_request(rig):
     assert not rig.session.reply_open
-    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
+    await rig.session.speak_notice("Approval needed to run: ls. Say allow or deny.")
     await wait_for(lambda: _requests(rig) and _ended(rig, _requests(rig)[0]))
     assert rig.session.reply_request is None  # nothing is left open for a reply to drop
     rid = _requests(rig)[0]
@@ -295,7 +295,7 @@ async def _prompted(rig, command: str = "rm -rf build") -> None:
     result = await rig.adapter.send_exec_approval(chat_id="voice", command=command, session_key="k",
                                                   description="deletes files", request_id="r1")
     assert result.success
-    await wait_for(lambda: rig.tts_text()[spoken:].endswith("Say yes or no."))
+    await wait_for(lambda: rig.tts_text()[spoken:].endswith("Say allow or deny."))
 
 
 async def test_an_approval_word_reopens_the_reply_that_raised_the_prompt_not_a_newer_one(rig):
@@ -380,7 +380,7 @@ async def test_a_notice_leaves_a_finished_reply_that_still_plays_its_own_request
     await rig.session._end_reply(reply_id)  # the text is over; its audio still plays
     reply_request = rig.session.reply_request
     assert reply_request is not None and not rig.session.reply_open
-    await rig.session.speak_notice("Approval needed to run: ls. Say yes or no.")
+    await rig.session.speak_notice("Approval needed to run: ls. Say allow or deny.")
     assert rig.session.reply_request is reply_request
     await wait_for(lambda: len(_requests(rig)) == 2)
     notice = next(r for r in _requests(rig) if r != reply_request.request_id)
@@ -391,7 +391,7 @@ async def test_a_notice_leaves_a_finished_reply_that_still_plays_its_own_request
 
 
 
-SENTENCE = "Approval needed to run rm. Say yes or no."
+SENTENCE = "Approval needed to run rm. Say allow or deny."
 
 
 async def _prompt_open(rig, request_id: str = "r1") -> None:
@@ -456,7 +456,7 @@ async def test_an_utterance_that_is_no_answer_withdraws_the_approval_and_the_pro
 async def test_the_spoken_sentence_of_a_prompt_is_not_shown_as_reply_text(rig):
     await _reply_in_progress(rig)
     await _prompt_open(rig)
-    await wait_for(lambda: rig.tts_text().endswith("Say yes or no."))
+    await wait_for(lambda: rig.tts_text().endswith("Say allow or deny."))
     assert not any("Approval needed" in f.get("text", "") for f in rig.page.of("reply_delta"))
 
 
@@ -558,8 +558,8 @@ async def test_a_short_utterance_that_is_no_answer_keeps_the_approval_and_is_ask
     await rig.conn.send({"type": "turn_end", "text": said, "turn_id": 0})
     await wait_for(lambda: rig.page.of("note"))
     assert said.strip() in rig.page.of("note")[-1]["text"]
-    await wait_for(lambda: rig.tts_text().endswith("Say yes or no.Say yes or no.") or
-                   rig.tts_text().endswith(SENTENCE + "Say yes or no."))
+    await wait_for(lambda: rig.tts_text().endswith("Say allow or deny.Say allow or deny.") or
+                   rig.tts_text().endswith(SENTENCE + "Say allow or deny."))
     await asyncio.sleep(0.1)
     assert len(rig.events) == count  # nothing reached the gateway
     assert not rig.page.of("utterance")[1:] and not rig.page.of("approval_end")
@@ -607,7 +607,7 @@ async def test_a_new_utterance_cancels_the_resumed_reply_after_a_tap(rig, asked_
     assert len(rig.page.of("clear")) > clears and len(rig.page.of("turn_done")) > dones
 
 
-SECOND = "Approval needed to run dd. Say yes or no."
+SECOND = "Approval needed to run dd. Say allow or deny."
 
 
 async def _second_prompt_open(rig) -> None:

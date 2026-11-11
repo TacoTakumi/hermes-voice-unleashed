@@ -2673,9 +2673,9 @@ async def test_a_note_frame_adds_a_note_line_and_leaves_the_approval_prompt_open
     session, _ = await _blocked_turn(stack)
     await session.send_page(APPROVAL)
     await page.wait_for_selector("#approval:not([hidden])", timeout=5000)
-    await session.send_page({"type": "note", "text": 'Heard "Yet please". Say yes or no, or tap a choice.'})
+    await session.send_page({"type": "note", "text": 'Heard "Yet please". Say allow or deny, or tap a choice.'})
     await page.wait_for_selector("#log .turn.note", timeout=5000)
-    assert await page.text_content("#log .turn.note") == 'Heard "Yet please". Say yes or no, or tap a choice.'
+    assert await page.text_content("#log .turn.note") == 'Heard "Yet please". Say allow or deny, or tap a choice.'
     await session.send_page({"type": "turn_done"})
     await asyncio.sleep(0.2)
     assert await page.is_visible("#approval")
@@ -3332,7 +3332,7 @@ async def test_barge_in_off_shows_on_the_approval_line_while_the_prompt_is_spoke
     await _notice_to_the_page(session, "n1", seconds=3.0)
     await _detail_is(page, "Barge-in is off: still learning your voice. Tap a choice, or answer when Hermes stops.",
                      timeout=3000)
-    await _detail_is(page, "Say yes or no, or tap a choice.", timeout=8000)
+    await _detail_is(page, "Say allow or deny, or tap a choice.", timeout=8000)
 
 
 async def test_barge_in_ready_takes_the_off_line_away_while_the_question_is_still_spoken(stack):
@@ -3355,7 +3355,7 @@ async def test_barge_in_off_comes_to_the_approval_line_when_it_arrives_while_the
     await _notice_to_the_page(session, "n1", seconds=5.0)
     await _state_is(page, "Waiting for approval")
     await asyncio.sleep(0.5)  # the prompt's audio is heard by now
-    assert await page.text_content("#detail") == "Say yes or no, or tap a choice."
+    assert await page.text_content("#detail") == "Say allow or deny, or tap a choice."
     await session.send_page({"type": "barge_state", "state": "learning"})
     await _detail_is(page, "Barge-in is off: still learning your voice. Tap a choice, or answer when Hermes stops.",
                      timeout=1000)

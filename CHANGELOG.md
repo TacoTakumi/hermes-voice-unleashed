@@ -34,6 +34,10 @@ entry names next to its pinned commit.
 
 ### Changed
 
+- Every approval prompt asks for "allow or deny", the words on the card's
+  buttons: the spoken prompt, the line on the page and the ask-again
+  notice said "yes or no". "allow once", "accept" and "I accept" are taken
+  as an approval too.
 - The spoken form of a question with choices ends with "Say number one,
   number two or number three, or your answer.": one short word said alone
   often gets no text from the recognizer. A short sentence that ends in a

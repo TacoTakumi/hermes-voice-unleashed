@@ -45,7 +45,7 @@ BARGE_STATES = ("learning", "ready")
 # While an approval waits, an utterance of at most this many words that is no answer is
 # not sent to Hermes: the user is asked again with the notice below.
 UNCLEAR_ANSWER_MAX_WORDS = 3
-APPROVAL_REPEAT_NOTICE = "Say yes or no."
+APPROVAL_REPEAT_NOTICE = "Say allow or deny."
 # Said when the user spoke and the recognizer gave no words, while a question or an
 # approval waits for the answer, followed by what to say next. Not more often than every NOT_CAUGHT_EVERY_S, and
 # only after NOT_CAUGHT_WAIT_S without words: an utterance can end in two parts, the
@@ -747,7 +747,7 @@ class VoiceSession:
             # command again. So it stays here, the approval stays open, and the user
             # is asked again. The page shows what was heard.
             logger.info("voice page %s: approval answer not understood, asked again", self.client_id)
-            await self.send_page({"type": "note", "text": f'Heard "{text.strip()}". Say yes or no, or tap a choice.'})
+            await self.send_page({"type": "note", "text": f'Heard "{text.strip()}". Say allow or deny, or tap a choice.'})
             if self.reply_open or self.reply_request is not None:
                 await self.cancel_reply("approval answer not understood")
             self._prompt_request = await self.speak_notice(APPROVAL_REPEAT_NOTICE, show=False)

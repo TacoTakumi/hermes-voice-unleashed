@@ -311,25 +311,27 @@ not say that. End session.").
 When a command needs your approval, the page shows a card with the command,
 the gateway's reason and one button for each choice the gateway offers. It
 speaks one sentence that names the reason and the program, never the code:
-"Approval needed: recursive delete, with rm. Say yes or no." The page reads
-"Waiting for approval" until the prompt is over.
+"Approval needed: recursive delete, with rm. Say allow or deny." The page
+reads "Waiting for approval" until the prompt is over. Every prompt for an
+approval uses these two words, the ones on the card's buttons.
 
 You answer in one of three ways:
 
 - Tap a button on the card.
-- Say an approve phrase and nothing else: "yes", "approve", "ok", "yes
-  please", "go ahead", "go for it", "do it", "run it", "I approve", "that's
-  fine", "yeah", "yep", "sure". "I said yes" counts too.
+- Say an approve phrase and nothing else: "allow", "allow once", "approve",
+  "accept", "yes", "ok", "yes please", "go ahead", "go for it", "do it",
+  "run it", "I approve", "that's fine", "yeah", "yep", "sure". "I said yes"
+  counts too.
 - Say a short refusal of at most five words that starts with a deny word:
-  "no", "nope", "don't", "stop", "no thanks", "no, just leave it", "cancel
-  that". "I said no" and "do not do it" count too.
+  "deny", "no", "nope", "don't", "stop", "no thanks", "no, just leave it",
+  "cancel that". "I said no" and "do not do it" count too.
 
 Punctuation from the speech recognizer ("Yes.") does not matter. The turn
 then goes on and its reply is spoken as usual.
 
 A short utterance of up to three words that is not an answer is most likely
 an answer the recognizer got wrong. The page shows what it heard, the prompt
-stays open and you hear "Say yes or no." A longer utterance ("yes, but
+stays open and you hear "Say allow or deny." A longer utterance ("yes, but
 change the path first") reaches Hermes as a new message, which stops the
 waiting turn, and the command does not run. The gateway's confirmation
 ("Allowed once") is screen text.
