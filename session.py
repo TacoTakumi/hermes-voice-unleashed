@@ -38,6 +38,9 @@ from .vm_client import TurnEngineError, VoiceManagerClient
 logger = logging.getLogger(__name__)
 
 TURN_ENGINE = "tyger"
+# The states of a barge_state frame that go on to the page: the turn engine still
+# learns the user's voice and hears no barge, or it has learned it.
+BARGE_STATES = ("learning", "ready")
 # While an approval waits, an utterance of at most this many words that is no answer is
 # not sent to Hermes: the user is asked again with the notice below.
 UNCLEAR_ANSWER_MAX_WORDS = 3
@@ -559,6 +562,12 @@ class VoiceSession:
                 await self._on_audio_end(event[1])
             elif kind == "barge":
                 await self._on_barge(event[1])
+            elif kind == "barge_state":
+                # The turn engine hears no barge while it learns the user's voice: the
+                # page says so. Only the states the page knows go on.
+                state = event[1].get("state")
+                if state in BARGE_STATES:
+                    await self.send_page({"type": "barge_state", "state": state})
 
     async def _on_audio_end(self, frame: dict) -> None:
         rid = frame.get("request_id")

@@ -35,11 +35,14 @@ class FakeConnection:
 
 
 class FakeVoiceManager:
-    """``turn_engine``: None accepts the opt-in, an error_type string refuses it."""
+    """``turn_engine``: None accepts the opt-in, an error_type string refuses it.
+    ``barge_state``: a state sent in a barge_state frame right after the opt-in is
+    accepted, as a server whose barge-in is not ready yet does."""
 
     def __init__(self, turn_engine_refusal: Optional[str] = None, stt_engine: str = "audiocpp",
-                 answer_turn_start: bool = True) -> None:
+                 answer_turn_start: bool = True, barge_state: Optional[str] = None) -> None:
         self.turn_engine_refusal = turn_engine_refusal
+        self.barge_state = barge_state
         self.answer_turn_start = answer_turn_start
         self.stt_engine = stt_engine
         self.connections: list[FakeConnection] = []
@@ -84,6 +87,8 @@ class FakeVoiceManager:
                 if frame.get("type") == "turn_engine":
                     if self.turn_engine_refusal is None:
                         await conn.send({"type": "turn_engine_ready", "engine": frame["engine"]})
+                        if self.barge_state is not None:
+                            await conn.send({"type": "barge_state", "state": self.barge_state})
                     else:
                         await conn.send({"type": "error", "error_type": self.turn_engine_refusal,
                                          "message": "refused"})

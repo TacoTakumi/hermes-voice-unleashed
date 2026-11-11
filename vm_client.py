@@ -343,6 +343,8 @@ class DuplexSession:
                 # was already in flight, as for a cancel, until its audio_end.
                 client._cancelled_tts.add(rid)
                 yield ("barge", item)
+            elif kind == "barge_state":
+                yield ("barge_state", item)
 
     async def turn_ends(self) -> AsyncIterator[dict]:
         """Yield every turn_end frame as it arrives (opted-in connections only)."""
@@ -594,6 +596,10 @@ class VoiceManagerClient:
                     elif ftype == "barge":
                         # In the audio stream, so it lands in order with the pcm
                         # and before the request's audio_end.
+                        await self._tts_queue.put(frame)
+                    elif ftype == "barge_state":
+                        # Whether the turn engine can hear a barge yet. In the audio
+                        # stream, so it keeps its place among the replies it is about.
                         await self._tts_queue.put(frame)
                     elif ftype == "turn_engine_ready":
                         self._on_turn_engine_ready(frame)

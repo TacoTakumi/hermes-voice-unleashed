@@ -53,8 +53,8 @@ class Page:
 
 
 @contextlib.asynccontextmanager
-async def rig(plugin, refusal=None):
-    async with FakeVoiceManager(turn_engine_refusal=refusal) as fake:
+async def rig(plugin, refusal=None, barge_state=None):
+    async with FakeVoiceManager(turn_engine_refusal=refusal, barge_state=barge_state) as fake:
         adapter = plugin.adapter.VoiceLiveAdapter(PlatformConfig(enabled=True, extra={
             "token": TOKEN, "voicemanager_url": fake.url, "host": "127.0.0.1", "port": 0}))
         messages = []
@@ -328,3 +328,24 @@ async def test_a_turn_end_tells_the_page_that_the_heard_words_are_gone(plugin):
         await conn.send({"type": "turn_end", "text": "", "turn_id": 0})
         await wait_for(lambda: page.of("transcript")[-1]["text"] == "")
         assert messages == [] and page.of("utterance") == []
+
+
+async def test_the_barge_state_of_the_server_reaches_the_page_after_its_ready_frame(plugin):
+    """The server says when it cannot hear a barge yet (it still learns the user's
+    voice) and when it can. The page is told both, in order, after it is ready."""
+    async with rig(plugin, barge_state="learning") as (hooks, conn, page, messages):
+        await wait_for(lambda: page.of("barge_state"))
+        kinds = [f["type"] for k, f in page.log if k == "json"]
+        assert kinds.index("ready") < kinds.index("barge_state"), kinds
+        assert page.of("barge_state") == [{"type": "barge_state", "state": "learning"}]
+        await conn.send({"type": "barge_state", "state": "x"})  # a state the page does not know
+        await conn.send({"type": "barge_state", "state": "ready", "voice_s": 3.0})
+        await wait_for(lambda: len(page.of("barge_state")) == 2)
+        assert page.of("barge_state")[1] == {"type": "barge_state", "state": "ready"}
+
+
+async def test_a_server_that_sends_no_barge_state_gives_the_page_none(plugin):
+    async with rig(plugin) as (hooks, conn, page, messages):
+        await conn.send({"type": "turn_end", "text": "hello", "turn_id": 0})
+        await wait_for(lambda: messages)
+        assert page.of("barge_state") == []
