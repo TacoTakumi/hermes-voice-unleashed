@@ -167,6 +167,9 @@ footer { padding: 12px var(--gutter) 20px; display: flex; flex-wrap: wrap; justi
 /* Shown only while the browser keeps reply playback locked after a join without a tap. */
 #unmute { background: var(--glow); }
 #unmute[hidden] { display: none; }
+/* The switch for the sound cues: a quiet button, on or off, beside the main one. */
+#cues { min-width: 0; padding: 12px 18px; background: var(--ink-raised); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(255, 230, 203, 0.3); }
+#cues[aria-pressed="false"] { color: color-mix(in srgb, var(--paper) 60%, transparent); }
 /* The approval prompt: above the footer buttons, where a thumb reaches it. The command
    scrolls inside itself, so a long script never pushes the choices off the screen. */
 #approval { flex: 1 0 100%; min-width: 0; background: var(--ink-raised); box-shadow: inset 0 0 0 1px var(--glow); border-radius: 2.5px; padding: 12px 14px; }
@@ -264,6 +267,7 @@ header > * { flex-shrink: 0; }
   </section>
   <button id="toggle" type="button" aria-pressed="false">Start talking</button>
   <button id="unmute" type="button" hidden>Tap for sound</button>
+  <button id="cues" type="button" aria-pressed="true">Sound cues: on</button>
 </footer>
 <script>
 "use strict";
@@ -283,7 +287,7 @@ header > * { flex-shrink: 0; }
 
   const $ = (id) => document.getElementById(id);
   const stateEl = $("state"), detailEl = $("detail"), transcriptEl = $("transcript");
-  const logEl = $("log"), toggle = $("toggle"), unmuteEl = $("unmute"), meter = $("meter");
+  const logEl = $("log"), toggle = $("toggle"), unmuteEl = $("unmute"), meter = $("meter"), cuesEl = $("cues");
   const chooserEl = $("chooser"), sessionsEl = $("sessions"), newEl = $("new");
   const latestEl = $("latest"), earlierEl = $("earlier");
   const headerEl = document.querySelector("header"), footerEl = document.querySelector("footer");
@@ -329,6 +333,17 @@ header > * { flex-shrink: 0; }
   const CUE_STATES = ["Thinking", "Working"];
   const CUE_PITCHES = [392, 329.6]; // G4 and E4, in turn
   let cueTimer = null, cueCount = 0, cueVoice = null;
+  // The user's switch for the cues. On unless the URL says cues=0 or the browser holds an
+  // earlier "off"; a tap on the button changes it at once and the browser keeps it.
+  const CUES_KEY = "voice-unleashed.cues";
+  function cuesStored() {
+    try { return localStorage.getItem(CUES_KEY); } catch (e) { return null; }  // storage can be blocked
+  }
+  let cuesOn = params.get("cues") !== "0" && cuesStored() !== "0";
+  function cuesShow() {
+    cuesEl.textContent = cuesOn ? "Sound cues: on" : "Sound cues: off";
+    cuesEl.setAttribute("aria-pressed", String(cuesOn));
+  }
   // One soft blip: a sine that glides down, with a smooth attack and decay (no click).
   function cueBlip(freq) {
     const t0 = playCtx.currentTime + 0.01, dur = 0.16;
@@ -346,7 +361,7 @@ header > * { flex-shrink: 0; }
   }
   function cueWanted() {
     const silent = !(reply && (reply.playing > 0 || reply.audible));
-    return running && !ending && !!playCtx && silent && CUE_STATES.includes(stateEl.textContent);
+    return cuesOn && running && !ending && !!playCtx && silent && CUE_STATES.includes(stateEl.textContent);
   }
   function cueTick() {
     cueTimer = null;
@@ -1278,6 +1293,13 @@ header > * { flex-shrink: 0; }
     toggle.textContent = "Sessions";
   }
 
+  cuesShow();
+  cuesEl.addEventListener("click", () => {
+    cuesOn = !cuesOn;
+    try { localStorage.setItem(CUES_KEY, cuesOn ? "1" : "0"); } catch (e) { /* the choice lasts for this page */ }
+    cuesShow();
+    cueSync();
+  });
   toggle.addEventListener("click", () => {
     if (ending) return;
     if (moved) { leave(); return; }

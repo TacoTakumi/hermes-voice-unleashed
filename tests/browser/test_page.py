@@ -2989,3 +2989,63 @@ async def test_the_thinking_sound_stops_when_the_silent_work_ends(stack, event):
     after = await page.evaluate(CUE_COUNT)
     await asyncio.sleep(1.6)  # longer than the longest gap between two blips
     assert await page.evaluate(CUE_COUNT) == after
+
+
+# --- the sound cues button and the cues=0 URL parameter --------------------------------
+async def _silent_turn(site_or_sessions, page):
+    session = site_or_sessions[0]
+    await session.send_page({"type": "utterance", "text": "run the tests"})
+    await _state_is(page, "Thinking")
+    return session
+
+
+async def _no_cue_starts(page, seconds=1.6):
+    before = await page.evaluate(CUE_COUNT)
+    await asyncio.sleep(seconds)  # longer than the longest gap between two blips
+    assert await page.evaluate(CUE_COUNT) == before
+
+
+@pytest.mark.parametrize("stack", [CUES_RECORDED], indirect=True)
+async def test_the_sound_cues_button_turns_the_sound_off_and_on_during_a_turn(stack):
+    fake, page, sessions, _ = stack
+    await _listening(fake, page)
+    assert await page.text_content("#cues") == "Sound cues: on"
+    assert await page.get_attribute("#cues", "aria-pressed") == "true"
+    await _silent_turn(sessions, page)
+    await _cues(page, 1)
+    await page.click("#cues")
+    assert await page.text_content("#cues") == "Sound cues: off"
+    assert await page.get_attribute("#cues", "aria-pressed") == "false"
+    await _no_cue_starts(page)
+    assert await page.text_content("#state") == "Thinking"  # the turn itself goes on
+    before = await page.evaluate(CUE_COUNT)
+    await page.click("#cues")
+    assert await page.text_content("#cues") == "Sound cues: on"
+    await _cues(page, before + 1, timeout=2000)
+
+
+@pytest.mark.parametrize("site", [CUES_RECORDED], indirect=True)
+async def test_the_sound_cues_choice_stays_after_a_reload(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111")
+    await page.wait_for_function(LISTENING, timeout=10000)
+    await page.click("#cues")
+    await page.reload()
+    await site.fake.wait_connections(2, timeout=10)
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert await page.text_content("#cues") == "Sound cues: off"
+    assert await page.get_attribute("#cues", "aria-pressed") == "false"
+    await _silent_turn(site.sessions[-1:], page)
+    await _no_cue_starts(page)
+    await page.click("#cues")  # and back on, from the stored off
+    await _cues(page, 1, timeout=2000)
+
+
+@pytest.mark.parametrize("site", [CUES_RECORDED], indirect=True)
+async def test_the_url_parameter_cues_0_starts_the_page_with_the_sound_cues_off(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}&session=sid-titled-111&cues=0")
+    await page.wait_for_function(LISTENING, timeout=10000)
+    assert await page.text_content("#cues") == "Sound cues: off"
+    await _silent_turn(site.sessions, page)
+    await _no_cue_starts(page)
