@@ -3101,10 +3101,12 @@ async def test_a_reply_queue_that_ran_dry_takes_a_reserve_before_it_plays_on(sta
     await session.send_page({"type": "audio_start", "request_id": "r1", "sample_rate": 24000})
     await session.page.send(_tone_chunk(0.2))
     await asyncio.sleep(0.6)  # it has played out: the queue is dry
-    for _ in range(5):
+    # Faster than it plays on the whole (0.6 s of audio in 0.51 s), but every second
+    # chunk comes later than the chunk before it lasts.
+    for wait in (0.15, 0.02, 0.15, 0.02, 0.15, 0.02):
         await session.page.send(_tone_chunk(0.1))
-        await asyncio.sleep(0.15)  # later than the chunk before it lasts
-    await page.wait_for_function("window.chunks.length === 6", timeout=3000)
+        await asyncio.sleep(wait)
+    await page.wait_for_function("window.chunks.length === 7", timeout=3000)
     chunks = await page.evaluate("window.chunks")
     assert chunks[0]["ahead"] < 0.1, chunks[0]  # a reply starts as soon as before
     assert chunks[1]["ahead"] >= 0.19, chunks[1]
