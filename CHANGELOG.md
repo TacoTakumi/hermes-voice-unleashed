@@ -6,6 +6,28 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.5.3]
+
+### Fixed
+
+- A voice page that lost its connection no longer takes the voice back from
+  the device that took it in the meantime. Before, a phone page that was off
+  the network when Hermes Desktop or another page started the voice did not
+  learn that it was replaced, and switched that device off when its network
+  returned. The page now names itself on each connect and marks a connect
+  that it makes by itself. The server answers such a connect of a replaced
+  page with the "Voice moved to another device" state. A start by the user
+  on the page takes the voice as before.
+- A voice page that reconnects is ready at once. Before, the server waited
+  for the close of the page's old connection first, up to 10 s when the old
+  connection did not answer, as after a change of network.
+- The words of a turn and the end of the turn reach Hermes in the order in
+  which VoiceManager sent them. Before, the end of a turn could come ahead of
+  its last words, most of all on a slow connection to the page. Those words
+  then stayed for the next turn: the page showed them as heard, and "end
+  session" said at the end of the next turn went to Hermes as text and did
+  not end the session.
+
 ## [0.5.2]
 
 ### Changed
