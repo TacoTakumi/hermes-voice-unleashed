@@ -53,16 +53,18 @@ makes voice the way you run the agent:
 
 ## Install
 
-From the Hermes plugin catalog:
-
-```sh
-hermes plugins install voice-unleashed
-```
-
-Before the catalog lists it, install it straight from GitHub:
+From GitHub. This gives you the newest release, and
+`hermes plugins update voice-unleashed` pulls each new one:
 
 ```sh
 hermes plugins install TacoTakumi/hermes-voice-unleashed
+```
+
+From the Hermes plugin catalog. The catalog installs a reviewed commit, which
+can be behind the newest release:
+
+```sh
+hermes plugins install voice-unleashed
 ```
 
 Or from a checkout, for development:

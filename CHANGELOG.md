@@ -6,6 +6,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.5.2]
+
+### Changed
+
+- The README lists the install from GitHub before the install from the Hermes
+  plugin catalog. It says that the GitHub install gives the newest release
+  and that `hermes plugins update voice-unleashed` pulls each new one, and
+  that the catalog commit can be behind.
+
 ## [0.5.1]
 
 ### Added
