@@ -379,3 +379,58 @@ async def test_a_well_formed_session_query_of_256_characters_reaches_the_client_
                 break
             await asyncio.sleep(0.01)
     assert join_server.client_calls == [("tablet", {"session": session})]
+
+
+# --- the lane's old page when a new page connects ------------------------------------------
+
+
+class SlowClose:
+    """A page socket whose close handshake does not end until the test lets it: a phone
+    that changed networks answers no close frame, and the server's close waits for it
+    for its close timeout."""
+
+    def __init__(self):
+        self.frames, self.close_code, self.let_go = [], None, asyncio.Event()
+
+    async def send(self, data):
+        self.frames.append(json.loads(data))
+
+    async def close(self, code=1000, reason=""):
+        self.close_code = code
+        await self.let_go.wait()
+
+
+def _lane_url(server, client="tablet", **query):
+    extra = "".join(f"&{key}={quote(str(value))}" for key, value in query.items())
+    return f"ws://127.0.0.1:{server.bound_port}/ws?token={TOKEN}&client={client}{extra}"
+
+
+async def _until(predicate, timeout=1.0):
+    """Wait until ``predicate`` holds; fail when it does not in ``timeout`` seconds."""
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+async def test_a_page_starts_at_once_when_the_lanes_old_page_does_not_answer_its_close(join_server, plugin):
+    old = SlowClose()
+    join_server._pages[("client", "tablet")] = old
+    try:
+        async with connect(_lane_url(join_server)):
+            await _until(lambda: join_server.client_calls)  # under 1 s, not the close timeout
+            await _until(lambda: old.close_code == plugin.server.REPLACED_CLOSE_CODE)
+            assert old.frames == [{"type": "replaced"}]
+            assert join_server._pages[("client", "tablet")] is not old
+    finally:
+        old.let_go.set()
+
+
+async def test_the_lanes_old_page_that_answers_gets_the_replaced_frame_and_its_close_code(join_server, plugin):
+    async with connect(_lane_url(join_server)) as first:
+        await _until(lambda: len(join_server.client_calls) == 1)
+        async with connect(_lane_url(join_server)):
+            await _until(lambda: len(join_server.client_calls) == 2)
+            assert json.loads(await asyncio.wait_for(first.recv(), 2)) == {"type": "replaced"}
+            with pytest.raises(ConnectionClosed) as info:
+                await asyncio.wait_for(first.recv(), 2)
+            assert info.value.rcvd.code == plugin.server.REPLACED_CLOSE_CODE == 4001

@@ -108,6 +108,7 @@ class VoiceServer:
         # (kind, id) -> the connection that owns it: ("client", page client id) or
         # ("attach", Hermes session id), so a page and an attached client never collide.
         self._pages: dict[tuple[str, str], ServerConnection] = {}
+        self._closing: set[asyncio.Task] = set()  # the closes of replaced pages, kept from collection
 
     @property
     def bound_port(self) -> int:
@@ -179,6 +180,13 @@ class VoiceServer:
             options["session"] = session
         await self._own(connection, ("client", client_id), self._on_client, **options)
 
+    @staticmethod
+    async def _close_replaced(connection: ServerConnection) -> None:
+        with contextlib.suppress(Exception):
+            await connection.send(json.dumps({"type": "replaced"}))
+        with contextlib.suppress(Exception):
+            await connection.close(code=REPLACED_CLOSE_CODE, reason="replaced")
+
     async def _own(self, connection: ServerConnection, key: tuple[str, str],
                    handler: ClientHandler, **options) -> None:
         """Run ``handler`` for the connection that now owns ``key``."""
@@ -187,10 +195,12 @@ class VoiceServer:
             # One page owns a conversation's mic and speaker. The new page takes it over;
             # the old one is told so, and REPLACED_CLOSE_CODE keeps it from reconnecting
             # (two pages that both reconnected would push each other off for ever).
-            with contextlib.suppress(Exception):
-                await previous.send(json.dumps({"type": "replaced"}))
-            with contextlib.suppress(Exception):
-                await previous.close(code=REPLACED_CLOSE_CODE, reason="replaced")
+            # The close runs on a task of its own and nothing waits for it: an old page
+            # that answers no close frame (a phone that changed networks) holds its
+            # close for the close timeout, and the new page must not wait that long.
+            task = asyncio.create_task(self._close_replaced(previous))
+            self._closing.add(task)
+            task.add_done_callback(self._closing.discard)
         self._pages[key] = connection
         try:
             await handler(connection, key[1], **options)
