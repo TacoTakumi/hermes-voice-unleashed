@@ -32,8 +32,8 @@ from urllib.parse import urlsplit
 from websockets.exceptions import ConnectionClosed
 
 from . import vm_client
-from .turns import (END_SESSION, NEW_SESSION, TurnTracker, heard_words, number_forms, spoken_approval,
-                    spoken_command)
+from .turns import (END_SESSION, NEW_SESSION, TurnTracker, heard_words, last_words_command, number_forms,
+                    spoken_approval, spoken_command)
 from .vm_client import TurnEngineError, VoiceManagerClient
 
 logger = logging.getLogger(__name__)
@@ -709,8 +709,9 @@ class VoiceSession:
         command = spoken_command(text) if not self.attached else None
         if command is None and not self.attached and self.turn_engine:
             # The turn holds more than the command: the user said it again because it
-            # did not act at once, or said something before it. The last words decide.
-            command = spoken_command(self.tracker.last_final)
+            # did not act at once, or said something before it. The last words decide,
+            # when they are an order and not the end of an ordinary sentence.
+            command = last_words_command(self.tracker.turn_finals)
         if command == END_SESSION:
             await self._end_session()
             return

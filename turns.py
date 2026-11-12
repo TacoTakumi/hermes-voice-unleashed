@@ -73,9 +73,33 @@ def number_forms(count: int) -> Optional[str]:
     return names[0] if count == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
 
 
+# The phrases that are said as an order. Only these act as the last words of a turn
+# that holds other words too. The other phrases ("this session", "end of discussion",
+# "new session") are also how an ordinary sentence ends when a pause splits it.
+LAST_WORDS_COMMANDS = frozenset({
+    "end session", "end the session", "end this session", "start a new session", "start new session",
+})
+
+
 def spoken_command(text: str) -> Optional[str]:
     """The command ``text`` is, when the whole utterance is one of the phrases."""
     return SPOKEN_COMMANDS.get(normalized_phrase(text))
+
+
+def last_words_command(finals: list[str]) -> Optional[str]:
+    """The command that a turn of the final texts ``finals`` ends on, when the turn as
+    a whole is no command phrase. The user said the command again because it did not
+    act at once, or said something before it, and the turn engine joined it all into
+    one turn. The last final decides when it is an order, or when every final of the
+    turn is a command phrase and the user said nothing else."""
+    if not finals:
+        return None
+    command = spoken_command(finals[-1])
+    if normalized_phrase(finals[-1]) in LAST_WORDS_COMMANDS:
+        return command
+    if all(spoken_command(final) is not None for final in finals):
+        return command
+    return None
 
 
 # Spoken answers to an approval prompt, beyond the gateway's own bare words.
@@ -127,7 +151,7 @@ class TurnTracker:
 
     def _reset(self) -> None:
         self.segments: dict[int, str] = {}
-        self.last_final = ""  # the last final text of the turn that just ended (turn engine)
+        self.turn_finals: list[str] = []  # the final texts of the turn that just ended (turn engine)
         self.dispatched_words: Optional[list[str]] = None
         self._dispatched_keys: set[int] = set()
         self._answered_keys: set[int] = set()
@@ -211,10 +235,9 @@ class TurnTracker:
         if not self.turn_engine:
             return
         text = (frame.get("text") or self.text).strip()
-        # The last thing the recognizer gave in this turn, on its own: a command said
-        # again, or after a remark, is one turn with the words before it.
-        finals = [self.segments[k] for k in sorted(self.segments) if heard_words(self.segments[k])]
-        self.last_final = finals[-1] if finals else ""
+        # What the recognizer gave in this turn, piece by piece: a command said again,
+        # or after a remark, is one turn with the words before it.
+        self.turn_finals = [self.segments[k] for k in sorted(self.segments) if heard_words(self.segments[k])]
         self.segments = {}
         words = heard_words(text)
         if not words:

@@ -466,6 +466,66 @@ async def test_a_turn_whose_last_words_are_no_command_goes_to_hermes(plugin, fin
         assert not r.page.closed
 
 
+@pytest.mark.parametrize("finals", [
+    ("What did we do", "this session"),
+    ("How long have we been", "in session"),
+    ("That was the", "end of discussion"),
+    ("At the", "end of session"),
+    ("Remind me of it in the", "new session"),
+])
+async def test_an_ordinary_end_of_a_sentence_that_reads_as_a_command_goes_to_hermes(plugin, finals):
+    """Only the forms that are said as an order ("end session", "start a new session")
+    act as the last words of a turn. The other phrases are also how a sentence ends,
+    when a pause splits it: they act only as the whole turn."""
+    async with rig(plugin) as r:
+        await _playing_reply(r)
+        sent = len(r.messages)
+        await _finals_then_turn_end(r, *finals)
+        await wait_for(lambda: len(r.messages) == sent + 1)
+        assert r.messages[-1].text == " ".join(finals)
+        await asyncio.sleep(0.2)
+        assert not r.page.closed and r.page.of("session_new") == []
+        assert "Session ended." not in r.tts_text() and "New session." not in r.tts_text()
+
+
+@pytest.mark.parametrize("finals", [
+    ("This session", "this session"),          # the recognizer's form, said again
+    ("In session", "End discussion"),
+])
+async def test_a_command_said_again_in_any_of_its_forms_ends_the_session(plugin, finals):
+    """Every final of the turn is a command phrase: the user said nothing else."""
+    async with rig(plugin) as r:
+        await _playing_reply(r)
+        sent = len(r.messages)
+        await _finals_then_turn_end(r, *finals)
+        await _notice_played(r, "Session ended.")
+        await wait_for(lambda: r.page.closed)
+        assert len(r.messages) == sent
+
+
+async def test_new_session_said_again_starts_a_new_session(plugin):
+    async with rig(plugin) as r:
+        await _playing_reply(r)
+        sent = len(r.messages)
+        await _finals_then_turn_end(r, "New session", "new session")
+        await _notice_played(r, "New session.")
+        await wait_for(lambda: r.page.of("session_new"))
+        assert len(r.messages) == sent and not r.page.closed
+
+
+def test_the_last_words_rule_takes_the_order_forms_and_a_turn_of_commands_only(plugin):
+    last = plugin.turns.last_words_command
+    end, new = plugin.turns.END_SESSION, plugin.turns.NEW_SESSION
+    assert last(["I didn't say", "End session."]) == end
+    assert last(["Oh come on", "end the session"]) == end
+    assert last(["no", "Start a new session."]) == new
+    assert last(["This session", "this session"]) == end
+    assert last(["End session", "new session"]) == new
+    assert last(["What did we do", "this session"]) is None
+    assert last(["End session", "no wait"]) is None
+    assert last([]) is None
+
+
 def test_this_session_is_the_end_command_too(plugin):
     """What the recognizer gave for "end session" on a phone."""
     assert plugin.turns.spoken_command("This session.") == plugin.turns.END_SESSION

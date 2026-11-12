@@ -313,7 +313,11 @@ the whole utterance, in any case and with any punctuation:
 Anything else ("end the session now") reaches Hermes as a message. One
 exception: when you say a command again because it did not act at once, or
 say something and then the command, the last thing you said decides ("I did
-not say that. End session.").
+not say that. End session."). After other words only the forms that are an
+order do this: "end session", "end the session", "end this session", "start
+a new session" and "start new session". The other phrases are also how a
+sentence ends ("what did we do this session"), so they act only on their
+own, or when you say nothing but command phrases.
 
 ### Approvals
 

@@ -19,6 +19,15 @@ entry names next to its pinned commit.
 - The approval screenshot in the README shows the prompt line of 0.5.0,
   "Say allow or deny, or tap a choice."
 
+- After other words in the same turn, only the spoken commands that are an
+  order act as the last thing said: "end session", "end the session", "end
+  this session", "start a new session" and "start new session". In 0.5.0
+  every command phrase did, so a sentence that a pause split before "this
+  session", "in session", "end of discussion" or "new session" ended the
+  session or started a new one, and Hermes did not get the sentence. Those
+  phrases still act on their own, and when the turn holds only command
+  phrases.
+
 ### Fixed
 
 - A device that takes the voice no longer waits for the old voice devices
