@@ -526,6 +526,28 @@ def test_the_last_words_rule_takes_the_order_forms_and_a_turn_of_commands_only(p
     assert last([]) is None
 
 
+@pytest.mark.parametrize("arrived, final, turn_text", [
+    ("End session", True, "End session no wait"),
+    ("New session", True, "New session is what I said last time"),
+    ("End session", False, "End session now please"),   # a partial of one longer utterance
+])
+async def test_finals_that_are_not_all_of_the_turn_decide_no_command(plugin, arrived, final, turn_text):
+    """The transcription frames and the turn end come through two readers. When the
+    page takes its frames slowly, the turn end can be handled before the turn's last
+    finals: what has arrived is then only the start of what the user said."""
+    async with rig(plugin) as r:
+        await _playing_reply(r)
+        sent = len(r.messages)
+        await r.conn.send({"type": "transcription", "segment_index": r.next_segment(), "text": arrived,
+                           "is_final": final})
+        await r.conn.send({"type": "turn_end", "text": turn_text, "turn_id": 0})
+        await wait_for(lambda: len(r.messages) == sent + 1)
+        assert r.messages[-1].text == turn_text
+        await asyncio.sleep(0.2)
+        assert not r.page.closed and r.page.of("session_new") == []
+        assert "Session ended." not in r.tts_text() and "New session." not in r.tts_text()
+
+
 def test_this_session_is_the_end_command_too(plugin):
     """What the recognizer gave for "end session" on a phone."""
     assert plugin.turns.spoken_command("This session.") == plugin.turns.END_SESSION

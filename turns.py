@@ -236,8 +236,14 @@ class TurnTracker:
             return
         text = (frame.get("text") or self.text).strip()
         # What the recognizer gave in this turn, piece by piece: a command said again,
-        # or after a remark, is one turn with the words before it.
-        self.turn_finals = [self.segments[k] for k in sorted(self.segments) if heard_words(self.segments[k])]
+        # or after a remark, is one turn with the words before it. The pieces come
+        # through another reader than the turn end, and that reader can be behind (a
+        # page that takes its frames slowly). The server makes the turn's text of all
+        # its finals, so pieces that are not the whole text are only a part of what
+        # the user said: they are not kept, and no command is read from them.
+        finals = [self.segments[k] for k in sorted(self.segments) if heard_words(self.segments[k])]
+        whole = [word for final in finals for word in heard_words(final)] == heard_words(text)
+        self.turn_finals = finals if whole else []
         self.segments = {}
         words = heard_words(text)
         if not words:

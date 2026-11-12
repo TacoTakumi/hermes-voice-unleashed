@@ -36,6 +36,10 @@ entry names next to its pinned commit.
   second device could keep the voice beside the new one, a client that
   turned voice off and on again could lose it, and an old device that
   left could make the new one fail.
+- A spoken command is read from the last words of a turn only when all of
+  the turn's words have arrived. With a page that took its frames slowly,
+  the end of a turn could be handled before its last words, and "End
+  session, no wait" ended the session.
 - The "audio arrival" log line counted too few dry queues. It gave the
   first chunk of a reply a lead of 60 ms from its own arrival. The page
   counts the 60 ms from the start of the reply's audio, so a first chunk
