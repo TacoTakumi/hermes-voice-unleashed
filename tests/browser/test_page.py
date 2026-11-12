@@ -3359,3 +3359,65 @@ async def test_barge_in_off_comes_to_the_approval_line_when_it_arrives_while_the
     await session.send_page({"type": "barge_state", "state": "learning"})
     await _detail_is(page, "Barge-in is off: still learning your voice. Tap a choice, or answer when Hermes stops.",
                      timeout=1000)
+
+
+# --- the page id and the mark of the page's own reconnect ----------------------------------
+PAGE_ID = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+
+
+async def test_the_page_id_is_on_every_connect_and_the_mark_only_on_the_pages_own_reconnect(site):
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    await site.sessions[0].page.close()  # the socket is lost: the page connects again by itself
+    await wait_for(lambda: len(site.ws_requests) == 2, timeout=10)
+    first, again = site.ws_requests
+    (page_id,) = first["page"]
+    assert PAGE_ID.match(page_id), page_id
+    assert "reconnect" not in first  # the user's start
+    assert again["page"] == [page_id] and again["reconnect"] == ["1"]
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_the_page_id_stays_for_a_start_by_the_user_which_has_no_mark_and_a_reload_makes_another(site):
+    page = site.page
+    await _listening_from_the_chooser(site)
+    import websockets
+    async with websockets.connect(f"{site.url.replace('http', 'ws')}/ws?token={TOKEN}") as other:
+        await page.wait_for_function(MOVED, timeout=5000)
+        await page.click("#toggle")  # Sessions
+        await _chooser_rows(page)
+        await page.click("#new")  # the user starts the voice here again
+        await wait_for(lambda: len(site.ws_requests) == 3, timeout=10)
+        await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+        await asyncio.wait_for(other.wait_closed(), 5)  # the start took the voice back
+    first, _, started = site.ws_requests
+    assert started["page"] == first["page"] and "reconnect" not in started
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await wait_for(lambda: len(site.ws_requests) == 4, timeout=10)
+    reloaded = site.ws_requests[3]
+    assert PAGE_ID.match(reloaded["page"][0]) and reloaded["page"] != first["page"]
+    assert "reconnect" not in reloaded
+
+
+@pytest.mark.parametrize("site", [MIC_AND_WAKE_LOCK], indirect=True)
+async def test_a_page_id_that_another_device_replaced_while_its_socket_was_lost_shows_voice_moved(site):
+    """The page's socket is lost and another device takes the voice before the page is
+    back. The page's own reconnect does not take the voice: the page shows that the
+    voice moved, and the other device keeps its socket."""
+    page = site.page
+    await _listening_from_the_chooser(site)
+    import websockets
+    await site.sessions[0].page.close()
+    async with websockets.connect(f"{site.url.replace('http', 'ws')}/ws?token={TOKEN}") as other:
+        await page.wait_for_function(MOVED, timeout=5000)
+        await asyncio.sleep(1.5)  # long enough for another reconnect try
+        assert len(site.ws_requests) == 2  # the page's start and the other device: the reconnect reached no session
+        assert other.state.name == "OPEN"
+        assert await page.text_content("#toggle") == "Sessions"
+        assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]

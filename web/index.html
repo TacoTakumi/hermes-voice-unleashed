@@ -291,6 +291,15 @@ header > * { flex-shrink: 0; }
   // the page is on one, so a reload rejoins it, and the chooser sits at the bare URL
   // (the token only), so Back from a session returns to it.
   let sessionChoice = params.get("session") || null;
+  // The page's own name, one for the life of this page load, sent on every connect. Every
+  // page of a profile is on the same lane, and the server tells them apart by this id.
+  const pageId = Array.from(crypto.getRandomValues(new Uint8Array(12)),
+    (b) => b.toString(16).padStart(2, "0")).join("");
+  // Whether a socket of the running voice opened. A connect after that is the page's own:
+  // its socket was lost and the page comes back by itself. It carries a mark, and the
+  // server turns it away with the replaced frame when another device took the voice while
+  // the page was gone. A connect before that is the start by the user, with no mark.
+  let opened = false;
   const MIC_RATE = 16000;
   // The server's close codes: another page took the voice; the session the page asked
   // for could not be joined.
@@ -1144,7 +1153,8 @@ header > * { flex-shrink: 0; }
   function connect() {
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
     // One voice per profile: the page names no client lane, so a second page replaces the first.
-    let url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}`;
+    let url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}&page=${pageId}`;
+    if (opened) url += "&reconnect=1";
     if (sessionChoice) url += `&session=${encodeURIComponent(sessionChoice)}`;
     show("Connecting", "none", "");
     ws = new WebSocket(url);
@@ -1153,7 +1163,7 @@ header > * { flex-shrink: 0; }
     micAnchor = null;
     // The choice is asked for once, on the connect that reached the server. A reconnect
     // stays on the session the lane is on: asking for a new one again would open another.
-    ws.onopen = () => { sessionChoice = null; };
+    ws.onopen = () => { sessionChoice = null; opened = true; };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
         try { onFrame(JSON.parse(ev.data)); } catch (e) { /* not ours */ }
@@ -1295,6 +1305,7 @@ header > * { flex-shrink: 0; }
     toggle.disabled = false;
     toggle.textContent = "Mute microphone";
     keepAwake();
+    opened = false;  // the user's start: the connect takes the voice
     connect();
     draw();
   }
