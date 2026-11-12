@@ -1,15 +1,16 @@
 # Vendored from VoiceManager v0.7.0, src/voicemanager/client.py.
 # https://github.com/TacoTakumi/VoiceManager
 # MIT License, Copyright (c) 2026 TacoTakumi.
-# VoiceManager is not on PyPI; update this copy by replacing it with the file
-# from a newer release tag, then check that the new file has each change below.
+# VoiceManager is not on PyPI. A newer release of its client does not have the
+# changes below, and the plugin's session needs each of them: a new copy must get
+# them again, or the session must change with it.
 # Changed here, below this header:
 # - barge_state frames go into the audio stream, and DuplexSession.audio() yields
-#   them (in VoiceManager's client since 0.9.0).
+#   them. VoiceManager's client from 0.9.0 gives them on barge_states().
 # - turn_empty frames go with the turn_end frames, and DuplexSession.turn_ends()
-#   yields them (in VoiceManager's client since 0.9.0).
+#   yields them. VoiceManager's client from 0.9.0 gives them on turn_empties().
 # - DuplexSession.turn_frames() gives transcription, turn_end and turn_empty frames
-#   on one stream in the order of arrival (not in VoiceManager's client).
+#   on one stream in the order of arrival. VoiceManager's client has no such stream.
 """Async Python client for VoiceManager STT/TTS server.
 
 Standalone module - requires only ``websockets`` and ``httpx``.
