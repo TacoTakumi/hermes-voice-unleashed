@@ -14,6 +14,11 @@ entry names next to its pinned commit.
   with its choices, an approval prompt and the session list.
 - A link to the demo video under the screenshots.
 
+### Changed
+
+- The approval screenshot in the README shows the prompt line of 0.5.0,
+  "Say allow or deny, or tap a choice."
+
 ## [0.5.0] - 2026-11-11
 
 ### Added
