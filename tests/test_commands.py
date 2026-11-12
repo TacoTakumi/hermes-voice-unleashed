@@ -552,3 +552,86 @@ def test_this_session_is_the_end_command_too(plugin):
     """What the recognizer gave for "end session" on a phone."""
     assert plugin.turns.spoken_command("This session.") == plugin.turns.END_SESSION
     assert plugin.turns.spoken_command("this session is over") is None
+
+
+# --- the frames of a turn reach the turn tracker in the server's order ---------------------
+def _record_dispatch(session):
+    """The texts that the turn tracker handed to the session's dispatch, in order."""
+    texts, inner = [], session.tracker._dispatch
+
+    async def dispatch(text):
+        texts.append(text)
+        await inner(text)
+
+    session.tracker._dispatch = dispatch
+    return texts
+
+
+async def _stall_the_page(r):
+    """The page stops reading and its socket fills until a send to it waits, as a page
+    on a slow link takes its frames. Returns the send that waits."""
+    r.page.task.cancel()
+    filler = json.dumps({"type": "note", "text": "x" * 65536})
+    async with asyncio.timeout(20):
+        while True:
+            send = asyncio.ensure_future(r.session.page.send(filler))
+            done, _ = await asyncio.wait([send], timeout=0.3)
+            if not done:
+                return send
+
+
+async def test_a_turn_end_is_handled_with_all_its_finals_while_the_page_reads_nothing(plugin):
+    """The page takes no frames. The turn end must still come after the turn's finals,
+    and it must not wait for the page. The words of that turn must not be left over for
+    the next one, where they would keep its end command from acting."""
+    async with rig(plugin) as r:
+        tracker, dispatched = r.session.tracker, _record_dispatch(r.session)
+        waiting = await _stall_the_page(r)
+        await _finals_then_turn_end(r, "End session", "no wait")
+        await wait_for(lambda: dispatched == ["End session no wait"], timeout=1)
+        assert tracker.turn_finals == ["End session", "no wait"] and tracker.segments == {}
+        r.page = Page(r.page.ws, r.order)  # the page reads again
+        await asyncio.wait_for(waiting, 5)
+        await wait_for(lambda: len(r.messages) == 1)
+        assert r.messages[0].text == "End session no wait" and tracker.segments == {}
+        await _finals_then_turn_end(r, "I didn't say", "End session")
+        await _notice_played(r, "Session ended.")
+        await wait_for(lambda: r.page.closed)
+        assert len(r.messages) == 1  # the second turn went to no one: it ended the session
+
+
+async def test_a_partial_that_comes_with_a_turn_end_belongs_to_the_next_turn(plugin):
+    """Two finals, their turn end and the first partial of the next utterance arrive
+    together. The turn that ended is made of its two finals, and the partial is the
+    text that the next turn starts with."""
+    async with rig(plugin) as r:
+        tracker = r.session.tracker
+        partial = r.next_segment()
+        for run in range(20):
+            first, second, partial = partial, r.next_segment(), r.next_segment()
+            finals = [f"and then {run}", f"what happened {run}"]
+            frames = [
+                {"type": "transcription", "segment_index": first, "text": finals[0], "is_final": True},
+                {"type": "transcription", "segment_index": second, "text": finals[1], "is_final": True},
+                {"type": "turn_end", "text": " ".join(finals), "turn_id": 0},
+                {"type": "transcription", "segment_index": partial, "text": f"next {run}", "is_final": False},
+            ]
+            for frame in frames:  # one after the other, nothing awaited from the session between them
+                await r.conn.send(frame)
+            await wait_for(lambda: len(r.messages) == run + 1)
+            assert r.messages[-1].text == " ".join(finals)
+            await wait_for(lambda: tracker.text == f"next {run}")
+            assert tracker.turn_finals == finals, run
+            assert tracker.segments == {partial: f"next {run}"}, run
+
+
+async def test_the_page_gets_the_newest_heard_line_and_the_empty_one_after_a_turn_end(plugin):
+    async with rig(plugin) as r:
+        await r.conn.send({"type": "transcription", "segment_index": r.next_segment(), "text": "tell me",
+                           "is_final": False})
+        await wait_for(lambda: r.page.of("transcript") and r.page.of("transcript")[-1]["text"] == "tell me")
+        await _finals_then_turn_end(r, "tell me a story")
+        await wait_for(lambda: r.messages)
+        await wait_for(lambda: r.page.of("transcript")[-1] == {"type": "transcript", "text": "", "final": True})
+        kinds = _page_kinds(r.page)
+        assert kinds.index("utterance") < len(kinds) - 1 - kinds[::-1].index("transcript")

@@ -26,7 +26,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Awaitable, Callable, Iterable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
 from websockets.exceptions import ConnectionClosed
@@ -260,6 +260,10 @@ class VoiceSession:
         self._question_choices: list[str] = []
         self.turn_engine_refusal: Optional[str] = None
         self._tasks: list[asyncio.Task] = []
+        self._turn_frames: Optional[AsyncIterator[dict]] = None  # set in run()
+        # The newest heard line that has not gone to the page, and its signal.
+        self._heard: Optional[dict[str, Any]] = None
+        self._heard_ready = asyncio.Event()
         self._failed = False  # the end was logged and the page told; later ends are silent
 
     async def send_page(self, payload: dict[str, Any]) -> None:
@@ -275,6 +279,9 @@ class VoiceSession:
             return
         try:
             self.duplex = self.client.duplex()
+            # Asked for before any mic audio goes out, so that every frame of the
+            # user's turns comes on this one stream.
+            self._turn_frames = self.duplex.turn_frames()
             await self._opt_in()
             self.tracker = TurnTracker(self._dispatch, self.cancel_reply, self.turn_engine)
             if not self.turn_engine:
@@ -315,37 +322,66 @@ class VoiceSession:
 
     def _start_tasks(self) -> None:
         """Start the readers of VoiceManager's streams."""
-        self._spawn(self._read_transcripts)
-        self._spawn(self._read_turn_ends)
+        self._spawn(self._read_turn_frames)
+        self._spawn(self._send_heard_lines)
         self._spawn(self._read_errors)
         self._spawn(self._read_audio)
 
-    async def _read_transcripts(self) -> None:
-        async for frame in self.duplex.transcripts():
-            await self.tracker.on_transcript(frame)
-            if self._not_caught is not None and heard_words(str(frame.get("text") or "")):
-                self._not_caught.cancel()  # words came after all
-            if (not self.turn_engine and not self._cleared_turn and not self.tracker.reply_active
-                    and heard_words(self.tracker.text)):
-                # Classic mode: the user speaks while the last reply's tail may still play.
-                self._cleared_turn = True
-                if self.attached and self.reply_open:
-                    await self._close_reply("talk-over")  # the client cuts its reply on the clear
-                await self._send_clear(None)
-            await self.send_page({"type": "transcript", "text": self.tracker.text,
-                                  "final": bool(frame.get("is_final"))})
-
-    async def _read_turn_ends(self) -> None:
-        async for frame in self.duplex.turn_ends():
-            if frame.get("type") == "turn_empty":
+    async def _read_turn_frames(self) -> None:
+        """The transcription frames and the turn ends, in the order the server sent
+        them: a final sent before a turn end is a part of that turn, and a frame sent
+        after it belongs to the next one. One reader keeps that order. Two readers
+        lost it: a turn end overtook the turn's last finals, which then stayed for
+        the next turn, or a partial of the next utterance was handled first and went
+        with the turn that ended."""
+        async for frame in self._turn_frames:
+            kind = frame.get("type")
+            if kind == "transcription":
+                await self._on_transcription(frame)
+            elif kind == "turn_empty":
                 self._on_turn_empty(frame)
-                continue
-            await self.tracker.on_turn_end(frame)
-            # The words the page showed as heard are gone, into an utterance or into
-            # nothing. VoiceManager sends no empty transcription, so the page is told
-            # here: it must not go on showing that it hears the user.
-            if not self.attached:
-                await self.send_page({"type": "transcript", "text": "", "final": True})
+            else:
+                await self._on_turn_end(frame)
+
+    async def _on_transcription(self, frame: dict[str, Any]) -> None:
+        await self.tracker.on_transcript(frame)
+        if self._not_caught is not None and heard_words(str(frame.get("text") or "")):
+            self._not_caught.cancel()  # words came after all
+        if (not self.turn_engine and not self._cleared_turn and not self.tracker.reply_active
+                and heard_words(self.tracker.text)):
+            # Classic mode: the user speaks while the last reply's tail may still play.
+            self._cleared_turn = True
+            if self.attached and self.reply_open:
+                await self._close_reply("talk-over")  # the client cuts its reply on the clear
+            await self._send_clear(None)
+        self._show_heard(self.tracker.text, bool(frame.get("is_final")))
+
+    async def _on_turn_end(self, frame: dict[str, Any]) -> None:
+        # A heard line of this turn that has not gone out is of no use any more, and
+        # must not reach the page after the utterance that the turn becomes.
+        self._heard = None
+        await self.tracker.on_turn_end(frame)
+        # The words the page showed as heard are gone, into an utterance or into
+        # nothing. VoiceManager sends no empty transcription, so the page is told
+        # here: it must not go on showing that it hears the user.
+        if not self.attached:
+            self._show_heard("", True)
+
+    def _show_heard(self, text: str, final: bool) -> None:
+        """Give the page the words heard so far. The line is not sent here: the reader
+        of the turn frames must not wait for the page's socket, or a page that takes
+        its frames slowly would hold the turn end behind the heard lines. Only the
+        newest line counts, so a line that a newer one replaced is not sent."""
+        self._heard = {"type": "transcript", "text": text, "final": final}
+        self._heard_ready.set()
+
+    async def _send_heard_lines(self) -> None:
+        while True:
+            await self._heard_ready.wait()
+            self._heard_ready.clear()
+            line, self._heard = self._heard, None
+            if line is not None:
+                await self.send_page(line)
 
     async def _read_errors(self) -> None:
         async for frame in self.duplex.errors():
