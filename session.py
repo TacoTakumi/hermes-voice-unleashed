@@ -248,6 +248,7 @@ class VoiceSession:
         self._barge_learning = False
         # How the audio of each request arrives, for one log line at its end.
         self._arrivals: dict[str, dict[str, Any]] = {}
+        self._audio_starts: dict[str, float] = {}  # request id -> when its audio_start came
         # The prompt whose audio has all come and which the page may still play: its
         # request id and the time by which the page must have played it out.
         self._prompt_playing: Optional[tuple[str, float]] = None
@@ -593,6 +594,7 @@ class VoiceSession:
                         await self.page.send(event[1])
             elif kind == "audio_start":
                 frame = event[1]
+                self._audio_starts[frame.get("request_id")] = asyncio.get_running_loop().time()
                 if frame.get("request_id") in self._dropped:
                     continue  # cancelled before its audio began: the page must not adopt it
                 await self.send_page({"type": "audio_start", "request_id": frame.get("request_id"),
@@ -611,15 +613,19 @@ class VoiceSession:
 
     def _note_arrival(self, rid: str, size: int) -> None:
         """Count one audio chunk of the request ``rid`` and play it through the page's
-        queue rule: the first chunk 60 ms ahead, each next one at the queue's end, and
-        200 ms ahead when the queue was dry. The times are those of the arrival here,
-        so the way to the page is not in them."""
+        queue rule: the queue starts 60 ms after audio_start, a chunk plays at the
+        queue's end and no sooner than 20 ms after it arrives, and 200 ms after it
+        arrives when the queue was dry. The times are those of the arrival here, so
+        the way to the page is not in them."""
         now = asyncio.get_running_loop().time()
         length = size / 2 / (getattr(self.client, "last_tts_sample_rate", None) or 24000)
         a = self._arrivals.get(rid)
         if a is None:
+            # The page counts the 60 ms from audio_start, not from the first chunk: a
+            # first chunk that comes later than 40 ms after it plays only 20 ms ahead.
+            start = max(self._audio_starts.pop(rid, now) + 0.06, now + 0.02)
             self._arrivals[rid] = {"first": now, "last": now, "chunks": 1, "audio": length, "stall": 0.0,
-                                   "next": now + 0.06 + length, "dry": []}
+                                   "next": start + length, "dry": []}
             return
         a["stall"] = max(a["stall"], now - a["last"])
         if a["next"] <= now:
@@ -631,6 +637,7 @@ class VoiceSession:
         a["last"], a["chunks"], a["audio"] = now, a["chunks"] + 1, a["audio"] + length
 
     def _log_arrival(self, rid: str) -> None:
+        self._audio_starts.pop(rid, None)
         a = self._arrivals.pop(rid, None)
         if a is None:
             return

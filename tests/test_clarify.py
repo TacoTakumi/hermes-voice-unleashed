@@ -585,6 +585,35 @@ async def test_the_arrival_of_a_reply_s_audio_is_logged_when_it_ends(rig, caplog
     assert "queue dry 1 time" in line and "at 0.2 s" in line, line
 
 
+async def test_the_arrival_line_counts_the_first_chunk_s_lead_from_audio_start(rig, caplog):
+    """The page sets its queue's start at audio_start, 60 ms ahead. A first chunk that
+    comes later than that plays 20 ms after it arrives, so the queue is dry sooner
+    than with a lead of 60 ms from the chunk itself."""
+    await _reply_in_progress(rig)
+    request_id = rig.conn.json_frames("tts_stream")[-1]["request_id"]
+    with caplog.at_level("INFO"):
+        await rig.conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+        await asyncio.sleep(0.1)                   # the first clause is synthesized
+        await rig.conn.send(b"\x11\x00" * 2400)   # 0.1 s, played 20 ms after it arrives
+        await asyncio.sleep(0.14)                  # past its end at 120 ms, before 160 ms
+        await rig.conn.send(b"\x11\x00" * 2400)
+        await rig.conn.send({"type": "audio_end", "request_id": request_id, "reason": "complete"})
+        await wait_for(lambda: any("audio arrival" in r.getMessage() for r in caplog.records))
+    line = next(r.getMessage() for r in caplog.records if "audio arrival" in r.getMessage())
+    assert "2 chunks" in line and "queue dry 1 time" in line and "at 0.1 s" in line, line
+
+
+async def test_a_request_that_ends_with_no_audio_logs_no_arrival_line(rig, caplog):
+    await _reply_in_progress(rig)
+    request_id = rig.conn.json_frames("tts_stream")[-1]["request_id"]
+    with caplog.at_level("INFO"):
+        await rig.conn.send({"type": "audio_start", "request_id": request_id, "sample_rate": 24000})
+        await rig.conn.send({"type": "audio_end", "request_id": request_id, "reason": "complete"})
+        await wait_for(lambda: rig.page.of("audio_end"))
+    assert not any("audio arrival" in r.getMessage() for r in caplog.records)
+    assert rig.session._arrivals == {} and rig.session._audio_starts == {}
+
+
 def test_the_not_caught_notice_for_an_approval_uses_the_words_on_the_buttons(plugin):
     """The buttons read Allow and Deny: the voice asks for the same words, and each of
     them is taken as an answer."""
