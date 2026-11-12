@@ -1,8 +1,15 @@
-# Vendored from VoiceManager v0.7.0, src/voicemanager/client.py, unchanged below
-# this header. https://github.com/TacoTakumi/VoiceManager
+# Vendored from VoiceManager v0.7.0, src/voicemanager/client.py.
+# https://github.com/TacoTakumi/VoiceManager
 # MIT License, Copyright (c) 2026 TacoTakumi.
 # VoiceManager is not on PyPI; update this copy by replacing it with the file
-# from a newer release tag.
+# from a newer release tag, then check that the new file has each change below.
+# Changed here, below this header:
+# - barge_state frames go into the audio stream, and DuplexSession.audio() yields
+#   them (in VoiceManager's client since 0.9.0).
+# - turn_empty frames go with the turn_end frames, and DuplexSession.turn_ends()
+#   yields them (in VoiceManager's client since 0.9.0).
+# - DuplexSession.turn_frames() gives transcription, turn_end and turn_empty frames
+#   on one stream in the order of arrival (not in VoiceManager's client).
 """Async Python client for VoiceManager STT/TTS server.
 
 Standalone module - requires only ``websockets`` and ``httpx``.
@@ -346,6 +353,27 @@ class DuplexSession:
             elif kind == "barge_state":
                 yield ("barge_state", item)
 
+    def turn_frames(self) -> AsyncIterator[dict]:
+        """Yield every transcription, turn_end and turn_empty frame on one stream, in
+        the order the server sent them.
+
+        A final that the server sent before a turn_end is a part of that turn, and a
+        frame that it sent after the turn_end belongs to the next one. Two readers,
+        one on ``transcripts()`` and one on ``turn_ends()``, lose that order between
+        them. Call this before the first ``send_audio``: from the call on the three
+        frame types come here only, and ``transcripts()`` and ``turn_ends()`` yield
+        nothing. The reader tells the frames apart by ``type``; a transcription frame
+        carries its ``turn_id`` as on ``transcripts()``.
+        """
+        self._client._ordered_frames = True
+        return self._turn_frames()
+
+    async def _turn_frames(self) -> AsyncIterator[dict]:
+        while (frame := await self._client._frame_queue.get()) is not None:
+            if frame.get("type") == "transcription":
+                frame = self._client._stamp_turn_id(frame)
+            yield frame
+
     async def turn_ends(self) -> AsyncIterator[dict]:
         """Yield every turn_end and turn_empty frame as it arrives (opted-in
         connections only). A turn_empty frame has no text: the reader tells the two
@@ -399,6 +427,11 @@ class VoiceManagerClient:
         self._turn_queue: asyncio.Queue = asyncio.Queue()
         # turn_end frames, for a connection that opted in to a turn engine.
         self._turn_end_queue: asyncio.Queue = asyncio.Queue()
+        # Transcription, turn_end and turn_empty frames in the order of arrival, once
+        # a session asked for them with turn_frames(). The two queues above get none
+        # of them then.
+        self._frame_queue: asyncio.Queue = asyncio.Queue()
+        self._ordered_frames = False
 
         # Turn engine state for this connection: the engine named in the opt-in
         # sent (at most one per connection), the waiter for its answer, and the
@@ -514,7 +547,7 @@ class VoiceManagerClient:
 
         # Drain all queues - put sentinel None to unblock any waiters
         for q in (self._stt_queue, self._tts_queue, self._error_queue, self._turn_queue,
-                  self._turn_end_queue):
+                  self._turn_end_queue, self._frame_queue):
             while not q.empty():
                 try:
                     q.get_nowait()
@@ -537,6 +570,7 @@ class VoiceManagerClient:
         self._error_queue = asyncio.Queue()
         self._turn_queue = asyncio.Queue()
         self._turn_end_queue = asyncio.Queue()
+        self._frame_queue = asyncio.Queue()
         # A fresh connection carries no pending cancellations, has not opted in to
         # a turn engine, and has sent no mic audio.
         self._cancelled_tts = set()
@@ -586,7 +620,10 @@ class VoiceManagerClient:
                     frame = json.loads(msg)
                     ftype = frame.get("type")
                     if ftype == "transcription":
-                        await self._stt_queue.put(frame)
+                        if self._ordered_frames:
+                            await self._frame_queue.put(frame)
+                        else:
+                            await self._stt_queue.put(frame)
                     elif ftype in ("audio_start", "audio_end"):
                         await self._tts_queue.put(frame)
                     elif ftype == "turn_started":
@@ -596,7 +633,10 @@ class VoiceManagerClient:
                     elif ftype in ("turn_end", "turn_empty"):
                         # turn_empty: a turn ended and the recognizer had no words
                         # for it. With the turn ends, so the two keep their order.
-                        await self._turn_end_queue.put(frame)
+                        if self._ordered_frames:
+                            await self._frame_queue.put(frame)
+                        else:
+                            await self._turn_end_queue.put(frame)
                     elif ftype == "barge":
                         # In the audio stream, so it lands in order with the pcm
                         # and before the request's audio_end.
@@ -641,6 +681,7 @@ class VoiceManagerClient:
             await self._tts_queue.put(None)
             await self._turn_queue.put(None)
             await self._turn_end_queue.put(None)
+            await self._frame_queue.put(None)
             await self._error_queue.put(None)
 
     def _on_turn_engine_ready(self, frame: dict) -> None:
