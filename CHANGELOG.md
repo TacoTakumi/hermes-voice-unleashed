@@ -27,6 +27,10 @@ entry names next to its pinned commit.
   then stayed for the next turn: the page showed them as heard, and "end
   session" said at the end of the next turn went to Hermes as text and did
   not end the session.
+- A voice page that lost its connection and is started again before it
+  reconnects by itself opens one connection. Before, the reconnect that was
+  waiting came as well, and the page showed "Voice moved to another device"
+  with no other device.
 
 ## [0.5.2]
 

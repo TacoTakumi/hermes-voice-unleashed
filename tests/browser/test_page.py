@@ -3421,3 +3421,29 @@ async def test_a_page_id_that_another_device_replaced_while_its_socket_was_lost_
         assert other.state.name == "OPEN"
         assert await page.text_content("#toggle") == "Sessions"
         assert await page.evaluate(MIC_TRACK_STATES) == ["ended"]
+
+
+async def test_a_start_inside_the_retry_wait_opens_one_socket_and_keeps_the_voice(site):
+    """The socket is lost and the page waits to connect again. The user goes to a session
+    inside that wait: the page stops and starts. The connect that was waiting must not
+    come as well, or the page's second socket replaces its first and the page shows
+    that the voice moved, with no other device."""
+    page = site.page
+    await page.goto(f"{site.url}/?token={TOKEN}")
+    await _chooser_rows(page)
+    await page.click("#new")
+    await site.fake.wait_connections(1, timeout=10)
+    await page.wait_for_function("document.getElementById('state').textContent === 'Listening'", timeout=10000)
+    await site.sessions[0].page.close()
+    await page.wait_for_function("document.getElementById('state').textContent === 'Reconnecting'", timeout=5000)
+    await page.evaluate("""() => {
+      const url = new URL(location.href);
+      url.searchParams.set('session', 'sid-untitled-222');
+      history.pushState(null, '', url.pathname + url.search);
+      dispatchEvent(new PopStateEvent('popstate'));
+    }""")
+    await wait_for(lambda: len(site.ws_requests) >= 2, timeout=10)
+    await asyncio.sleep(1.5)  # longer than the retry wait that was running
+    assert len(site.ws_requests) == 2, site.ws_requests
+    assert site.ws_requests[1]["session"] == ["sid-untitled-222"] and "reconnect" not in site.ws_requests[1]
+    assert await page.text_content("#state") == "Listening"

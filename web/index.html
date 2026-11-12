@@ -319,6 +319,11 @@ header > * { flex-shrink: 0; }
 
   let ws = null, micCtx = null, micStream = null, micNode = null, playCtx = null;
   let running = false, muted = false, retry = 0, wakeLock = null;
+  // The wait before the page connects again after a lost socket. It is cleared when the
+  // page gives its socket up and before every connect: a start inside the wait would
+  // otherwise be followed by the connect that waited, and the page's second socket
+  // would replace its first.
+  let retryTimer = 0;
   // The last error frame's message: the server closes the socket right after it, so
   // the Reconnecting screen repeats it where it can be read.
   let lastError = null;
@@ -1151,6 +1156,7 @@ header > * { flex-shrink: 0; }
 
   // --- connection ------------------------------------------------------------------
   function connect() {
+    clearTimeout(retryTimer);
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
     // One voice per profile: the page names no client lane, so a second page replaces the first.
     let url = `${scheme}//${location.host}/ws?token=${encodeURIComponent(token)}&page=${pageId}`;
@@ -1185,12 +1191,13 @@ header > * { flex-shrink: 0; }
       const wait = Math.min(10000, 500 * 2 ** retry++);
       const again = `Trying again in ${Math.round(wait / 1000) || 1} s.`;
       show("Reconnecting", "alert", lastError ? `${lastError} ${again}` : again);
-      setTimeout(() => { if (running) connect(); }, wait);
+      retryTimer = setTimeout(() => { if (running) connect(); }, wait);
     };
   }
   // Close the socket on purpose. Its handlers come off first: the close of a socket the
   // page gave up must not reconnect, and nothing the server still sends on it counts.
   function disconnect() {
+    clearTimeout(retryTimer);
     const sock = ws;
     ws = null;
     busy = false;
