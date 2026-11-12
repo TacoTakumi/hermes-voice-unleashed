@@ -444,6 +444,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         # is pending, send() of a reply to the command's message resolves it instead of
         # showing a reply frame.
         self._pending_replies: dict[str, PendingReply] = {}
+        # The closes of the voice devices that were switched off and have not ended yet.
+        self._closing: set[asyncio.Task] = set()
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
@@ -482,6 +484,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             await self._server.stop()
             self._server = None
         self._clients.clear()
+        for task in list(self._closing):
+            task.cancel()
 
     async def _on_client(self, connection, client_id: str, **options) -> None:
         """A page connected; ``options`` are the server's connect options (``session``)."""
@@ -509,8 +513,8 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # Dropped here, not only at the page's own cleanup: a page still in its
             # connect steps checks this entry to see that it was replaced.
             del self._clients[client_id]
-            await self._replace(page)
-        await self._detach_all(f"a UI client on session {session_id}")
+            self._replace(page)
+        self._detach_all(f"a UI client on session {session_id}")
         session = VoiceSession(connection, client_from_url(self.vm_url, self.vm_token),
                                f"attach:{session_id}", attached=True)
         self._attached[session_id] = session
@@ -522,29 +526,41 @@ class VoiceLiveAdapter(BasePlatformAdapter):
                 del self._attached[session_id]
             logger.info("voice detached from session %s", session_id)
 
-    async def _replace(self, connection) -> None:
+    def _replace(self, connection) -> None:
         """Switch a voice device off: another one took its session. It is told so, and
         the close code keeps it from reconnecting (the page and the UI client both end
-        voice on it)."""
+        voice on it).
+
+        The close runs on a task of its own and nothing waits for it. A device that
+        answers no close frame (a phone that left the network) holds its close for the
+        server's close timeout, and the device that takes the voice must not wait that
+        long. A wait here would also let another device connect, or one of the old ones
+        leave, between the look at the old devices and the registration of the new one."""
+        task = asyncio.create_task(self._close_replaced(connection))
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
+    @staticmethod
+    async def _close_replaced(connection) -> None:
         with contextlib.suppress(Exception):
             await connection.send(json.dumps({"type": "replaced"}))
         with contextlib.suppress(Exception):
             await connection.close(code=REPLACED_CLOSE_CODE, reason="replaced")
 
-    async def _take_voice(self, client_id: str, session_id: Optional[str]) -> None:
+    def _take_voice(self, client_id: str, session_id: Optional[str]) -> None:
         """The page ``client_id`` is the voice device now, on the session ``session_id``:
         every UI client with voice on is switched off, also one on another session.
         One voice device at a time, as for two pages."""
-        await self._detach_all(f"voice page {client_id} on session {session_id}")
+        self._detach_all(f"voice page {client_id} on session {session_id}")
 
-    async def _detach_all(self, taker: str) -> None:
+    def _detach_all(self, taker: str) -> None:
         """Switch off every UI client that has voice attached. Each is dropped from the
         attached sessions at once, so the session list does not show it attached until
         its own cleanup runs."""
         for attached_id, session in list(self._attached.items()):
             logger.info("%s took voice from the UI client on session %s", taker, attached_id)
             del self._attached[attached_id]
-            await self._replace(session.page)
+            self._replace(session.page)
 
     def _new_session(self, connection, client_id: str) -> VoiceSession:
         async def on_utterance(text: str, message_id: str) -> None:
@@ -859,10 +875,7 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             return
         # The page is the newest voice device of its session: a UI client attached
         # to it is switched off before the page's voice starts.
-        await self._take_voice(client_id, session_id)
-        if self._clients.get(client_id) is not connection:
-            logger.debug("voice page %s: replaced during its voice takeover", client_id)
-            return
+        self._take_voice(client_id, session_id)
         session = self._new_session(connection, client_id)
         self._sessions[client_id] = session
         try:

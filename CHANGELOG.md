@@ -19,6 +19,15 @@ entry names next to its pinned commit.
 - The approval screenshot in the README shows the prompt line of 0.5.0,
   "Say allow or deny, or tap a choice."
 
+### Fixed
+
+- A device that takes the voice no longer waits for the old voice devices
+  to close. An old device that did not answer (a phone that left the
+  network) held the new one back for up to 10 seconds. In that time a
+  second device could keep the voice beside the new one, a client that
+  turned voice off and on again could lose it, and an old device that
+  left could make the new one fail.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

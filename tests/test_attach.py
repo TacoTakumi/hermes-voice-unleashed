@@ -564,3 +564,128 @@ async def test_a_second_attach_takes_the_voice_from_a_client_attached_to_another
             assert adapter.is_attached(SESSION_ID) and second.of("replaced") == []
             second.task.cancel()
         first.task.cancel()
+
+# --- an old voice device whose close does not end ----------------------------------------
+class SlowClose:
+    """A voice device whose close handshake does not end until the test lets it: a
+    phone that left the network answers no close frame, and the server waits for it
+    for its close timeout."""
+
+    def __init__(self):
+        self.frames, self.close_code, self.let_go = [], None, asyncio.Event()
+
+    async def send(self, data):
+        self.frames.append(json.loads(data))
+
+    async def close(self, code=1000, reason=""):
+        self.close_code = code
+        await self.let_go.wait()
+
+
+@pytest.fixture
+async def slow(adapter, plugin):
+    """Puts old voice devices with a slow close into the adapter: ``slow.page()`` as it
+    keeps a connected page, ``slow.attached(session_id)`` as it keeps an attached UI
+    client. Every close is let go when the test ends."""
+    made = []
+
+    class Slow:
+        @staticmethod
+        def page(client_id="voice"):
+            made.append(device := SlowClose())
+            adapter._clients[client_id] = device
+            return device
+
+        @staticmethod
+        def attached(session_id):
+            made.append(device := SlowClose())
+            adapter._attached[session_id] = plugin.session.VoiceSession(
+                device, object(), f"attach:{session_id}", attached=True)
+            return device
+
+    yield Slow
+    for device in made:
+        device.let_go.set()
+
+
+async def test_an_attach_does_not_wait_for_the_close_of_the_page_it_switches_off(adapter, fake_vm, plugin, slow):
+    old = slow.page()
+    async with connect(_url(adapter, f"attach={SESSION_ID}")) as ws:
+        client = Client(ws)
+        await wait_for(lambda: client.of("ready"))
+        await wait_for(lambda: old.close_code == plugin.server.REPLACED_CLOSE_CODE)
+        assert old.frames == [{"type": "replaced"}] and "voice" not in adapter._clients
+        client.task.cancel()
+
+
+async def test_a_page_does_not_wait_for_the_close_of_the_client_it_switches_off(adapter, fake_vm, plugin, slow):
+    old = slow.attached("first-session")
+    async with connect(_url(adapter, "client=voice")) as ws:
+        page = Client(ws)
+        await wait_for(lambda: page.of("ready"))
+        await wait_for(lambda: old.close_code == plugin.server.REPLACED_CLOSE_CODE)
+        assert old.frames == [{"type": "replaced"}] and not adapter.is_attached("first-session")
+        page.task.cancel()
+
+
+async def test_a_page_that_connects_while_an_attach_switches_a_page_off_takes_the_voice(adapter, fake_vm, slow):
+    """The attach has the voice from its connect on, so the page that comes next
+    finds it and switches it off: one voice device, the newest."""
+    old = slow.page()
+    async with connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
+        client = Client(attach_ws)
+        async with connect(_url(adapter, "client=tablet")) as page_ws:
+            page = Client(page_ws)
+            await wait_for(lambda: page.of("ready"))
+            old.let_go.set()
+            await wait_for(lambda: client.of("replaced"))
+            await asyncio.sleep(0.2)
+            assert not adapter.is_attached(SESSION_ID)
+            assert adapter.session_for("tablet") is not None and page.of("replaced") == []
+            page.task.cancel()
+        client.task.cancel()
+
+
+async def test_a_client_that_attaches_again_keeps_the_voice_when_the_slow_close_ends(adapter, fake_vm, slow):
+    """The first attach was closed by its client while it switched a slow page off.
+    When that close ends, the first attach must not switch the second one off."""
+    old = slow.page()
+    async with connect(_url(adapter, f"attach={SESSION_ID}")):
+        await wait_for(lambda: old.close_code is not None)
+    async with connect(_url(adapter, f"attach={SESSION_ID}")) as second_ws:
+        second = Client(second_ws)
+        await wait_for(lambda: second.of("ready"))
+        old.let_go.set()
+        await asyncio.sleep(0.3)
+        assert adapter.is_attached(SESSION_ID) and second.of("replaced") == []
+        second.task.cancel()
+
+
+async def test_an_attach_is_ready_when_a_second_page_leaves_while_a_slow_one_is_switched_off(adapter, fake_vm, slow):
+    old = slow.page()
+    async with connect(_url(adapter, "client=tablet")) as tablet_ws:
+        tablet = Client(tablet_ws)
+        await wait_for(lambda: tablet.of("ready"))
+        async with connect(_url(adapter, f"attach={SESSION_ID}")) as attach_ws:
+            client = Client(attach_ws)
+            await wait_for(lambda: old.close_code is not None)
+            await tablet_ws.close()
+            await wait_for(lambda: "tablet" not in adapter._clients)
+            old.let_go.set()
+            await wait_for(lambda: client.of("ready"))
+            assert adapter.is_attached(SESSION_ID)
+            client.task.cancel()
+        tablet.task.cancel()
+
+
+async def test_a_page_is_ready_when_a_second_client_leaves_while_a_slow_one_is_switched_off(adapter, fake_vm, plugin, slow):
+    old = slow.attached("first-session")
+    slow.attached("second-session")
+    async with connect(_url(adapter, "client=voice")) as ws:
+        page = Client(ws)
+        await wait_for(lambda: old.close_code is not None)
+        adapter._attached.pop("second-session", None)  # its own cleanup, as _on_attach does it
+        old.let_go.set()
+        await wait_for(lambda: page.of("ready"))
+        assert adapter.session_for("voice") is not None
+        page.task.cancel()
