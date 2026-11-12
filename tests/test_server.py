@@ -434,3 +434,116 @@ async def test_the_lanes_old_page_that_answers_gets_the_replaced_frame_and_its_c
             with pytest.raises(ConnectionClosed) as info:
                 await asyncio.wait_for(first.recv(), 2)
             assert info.value.rcvd.code == plugin.server.REPLACED_CLOSE_CODE == 4001
+
+
+# --- a page that connects by itself after its lane was taken -------------------------------
+# The page names itself with a page id on every connect and marks a connect that it made
+# by itself after a lost socket. A page that another one replaced while it was off the
+# network never got its replaced frame: its own reconnect gets that frame and takes nothing.
+
+
+async def _replaced_answer(ws):
+    """The replaced frame and the close code of a connect that the server turned away."""
+    frame = json.loads(await asyncio.wait_for(ws.recv(), 2))
+    with pytest.raises(ConnectionClosed) as info:
+        await asyncio.wait_for(ws.recv(), 2)
+    return frame, info.value.rcvd.code
+
+
+async def _nothing_arrives(ws, wait=0.2):
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(ws.recv(), wait)
+
+
+async def test_a_marked_connect_of_a_page_that_the_lane_replaced_gets_the_replaced_frame(join_server, plugin):
+    first = await connect(_lane_url(join_server, page="page-a"))
+    await _until(lambda: len(join_server.client_calls) == 1)
+    async with connect(_lane_url(join_server, page="page-b")) as second:
+        await _until(lambda: len(join_server.client_calls) == 2)
+        # The first page comes back by itself; its old socket is of no interest here.
+        async with connect(_lane_url(join_server, page="page-a", reconnect=1)) as again:
+            assert await _replaced_answer(again) == ({"type": "replaced"}, plugin.server.REPLACED_CLOSE_CODE)
+        await _nothing_arrives(second)
+        assert second.close_code is None
+        assert len(join_server.client_calls) == 2  # the handler did not run for the reconnect
+    await first.close()
+
+
+async def test_a_marked_connect_is_turned_away_when_the_page_was_gone_as_the_lane_was_taken(join_server, plugin):
+    async with connect(_lane_url(join_server, page="page-a")):
+        await _until(lambda: len(join_server.client_calls) == 1)
+    await _until(lambda: ("client", "tablet") not in join_server._pages)  # the server saw the close
+    async with connect(_lane_url(join_server, page="page-b")) as second:
+        await _until(lambda: len(join_server.client_calls) == 2)
+        async with connect(_lane_url(join_server, page="page-a", reconnect=1)) as again:
+            assert await _replaced_answer(again) == ({"type": "replaced"}, plugin.server.REPLACED_CLOSE_CODE)
+        await _nothing_arrives(second)
+        assert second.close_code is None
+
+
+async def test_the_page_that_holds_the_lane_keeps_it_over_its_own_reconnect(join_server):
+    async with connect(_lane_url(join_server, page="page-a")):
+        await _until(lambda: len(join_server.client_calls) == 1)
+        async with connect(_lane_url(join_server, page="page-b")):
+            await _until(lambda: len(join_server.client_calls) == 2)
+        await _until(lambda: ("client", "tablet") not in join_server._pages)  # its socket was lost
+        async with connect(_lane_url(join_server, page="page-b", reconnect=1)) as again:
+            await _until(lambda: len(join_server.client_calls) == 3)
+            await _nothing_arrives(again)
+            assert again.close_code is None
+
+
+async def test_a_connect_without_the_mark_takes_the_lane_back_and_the_page_is_no_longer_held_as_replaced(
+        join_server, plugin):
+    first = await connect(_lane_url(join_server, page="page-a"))
+    await _until(lambda: len(join_server.client_calls) == 1)
+    async with connect(_lane_url(join_server, page="page-b")) as second:
+        await _until(lambda: len(join_server.client_calls) == 2)
+        async with connect(_lane_url(join_server, page="page-a")):  # the user starts it again
+            await _until(lambda: len(join_server.client_calls) == 3)
+            assert await _replaced_answer(second) == ({"type": "replaced"}, plugin.server.REPLACED_CLOSE_CODE)
+        await _until(lambda: ("client", "tablet") not in join_server._pages)
+        async with connect(_lane_url(join_server, page="page-a", reconnect=1)) as again:
+            await _until(lambda: len(join_server.client_calls) == 4)
+            await _nothing_arrives(again)
+            assert again.close_code is None
+    await first.close()
+
+
+async def test_a_marked_connect_of_a_page_the_server_does_not_know_takes_the_lane(join_server):
+    """After a restart of the gateway the server knows no page: the page that comes back
+    by itself goes on."""
+    async with connect(_lane_url(join_server, page="page-a", reconnect=1)):
+        await _until(lambda: len(join_server.client_calls) == 1)
+
+
+async def test_a_mark_without_a_page_id_is_a_plain_connect(join_server, plugin):
+    async with connect(_lane_url(join_server, page="page-a")) as first:
+        await _until(lambda: len(join_server.client_calls) == 1)
+        async with connect(_lane_url(join_server, reconnect=1)):
+            await _until(lambda: len(join_server.client_calls) == 2)
+            assert await _replaced_answer(first) == ({"type": "replaced"}, plugin.server.REPLACED_CLOSE_CODE)
+
+
+@pytest.mark.parametrize("page_id", ["", "page a", "page/a", "p" * 257])
+async def test_a_page_id_that_is_no_id_is_refused(join_server, page_id):
+    async with connect(_lane_url(join_server, page=page_id)) as ws:
+        frame = json.loads(await asyncio.wait_for(ws.recv(), 2))
+        with pytest.raises(ConnectionClosed) as info:
+            await asyncio.wait_for(ws.recv(), 2)
+    assert frame["type"] == "error" and "page id" in frame["message"]
+    assert info.value.rcvd.code == 1008
+    assert join_server.client_calls == []
+
+
+async def test_the_server_keeps_no_more_replaced_page_ids_than_its_limit(join_server, plugin, monkeypatch):
+    monkeypatch.setattr(plugin.server, "MAX_REPLACED_PAGES", 3)
+    sockets = []
+    for number in range(6):
+        sockets.append(await connect(_lane_url(join_server, page=f"page-{number}")))
+        await _until(lambda: len(join_server.client_calls) == number + 1)
+    assert len(join_server._replaced_pages) == 3
+    # The newest of the replaced pages is still held, the oldest was dropped.
+    assert "page-4" in join_server._replaced_pages and "page-0" not in join_server._replaced_pages
+    for ws in sockets:
+        await ws.close()

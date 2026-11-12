@@ -15,6 +15,14 @@ and dash (``20261107_101500_ab12cd``): the session id becomes the text of a
 ``/resume`` on the gateway, so any other shape is refused with an error frame
 and close code 1008 before the handler runs.
 
+``/ws?page=<page id>`` names the page itself: one id for the life of a page load, of
+the same shape as a session id. ``&reconnect=1`` marks a connect that the page made
+by itself after a lost socket. A page that another device replaced while it was off
+the network never got its replaced frame; its marked connect gets that frame and
+close code 4001, and takes nothing. A connect without the mark is a start by the
+user and takes the conversation as before. A page that sends no page id is never
+turned away.
+
 ``GET /sessions?client=<page client>`` answers the session list for that
 client's conversation as JSON, from ``on_sessions``.
 """
@@ -48,6 +56,7 @@ MAX_ATTACH_ID = 256  # a longer Hermes session id is refused, never cut
 SESSION_ID_CHARS = re.compile(r"[A-Za-z0-9_-]+\Z")  # the alphabet of a Hermes session id
 DEFAULT_CLIENT = "voice"
 MAX_CLIENT_ID = 64  # a longer page client id is cut to this
+MAX_REPLACED_PAGES = 64  # the ids of replaced pages that are kept; the oldest goes first
 
 
 def _query(path: str) -> tuple[str, dict[str, list[str]]]:
@@ -109,6 +118,13 @@ class VoiceServer:
         # ("attach", Hermes session id), so a page and an attached client never collide.
         self._pages: dict[tuple[str, str], ServerConnection] = {}
         self._closing: set[asyncio.Task] = set()  # the closes of replaced pages, kept from collection
+        # ("client", page client id) -> the id of the page that last took that conversation.
+        # It stays after the page's socket closed: a page that is off the network when
+        # another device takes its place is replaced all the same.
+        self._page_ids: dict[tuple[str, str], str] = {}
+        # The ids of the pages that another device replaced, oldest first. A page leaves
+        # it when the user starts that page again.
+        self._replaced_pages: dict[str, None] = {}
 
     @property
     def bound_port(self) -> int:
@@ -170,6 +186,17 @@ class VoiceServer:
             await self._own(connection, ("attach", session_id), self._on_attach)
             return
         client_id = _client_id(query)
+        page_id = None
+        if "page" in query:
+            page_id = query["page"][0]
+            reason = _bad_session_id("page", page_id)
+            if reason is not None:
+                await _refuse(connection, reason)
+                return
+            if "reconnect" in query and page_id in self._replaced_pages:
+                # The page comes back by itself and does not know that it was replaced.
+                await self._close_replaced(connection)
+                return
         options = {}
         if "session" in query:
             session = query["session"][0]
@@ -178,7 +205,25 @@ class VoiceServer:
                 await _refuse(connection, reason)
                 return
             options["session"] = session
+        self._page_takes(("client", client_id), page_id)
         await self._own(connection, ("client", client_id), self._on_client, **options)
+
+    def _page_takes(self, key: tuple[str, str], page_id: Optional[str]) -> None:
+        """The page ``page_id`` (None: a page that names no id) takes the conversation
+        ``key``. The page that had it before is held as replaced, also when its socket
+        is gone, and the page that takes it is not held any more."""
+        last = self._page_ids.pop(key, None)
+        if last is not None and last != page_id:
+            self._hold_replaced(last)
+        if page_id is not None:
+            self._page_ids[key] = page_id
+            self._replaced_pages.pop(page_id, None)
+
+    def _hold_replaced(self, page_id: str) -> None:
+        self._replaced_pages.pop(page_id, None)
+        self._replaced_pages[page_id] = None  # the newest is last
+        while len(self._replaced_pages) > MAX_REPLACED_PAGES:
+            del self._replaced_pages[next(iter(self._replaced_pages))]
 
     @staticmethod
     async def _close_replaced(connection: ServerConnection) -> None:
