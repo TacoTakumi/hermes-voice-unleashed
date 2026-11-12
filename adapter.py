@@ -514,6 +514,12 @@ class VoiceLiveAdapter(BasePlatformAdapter):
             # connect steps checks this entry to see that it was replaced.
             del self._clients[client_id]
             self._replace(page)
+        if self._server is not None:
+            # A page that is off the network gets no replaced frame, and one whose
+            # socket is gone is not in the list above. The server holds them as
+            # replaced, so that a page that comes back by itself does not take the
+            # voice from this client.
+            self._server.pages_replaced()
         self._detach_all(f"a UI client on session {session_id}")
         session = VoiceSession(connection, client_from_url(self.vm_url, self.vm_token),
                                f"attach:{session_id}", attached=True)

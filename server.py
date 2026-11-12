@@ -219,6 +219,12 @@ class VoiceServer:
             self._page_ids[key] = page_id
             self._replaced_pages.pop(page_id, None)
 
+    def pages_replaced(self) -> None:
+        """Another kind of voice device took the voice from every page: the page that
+        last had each conversation is held as replaced, also when its socket is gone."""
+        for page_id in self._page_ids.values():
+            self._hold_replaced(page_id)
+
     def _hold_replaced(self, page_id: str) -> None:
         self._replaced_pages.pop(page_id, None)
         self._replaced_pages[page_id] = None  # the newest is last

@@ -1112,3 +1112,76 @@ async def test_a_new_on_connect_that_did_not_move_the_lane_sends_the_old_history
     kinds = [f["type"] for f in page.frames]
     assert kinds.index("history") < kinds.index("reply") < kinds.index("ready")
     assert page.of("session_new") == []
+
+
+# --- a page that comes back by itself after a UI client took the voice ---------------------
+
+
+async def _turned_away(adapter, query):
+    """The frames and the close code of a page connect that the server turns away."""
+    ws = await connect(_url(adapter, query))
+    page = Page(ws)
+    await asyncio.wait_for(ws.wait_closed(), 3)
+    page.task.cancel()
+    return page.frames, ws.close_code
+
+
+async def test_a_page_that_a_ui_client_replaced_does_not_take_the_voice_back_by_itself(adapter, fake_vm, plugin):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    page_ws = await connect(_url(adapter, "client=tablet&page=page-a"))
+    page = Page(page_ws)
+    await wait_for(lambda: page.of("ready"))
+    attach_ws, client = await _attach(adapter, fake_vm, "abc")
+    # The page's network returns: it never saw its replaced frame and connects again.
+    frames, code = await _turned_away(adapter, "client=tablet&page=page-a&reconnect=1")
+    assert frames == [{"type": "replaced"}] and code == plugin.server.REPLACED_CLOSE_CODE
+    await asyncio.sleep(0.2)
+    assert adapter.is_attached("abc") and adapter.session_for("tablet") is None
+    assert client.of("replaced") == [] and attach_ws.close_code is None
+    client.task.cancel()
+    page.task.cancel()
+    await attach_ws.close()
+    await page_ws.close()
+
+
+async def test_a_page_whose_socket_was_gone_as_a_ui_client_took_the_voice_is_turned_away_too(
+        adapter, fake_vm, plugin):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    async with connect(_url(adapter, "client=tablet&page=page-a")) as ws:
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        page.task.cancel()
+    await wait_for(lambda: adapter.session_for("tablet") is None)  # the server saw the close
+    attach_ws, client = await _attach(adapter, fake_vm, "abc")
+    frames, code = await _turned_away(adapter, "client=tablet&page=page-a&reconnect=1")
+    assert frames == [{"type": "replaced"}] and code == plugin.server.REPLACED_CLOSE_CODE
+    assert adapter.is_attached("abc") and client.of("replaced") == []
+    client.task.cancel()
+    await attach_ws.close()
+
+
+async def test_a_page_that_the_user_starts_again_takes_the_voice_from_the_ui_client(adapter, fake_vm, plugin):
+    adapter._session_store = FakeStore("abc")
+    _with_db(adapter, FakeDB())
+    first_ws = await connect(_url(adapter, "client=tablet&page=page-a"))
+    first = Page(first_ws)
+    await wait_for(lambda: first.of("ready"))
+    attach_ws, client = await _attach(adapter, fake_vm, "abc")
+    async with connect(_url(adapter, "client=tablet&page=page-a")) as ws:  # no mark: the user's start
+        page = Page(ws)
+        await wait_for(lambda: page.of("ready"))
+        assert await _replaced(attach_ws, client) == plugin.server.REPLACED_CLOSE_CODE
+        await wait_for(lambda: not adapter.is_attached("abc"))
+        assert adapter.session_for("tablet") is not None and page.of("replaced") == []
+        page.task.cancel()
+    # Its own reconnect after that goes on: the page is no longer held as replaced.
+    await wait_for(lambda: adapter.session_for("tablet") is None)
+    async with connect(_url(adapter, "client=tablet&page=page-a&reconnect=1")) as ws:
+        again = Page(ws)
+        await wait_for(lambda: again.of("ready"))
+        assert again.of("replaced") == []
+        again.task.cancel()
+    first.task.cancel()
+    await first_ws.close()
