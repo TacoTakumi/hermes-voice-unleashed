@@ -8,6 +8,11 @@ entry names next to its pinned commit.
 
 ## [0.5.3]
 
+### Changed
+
+- The log has a line when the server turns a page's own reconnect away
+  because another device took the voice while the page was gone.
+
 ### Fixed
 
 - A voice page that lost its connection no longer takes the voice back from

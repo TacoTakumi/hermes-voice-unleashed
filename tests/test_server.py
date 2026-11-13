@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -547,3 +548,25 @@ async def test_the_server_keeps_no_more_replaced_page_ids_than_its_limit(join_se
     assert "page-4" in join_server._replaced_pages and "page-0" not in join_server._replaced_pages
     for ws in sockets:
         await ws.close()
+
+
+async def test_a_reconnect_that_is_turned_away_is_in_the_log_and_one_that_goes_on_is_not(
+        join_server, plugin, caplog):
+    def turned_away():
+        return [r.getMessage() for r in caplog.records
+                if r.name == plugin.server.logger.name and "turned away" in r.getMessage()]
+
+    with caplog.at_level(logging.INFO, logger=plugin.server.logger.name):
+        first = await connect(_lane_url(join_server, page="page-a"))
+        await _until(lambda: len(join_server.client_calls) == 1)
+        async with connect(_lane_url(join_server, page="page-b")):
+            await _until(lambda: len(join_server.client_calls) == 2)
+            async with connect(_lane_url(join_server, page="page-a", reconnect=1)) as again:
+                await _replaced_answer(again)
+            (line,) = turned_away()
+            assert "tablet" in line and "page-a" in line and "another device" in line
+        await _until(lambda: ("client", "tablet") not in join_server._pages)
+        async with connect(_lane_url(join_server, page="page-b", reconnect=1)):  # the holder comes back
+            await _until(lambda: len(join_server.client_calls) == 3)
+        assert len(turned_away()) == 1
+        await first.close()

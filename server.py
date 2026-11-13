@@ -195,6 +195,8 @@ class VoiceServer:
                 return
             if "reconnect" in query and page_id in self._replaced_pages:
                 # The page comes back by itself and does not know that it was replaced.
+                logger.info("voice page %s: its own reconnect was turned away, another device took "
+                            "the voice while it was gone (page %s)", client_id, page_id)
                 await self._close_replaced(connection)
                 return
         options = {}
