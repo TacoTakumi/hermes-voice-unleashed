@@ -12,6 +12,10 @@ entry names next to its pinned commit.
 
 - The log has a line when the server turns a page's own reconnect away
   because another device took the voice while the page was gone.
+- The README names VoiceManager 0.9.1 as the recommended version and says
+  what needs it, says what a page does when it comes back after another
+  device took the voice, and documents the `page` and `reconnect` query
+  keys for a client of your own.
 
 ### Fixed
 

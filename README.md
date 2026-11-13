@@ -40,7 +40,10 @@ makes voice the way you run the agent:
 ## What you need
 
 - Hermes Agent 0.22.7 or later.
-- A VoiceManager server (0.7.0 or later) that your Hermes gateway can reach.
+- A VoiceManager server that your Hermes gateway can reach: 0.7.0 or later,
+  and 0.9.1 or later is recommended. The page's notices for barge-in that is
+  not ready yet and for an answer that was not heard need 0.9.0, and 0.9.1
+  fixes gaps in the reply audio between sentences.
   See its README for the engines and the GPU it needs. For barge-in on a
   device that plays the reply on its own loudspeaker, run it with
   `VM_STT_ENGINE=audiocpp` and `VM_TURN_ENGINE=tyger`.
@@ -281,6 +284,11 @@ off and the chat stays; when you turn voice on there, the page shows the
 moved screen. Two open microphones would both hear you, and each would hear
 the other's reply as speech.
 
+A page that lost its connection reconnects by itself. When another device
+took the voice in the meantime, the page does not take it back: it shows the
+moved screen when it is back on the network. To use the voice there again,
+tap "Sessions" and pick a session.
+
 ### What you see while Hermes works
 
 - The conversation as text, your words and the replies.
@@ -519,8 +527,9 @@ page and a WebSocket. For each open page:
   reply with a short spoken summary inside `<say>...</say>`. No other
   conversation gets the instruction.
 - `vm_client.py` is VoiceManager's standalone Python client from v0.7.0,
-  copied in because VoiceManager is not on PyPI. The plugin has no Python
-  dependencies beyond what Hermes ships.
+  copied in because VoiceManager is not on PyPI, with three small changes
+  that its header lists. The plugin has no Python dependencies beyond what
+  Hermes ships.
 
 ## For your own client
 
@@ -552,6 +561,15 @@ interface. You can write another.
   connects or when a UI client attaches voice (`attach=<session id>`) to the
   session it is on, and an attached UI client gets it when a page joins its
   session.
+- A client can name itself, so that its own reconnect does not take the
+  voice back from a device that replaced it. `/ws?...&page=<id>` carries an
+  id that the client makes once and sends on every connect: 1 to 256
+  characters from letters, digits, underscore and dash. `&reconnect=1` marks
+  a connect that the client makes by itself after it lost its socket. When
+  another voice device took the voice while the client was gone, the server
+  answers the marked connect with the `replaced` frame and close code 4001,
+  as above. A connect without the mark is a start by the user and takes the
+  voice. A client that sends no `page` is never turned away.
 - The spoken commands send a `session_end` frame once the server's notice has
   played (10 s at most), after which it closes the socket, or a `session_new`
   frame with `session_id` (the id of the fresh session) followed by a
