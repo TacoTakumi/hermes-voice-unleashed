@@ -1,7 +1,7 @@
 name: voice-unleashed
 label: Voice Unleashed
 kind: platform
-version: 0.5.2
+version: 0.5.3
 requires_hermes: ">=0.22.7"
 description: >
   A voice interface to Hermes. Any device with a browser, such as a phone or
