@@ -97,11 +97,12 @@ def _loud(caplog):
     return [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_the_state_db_file_is_missing_here(plugin):
-    """The rig's premise: the scratch HERMES_HOME holds no state.db, so the real
-    read-only open fails."""
-    with pytest.raises(Exception):
-        plugin.adapter.SessionDB(read_only=True)
+def test_the_state_db_file_is_missing_here():
+    """The rig's premise: the scratch HERMES_HOME holds no state.db, so a real
+    read-only open has nothing to open."""
+    from hermes_constants import get_hermes_home
+
+    assert not (get_hermes_home() / "state.db").exists()
 
 
 async def test_a_connect_without_a_state_db_gets_an_empty_history_and_no_warning(adapter, fake_vm, caplog):

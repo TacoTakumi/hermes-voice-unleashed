@@ -41,7 +41,7 @@ def _lane(store, db, chat_id="voice"):
     source = SessionSource(platform=Platform(PLATFORM), chat_id=chat_id, chat_type="dm",
                            user_id="owner", user_name="Owner")
     entry = store.get_or_create_session(source)
-    db.ensure_session(entry.session_id, source=PLATFORM)
+    db.create_session(entry.session_id, source=PLATFORM)
     return entry.session_key, entry.session_id
 
 

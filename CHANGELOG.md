@@ -6,6 +6,20 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 The version is the `version` in `plugin.yaml`, which the Hermes plugin catalog
 entry names next to its pinned commit.
 
+## [0.5.4]
+
+### Fixed
+
+- The plugin works on a Hermes core that keeps sessions behind the storage
+  interface (current main, after 0.23). On such a core the page's session
+  list was empty with a server error, the history of the session was not
+  sent, a join of a compacted conversation was judged as failed, and a
+  connect with `session=new` always sent `/new` because the message count
+  could not be read. The plugin now reads sessions through the storage
+  interface when the core has it and through `SessionDB` when it does not.
+  It no longer imports `hermes_state` on a core with the storage interface,
+  so the deprecation warning for that module is gone.
+
 ## [0.5.3]
 
 ### Changed

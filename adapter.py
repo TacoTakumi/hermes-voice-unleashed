@@ -16,7 +16,6 @@ import json
 import logging
 import re
 import shlex
-import sqlite3
 import uuid
 from typing import Any, NamedTuple, Optional
 
@@ -26,11 +25,10 @@ from gateway.platforms._shared import coerce_port, get_scoped_secret, seed_extra
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run_busy import approval_input_words
-from hermes_state import SessionDB
 from tools import clarify_gateway, slash_confirm
 from tools.approval import get_pending_gateway_approval, has_blocking_approval
 
-from . import sessions, stream_hooks
+from . import sessions, state_reads, stream_hooks
 from .server import JOIN_FAILED_CLOSE_CODE, REPLACED_CLOSE_CODE, VoiceServer
 from .session import SESSION_NEW_NOTICE, VoiceSession, client_from_url, strip_say_tags
 from .turns import number_forms
@@ -53,29 +51,6 @@ LINEAGE_HOPS = 32
 # The model_config keys under which a /new, /branch or delegate child names the parent
 # it was made from. Such a child is not the continuation of its parent's conversation.
 FORK_MARKERS = ("_reset_from", "_branched_from", "_delegate_from")
-# What sqlite says when a read-only open finds no database file.
-_MISSING_DB_FILE = "unable to open database file"
-
-
-class _EmptyStateDB:
-    """A state DB with nothing in it: what the readers get when the profile has no
-    state.db file yet. It answers the reads the session list, the history frame, the
-    message count and the lineage walk make."""
-
-    def get_session(self, session_id: str) -> None:
-        return None
-
-    def get_messages(self, session_id: str, *args: Any, **kwargs: Any) -> list:
-        return []
-
-    def message_count(self, session_id: Optional[str] = None) -> int:
-        return 0
-
-    def list_sessions_rich(self, *args: Any, **kwargs: Any) -> list:
-        return []
-
-    def close(self) -> None:
-        pass
 # What the page is told, and hears, when /new left its lane on the session it was on.
 NEW_SESSION_FAILED_NOTICE = "Could not start a new session; still on the same one."
 
@@ -736,11 +711,12 @@ class VoiceLiveAdapter(BasePlatformAdapter):
 
     @contextlib.contextmanager
     def _session_db(self):
-        """The state DB to read sessions from, for the duration of the block.
+        """The profile's stored sessions to read from, for the duration of the block.
 
-        The runner keeps the DB behind an async facade; the readers want the plain
-        SessionDB under it. A runner without a DB (or no runner, as in a test)
-        gets the profile's state DB opened read-only for this one block.
+        The runner holds them as a SessionDB behind an async door or, on a later
+        core, as a storage interface handle; the readers get the same four reads
+        over either. A runner without one (or no runner, as in a test) gets the
+        profile's store opened read-only for this one block.
         """
         runner = getattr(self, "gateway_runner", None)
         try:
@@ -748,25 +724,11 @@ class VoiceLiveAdapter(BasePlatformAdapter):
         except Exception:
             logger.debug("voice page: the runner's session DB is not available", exc_info=True)
             db = None
-        db = getattr(db, "_db", db)
         if db is not None:
-            yield db
+            yield state_reads.reader_for(db)
             return
-        try:
-            fallback = SessionDB(read_only=True)
-        except sqlite3.OperationalError as exc:
-            # A profile that has not stored a session yet has no state DB file, which
-            # is normal on first use: a read-only open cannot create it, so the
-            # readers see an empty DB instead.
-            if _MISSING_DB_FILE not in str(exc):
-                raise
-            logger.debug("voice page: no state DB yet, reading it as empty")
-            yield _EmptyStateDB()
-            return
-        try:
-            yield fallback
-        finally:
-            fallback.close()
+        with state_reads.open_profile_reader() as reader:
+            yield reader
 
     def _session_rows(self, client_id: str) -> list[dict[str, Any]]:
         """The session list for the page's chat ``client_id``: the profile's sessions

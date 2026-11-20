@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from types import SimpleNamespace
@@ -263,30 +264,31 @@ def test_adapter_sessions_callback_marks_the_row_whose_session_has_voice_attache
     assert rows[0]["current"] is True  # the other fields stay as the reader gave them
 
 
-def test_adapter_sessions_callback_opens_the_state_db_read_only_without_a_runner_db(plugin, monkeypatch):
+def test_adapter_sessions_callback_opens_the_profile_s_store_without_a_runner_db(plugin, monkeypatch):
     adapter = plugin.adapter.VoiceLiveAdapter(_config())
     adapter.gateway_runner = SimpleNamespace(session_store=object())
-    opened = []
+    reader = object()
+    state = []
 
-    class FakeDB:
-        def __init__(self, db_path=None, read_only=False):
-            opened.append(read_only)
-            self.closed = False
-
-        def close(self):
-            self.closed = True
+    @contextlib.contextmanager
+    def fake_open():
+        state.append("open")
+        try:
+            yield reader
+        finally:
+            state.append("closed")
 
     seen = {}
 
     def fake_rows(store_, db_, lane_key, limit=20):
-        seen["db"] = db_
+        seen["db"], seen["state"] = db_, list(state)
         return []
 
-    monkeypatch.setattr(plugin.adapter, "SessionDB", FakeDB)
+    monkeypatch.setattr(plugin.state_reads, "open_profile_reader", fake_open)
     monkeypatch.setattr(plugin.sessions, "session_rows", fake_rows)
     assert adapter._session_rows("tablet") == []
-    assert opened == [True]
-    assert isinstance(seen["db"], FakeDB) and seen["db"].closed
+    assert seen == {"db": reader, "state": ["open"]}
+    assert state == ["open", "closed"]
 
 
 async def test_adapter_wires_the_sessions_callback_into_the_server(plugin, monkeypatch):
